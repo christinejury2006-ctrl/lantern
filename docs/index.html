@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<title>Lantern</title>
+<style>
+:root{
+  --ink:#2B2430; --mute:#5A5160; --coral:#E07A6A; --paper:#FFF8EE;
+  --glass:rgba(255,255,255,.62); --stroke:rgba(255,255,255,.55);
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;font-family:Georgia,"Times New Roman",serif}
+body{
+  color:var(--ink);
+  background:linear-gradient(180deg,#E8B8F4 0%,#C9B8F8 32%,#7EC8E8 68%,#6ED4C8 100%);
+  background-attachment:fixed;
+}
+body.dark{
+  --ink:#F0EBE3; --mute:#D0D6DE; --paper:#4B5568;
+  --glass:rgba(74,85,104,.55); --stroke:rgba(255,255,255,.18);
+  background:linear-gradient(180deg,#3E4A5C,#4A5668,#3A4454);
+}
+#app{min-height:100%;padding:18px 18px 96px}
+h1{font-weight:500;font-size:30px;margin:4px 0 2px}
+.sub{color:var(--mute);font-size:13px;font-family:system-ui,sans-serif;margin-bottom:14px}
+.glass{background:var(--glass);border:1px solid var(--stroke);border-radius:22px;box-shadow:0 10px 28px rgba(0,0,0,.12);backdrop-filter:blur(16px)}
+.row{display:flex;align-items:center;gap:10px}
+.grow{flex:1}
+.btn{border:0;background:rgba(255,255,255,.55);color:var(--ink);border-radius:20px;padding:8px 14px;font:13px system-ui;cursor:pointer}
+.btn.on{background:var(--coral);color:#fff}
+.plus{width:42px;height:42px;border-radius:50%;border:0;background:rgba(255,255,255,.7);font-size:24px;cursor:pointer;color:var(--ink)}
+.chips{display:flex;gap:8px;overflow-x:auto;padding:4px 0 12px;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:0 0 auto;height:36px;padding:0 16px;border-radius:18px;border:0;background:rgba(255,255,255,.8);color:var(--ink);font:13px system-ui;cursor:pointer;white-space:nowrap}
+.chip.on{background:var(--coral);color:#fff}
+.search{display:flex;align-items:center;gap:8px;padding:12px 14px;border-radius:18px}
+.search input{flex:1;border:0;background:transparent;font:15px system-ui;color:var(--ink);outline:none}
+.cascade{padding:16px 0 14px;text-align:center}
+.cascade-track{display:flex;gap:18px;overflow-x:auto;padding:8px 72px 6px;scroll-snap-type:x mandatory;scrollbar-width:none}
+.cascade-track::-webkit-scrollbar{display:none}
+.cover{width:138px;flex:0 0 138px;aspect-ratio:.68;border-radius:10px;overflow:hidden;box-shadow:0 8px 18px rgba(0,0,0,.22);scroll-snap-align:center;cursor:pointer;background:linear-gradient(180deg,#BFA2D8,#7EC8E8);color:#fff;display:flex;align-items:center;justify-content:center;text-align:center;padding:10px;font-size:13px}
+.cover img{width:100%;height:100%;object-fit:cover}
+.grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.grid.two{grid-template-columns:1fr 1fr}
+.card-title{font:12px/1.3 system-ui;font-weight:600;margin-top:6px}
+.card-auth{font:11px system-ui;color:var(--mute)}
+.nav{position:fixed;left:12px;right:12px;bottom:12px;display:flex;justify-content:space-evenly;padding:10px 8px;border-radius:24px;background:rgba(255,255,255,.8);backdrop-filter:blur(16px);z-index:20;font-family:system-ui}
+body.dark .nav{background:rgba(58,68,84,.8)}
+.nav button{border:0;background:0;color:var(--ink);opacity:.45;font:10px system-ui;cursor:pointer}
+.nav button.on{opacity:1}
+.toast{position:fixed;top:48px;left:20px;right:20px;padding:12px 16px;border-radius:16px;background:rgba(255,255,255,.92);text-align:center;font:14px system-ui;z-index:40;opacity:0;pointer-events:none;transition:opacity .3s}
+.toast.show{opacity:1}
+#reader{display:none;position:fixed;inset:0;background:var(--paper);z-index:30;overflow:hidden}
+#reader .wash{position:absolute;left:0;right:0;top:0;height:120px;background:linear-gradient(180deg,rgba(232,184,244,.55),rgba(201,184,248,.28),var(--paper));pointer-events:none}
+#reader.dark .wash{display:none}
+#page{height:100%;overflow:auto;padding:88px 26px 90px;font-size:17px;line-height:1.55;color:var(--ink)}
+#page .drop{float:left;font-size:52px;line-height:44px;padding:4px 8px 0 0}
+#rhead,#rfoot{position:absolute;left:0;right:0;display:flex;align-items:center;padding:10px 12px;z-index:2}
+#rhead{top:0;padding-top:max(10px,env(safe-area-inset-top))}
+#rfoot{bottom:0;padding-bottom:max(10px,env(safe-area-inset-bottom));background:linear-gradient(transparent,var(--paper) 40%)}
+#rhead button,#rfoot button{border:0;background:0;color:var(--ink);font:10px system-ui;cursor:pointer}
+#rhead h2{flex:1;text-align:center;font:20px/1.2 Georgia;font-weight:500;margin:0}
+#sheet{position:absolute;top:56px;right:10px;bottom:72px;width:248px;background:rgba(43,43,43,.9);color:#fff;border-radius:22px;padding:16px;overflow:auto;display:none;font-family:system-ui}
+#sheet h3{margin:0 0 12px;font-size:16px;font-weight:500}
+#sheet .sizes{display:flex;gap:8px}
+#sheet .sizes button,#sheet .font{flex:1;background:rgba(255,255,255,.2);border:0;color:#fff;border-radius:10px;padding:10px;margin:4px 0;cursor:pointer}
+#sheet .font.on{background:rgba(255,255,255,.4)}
+input[type=range]{width:100%}
+.hidden{display:none!important}
+.account input{width:100%;border:0;background:rgba(255,255,255,.7);border-radius:14px;padding:12px;margin:6px 0;font:15px system-ui}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<nav class="nav glass" id="tabbar">
+  <button class="on" data-tab="library">⌂<br>Library</button>
+  <button data-tab="search">⌕<br>Search</button>
+  <button data-tab="explore">★<br>Explore</button>
+  <button data-tab="you">☺<br>You</button>
+</nav>
+<div class="toast" id="toast"></div>
+<div id="reader">
+  <div class="wash"></div>
+  <div id="rhead">
+    <button id="back">←</button>
+    <h2>Book Shelf</h2>
+    <span style="width:40px"></span>
+  </div>
+  <div id="page"></div>
+  <div id="rfoot">
+    <button id="navb">☰<br>Navigation</button>
+    <button id="themeb">☀<br>Light Mode</button>
+    <button id="setb">Aa<br>Settings</button>
+    <button id="markb">♡<br>Bookmarks</button>
+  </div>
+  <div id="sheet">
+    <h3>Text & Screen Settings</h3>
+    <div>Brightness</div>
+    <input id="bright" type="range" min="0.3" max="1" step="0.01" value="0.9"/>
+    <div class="sizes">
+      <button data-sz="19">A+</button><button data-sz="15">A-</button><button data-sz="17">A</button><button data-sz="15">a</button>
+    </div>
+    <button class="font on" data-font="times">Times New Roman</button>
+    <button class="font" data-font="garamond">Garamond</button>
+    <button class="font" data-font="arial">Arial</button>
+    <div style="margin-top:10px">Reading Mode</div>
+    <label><input type="radio" name="mode" value="swipe" checked> Swipe</label><br>
+    <label><input type="radio" name="mode" value="scroll"> Scroll</label>
+  </div>
+</div>
+<script>
+const BOOKS=[{
+  id:"eldoria",title:"The Chronicles of Eldoria",author:"Olivia Sterling",cover:"covers/eldoria.png",
+  body:`Late light lay over Eldoria like a held breath. I had been told the hidden road would show itself only to someone who had already been lost. I was not lost. I had a compass, three reliable maps, and a letter from the Queen that weighed more than its paper.
+
+The lantern at the western gate guttered. No wind. The flame simply reconsidered its loyalty and went out. In the sudden blue I saw the first mark — a seam in the air, thin as a hair, running from the cobbles into the orchards. I did what any honest mapmaker would do. I followed it.
+
+Beyond the last pear tree the land forgot its manners. Distances folded. A river I had charted last spring ran uphill with a look of apology. Birds crossed the seam and came out younger. I wrote none of this down. Ink, I suspected, would not survive the truth.
+
+A woman sat on a stone that had not been there a moment before. She wore a coat the colour of wet slate and was eating an apple that steamed as if it had just been pulled from a fire.
+
+“You got the letter,” she said, not looking up. “All Eldoria waited as if a title can be hid. Hidden from what, I wonder. From itself, most days.”
+
+I showed her the Queen’s seal. She laughed, a dry, kind sound, and flicked a pip into the grass.
+
+“Walk if you can keep your feet. The map in your satchel is already lying. When it starts telling the truth, you will wish it would stop.”`
+},{
+  id:"aurora",title:"Aurora's Gift",author:"Freya Lind",cover:"covers/aurora.png",
+  body:`The instruments lied first. Temperature, wind, magnetic north — all of them politely disagreed with the sky. Then the colour arrived, not as light but as permission. I stepped outside without a coat. The snow did not feel cold. Somewhere above the lake a door opened that had never been a door, and I understood why the old maps left this place blank.
+
+I wrote the hour down anyway. Paper is stubborn. It wants a time even when the sky has stopped offering one.`
+},{
+  id:"ember",title:"The Last Ember",author:"Rowan Hale",cover:"covers/ember.png",
+  body:`They measured warmth the way other cities measured crime. A kettle left too long, a fever, a blush — all of it was evidence. I kept the ember in a hollow bead beneath my tongue, and when I spoke in the market my words came out slightly scorched. No one noticed. People rarely notice the small rebellions that keep them alive.`
+}];
+
+const S={tab:"library",filter:"all",theme:localStorage.theme||"light",font:localStorage.font||"times",size:17,mode:"swipe",q:"",topic:"Fantasy",catalog:[],extra:JSON.parse(localStorage.extra||"[]")};
+const all=()=>BOOKS.concat(S.extra);
+const $=s=>document.querySelector(s);
+function toast(m){const t=$("#toast");t.textContent=m;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),5000)}
+function applyTheme(){document.body.classList.toggle("dark",S.theme==="dark");$("#reader").classList.toggle("dark",S.theme==="dark");localStorage.theme=S.theme}
+
+function coverEl(b){
+  const d=document.createElement("div");d.className="cover";
+  if(b.cover){const i=new Image();i.src=b.cover;i.alt=b.title;i.onerror=()=>{d.textContent=b.title};d.appendChild(i)}
+  else d.textContent=b.title;
+  d.onclick=()=>openBook(b);return d;
+}
+
+function render(){
+  applyTheme();
+  const root=$("#app");
+  const books=all();
+  if(S.tab==="you"){
+    root.innerHTML=`<h1>You</h1><div class="sub">${books.length} on the shelf</div>
+      <div class="glass" style="padding:18px;margin-bottom:12px">
+        <div style="font:16px system-ui">Appearance</div>
+        <p><button class="btn ${S.theme==="light"?"on":""}" id="lt">Light Mode</button>
+           <button class="btn ${S.theme==="dark"?"on":""}" id="dk">Dark Mode</button></p>
+      </div>
+      <div class="glass account" style="padding:18px">
+        <div style="font:16px system-ui">Account</div>
+        <input id="nm" placeholder="Name"/><input id="em" placeholder="Email"/>
+        <button class="btn on" id="si">Sign in</button>
+      </div>`;
+    $("#lt").onclick=()=>{S.theme="light";render()};
+    $("#dk").onclick=()=>{S.theme="dark";render()};
+    $("#si").onclick=()=>{if($("#nm").value&&$("#em").value)toast("Signed in as "+$("#nm").value)};
+    return;
+  }
+  if(S.tab==="search"||S.tab==="explore"){
+    const title=S.tab==="search"?"Search":"Explore";
+    root.innerHTML=`<h1>${title}</h1><div class="sub">Public-domain books you can open in the browser</div>
+      <div class="glass search"><span>⌕</span><input id="q" placeholder="Search titles…" value="${S.q}"/></div>
+      <div class="chips" id="topics"></div>
+      <div id="cat" class="grid two"></div>`;
+    ["Fantasy","Fiction","Adventure","Romance","Mystery","Science","History","Poetry"].forEach(t=>{
+      const b=document.createElement("button");b.className="chip"+(S.topic===t&&!S.q?" on":"");b.textContent=t;
+      b.onclick=()=>{S.topic=t;S.q="";loadCat()};$("#topics").appendChild(b);
+    });
+    $("#q").onchange=e=>{S.q=e.target.value;loadCat()};
+    drawCat();loadCat();return;
+  }
+  const shown=S.filter==="all"?books:books;
+  root.innerHTML=`<div class="row"><div class="grow"><h1>My Library</h1><div class="sub">${books.length} books</div></div>
+    <button class="plus" id="imp">+</button><input id="file" type="file" accept=".txt,.epub,.pdf,text/plain" class="hidden"/></div>
+    <div class="glass cascade"><div class="cascade-track" id="track"></div>
+      <div style="padding:8px 16px 0;text-align:left"><div id="ct" style="font:16px Georgia"></div><div id="ca" class="card-auth"></div></div></div>
+    <div class="chips" id="filters"></div><div class="grid" id="grid"></div>`;
+  books.forEach(b=>$("#track").appendChild(coverEl(b)));
+  if(books[0]){$("#ct").textContent=books[0].title;$("#ca").textContent=books[0].author}
+  ["All","Currently Reading","To Read","Finished"].forEach((l,i)=>{
+    const b=document.createElement("button");b.className="chip"+(i===0?" on":"");b.textContent=l;$("#filters").appendChild(b);
+  });
+  books.forEach(b=>{
+    const c=document.createElement("div");
+    c.appendChild(coverEl(b));
+    c.insertAdjacentHTML("beforeend",`<div class="card-title">${b.title}</div><div class="card-auth">${b.author}</div>`);
+    $("#grid").appendChild(c);
+  });
+  $("#imp").onclick=()=>$("#file").click();
+  $("#file").onchange=e=>{
+    const f=e.target.files[0];if(!f)return;
+    const r=new FileReader();
+    r.onload=()=>{
+      const text=String(r.result||"");
+      if(text.startsWith("%PDF")||text.charCodeAt(0)===0x50&&f.name.toLowerCase().endsWith(".pdf")){toast("Open PDFs in the Android app. Text/EPUB works here.");return}
+      const body=text.replace(/<[^>]+>/g," ").replace(/\s+/g," ").trim().slice(0,20000)||"No readable text in that file.";
+      const book={id:"imp"+Date.now(),title:f.name.replace(/\.[^.]+$/,"").replace(/[_-]+/g," "),author:"Imported",body};
+      S.extra.unshift(book);localStorage.extra=JSON.stringify(S.extra);toast("Added "+book.title);openBook(book);
+    };
+    r.readAsText(f);
+  };
+}
+
+function drawCat(){
+  const box=$("#cat"); if(!box)return; box.innerHTML="";
+  S.catalog.forEach(b=>{
+    const el=document.createElement("div");el.className="glass";el.style.padding="10px";el.style.cursor="pointer";
+    el.innerHTML=`<div class="cover" style="width:100%;flex:none">${b.cover?`<img src="${b.cover}" alt="">`:b.title}</div>
+      <div class="card-title">${b.title}</div><div class="card-auth">${b.author}</div>`;
+    el.onclick=()=>openRemote(b);
+    box.appendChild(el);
+  });
+}
+async function loadCat(){
+  const box=$("#cat"); if(box) box.innerHTML='<div class="sub">Looking up free books…</div>';
+  try{
+    const u=new URL("https://gutendex.com/books/");
+    u.searchParams.set("mime_type","text/plain");
+    if(S.q) u.searchParams.set("search",S.q);
+    else if(S.topic) u.searchParams.set("topic",S.topic.toLowerCase());
+    const res=await fetch(u); const j=await res.json();
+    S.catalog=(j.results||[]).map(o=>{
+      const formats=o.formats||{};
+      const text=formats["text/plain; charset=utf-8"]||formats["text/plain"]||formats["text/plain; charset=us-ascii"];
+      return {id:"pg"+o.id,title:o.title,author:(o.authors&&o.authors[0]&&o.authors[0].name)||"Unknown",cover:formats["image/jpeg"],text};
+    }).filter(x=>x.text);
+    drawCat();
+  }catch(e){ if(box) box.innerHTML='<div class="sub">Catalog needs a network. Sample books are in Library.</div>'; }
+}
+async function openRemote(b){
+  toast("Opening "+b.title+"…");
+  try{
+    const res=await fetch(b.text); const body=await res.text();
+    openBook({id:b.id,title:b.title,author:b.author,cover:b.cover,body:body.slice(0,40000)});
+  }catch(e){toast("Could not load that book in the browser")}
+}
+
+let pages=[],pi=0,cur=null,chromeOn=true;
+function paginate(text,n=900){
+  const paras=text.split(/\n\s*\n/).map(s=>s.trim()).filter(Boolean);
+  const out=[]; let buf=[],used=0;
+  paras.forEach(p=>{if(used&&used+p.length>n){out.push(buf.join("\n\n"));buf=[p];used=p.length}else{buf.push(p);used+=p.length+24}});
+  if(buf.length)out.push(buf.join("\n\n"));
+  return out.length?out:[text];
+}
+function fontCss(){return S.font==="arial"?"system-ui,Arial,sans-serif":S.font==="garamond"?"Garamond,Georgia,serif":"Times New Roman,Times,serif"}
+function paintPage(){
+  const t=pages[pi]||"";
+  const first=t.trim().charAt(0), rest=t.trim().slice(1);
+  $("#page").style.fontFamily=fontCss();
+  $("#page").style.fontSize=S.size+"px";
+  $("#page").innerHTML=`<div style="text-align:center;font-size:${S.size+10}px;margin-bottom:18px">${cur.title}</div><span class="drop">${first}</span>${rest.replace(/\n\n/g,"</p><p>")}`;
+}
+function openBook(b){
+  cur=b; pages=paginate(b.body||""); pi=0; chromeOn=true;
+  $("#reader").style.display="block"; $("#tabbar").classList.add("hidden");
+  $("#sheet").style.display="none"; paintPage();
+}
+function closeReader(){ $("#reader").style.display="none"; $("#tabbar").classList.remove("hidden"); }
+
+document.getElementById("tabbar").onclick=e=>{
+  const b=e.target.closest("button"); if(!b)return;
+  S.tab=b.dataset.tab; [...document.querySelectorAll("#tabbar button")].forEach(x=>x.classList.toggle("on",x===b)); render();
+};
+$("#back").onclick=closeReader;
+$("#page").onclick=()=>{chromeOn=!chromeOn; $("#rhead").style.display=$("#rfoot").style.display=chromeOn?"":"none"; if(!chromeOn)$("#sheet").style.display="none"};
+$("#setb").onclick=()=>{$("#sheet").style.display=$("#sheet").style.display==="block"?"none":"block"};
+$("#themeb").onclick=()=>{S.theme=S.theme==="dark"?"light":"dark";applyTheme();$("#themeb").innerHTML=S.theme==="dark"?"☾<br>Dark Mode":"☀<br>Light Mode"};
+$("#markb").onclick=()=>toast("Bookmark saved · page "+(pi+1));
+$("#navb").onclick=()=>{pi=Math.min(pages.length-1,pi+1);paintPage();toast("Page "+(pi+1)+" / "+pages.length)};
+$("#bright").oninput=e=>{document.body.style.filter="brightness("+e.target.value+")"};
+document.querySelectorAll("#sheet .sizes button").forEach(b=>b.onclick=()=>{S.size=+b.dataset.sz;paintPage()});
+document.querySelectorAll("#sheet .font").forEach(b=>b.onclick=()=>{S.font=b.dataset.font;document.querySelectorAll("#sheet .font").forEach(x=>x.classList.toggle("on",x===b));paintPage()});
+let sx=0;
+$("#page").addEventListener("touchstart",e=>sx=e.changedTouches[0].clientX,{passive:true});
+$("#page").addEventListener("touchend",e=>{
+  if(S.mode==="scroll")return;
+  const dx=e.changedTouches[0].clientX-sx;
+  if(dx<-40&&pi<pages.length-1){pi++;paintPage()}
+  if(dx>40&&pi>0){pi--;paintPage()}
+},{passive:true});
+document.querySelectorAll("input[name=mode]").forEach(r=>r.onchange=()=>{S.mode=r.value});
+
+applyTheme(); render();
+</script>
+</body>
+</html>

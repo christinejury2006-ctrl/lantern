@@ -40,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -226,61 +227,67 @@ private fun ForYouShelf(
         delay(3500)
         waited = true
     }
-    GlassCard(Modifier.fillMaxWidth(), dark, 20) {
-        Column(Modifier.padding(vertical = 14.dp)) {
-            Text("For You", color = ink, fontFamily = Playfair, fontSize = 18.sp, modifier = Modifier.padding(horizontal = 16.dp))
-            Text("Today’s shelf  ·  tap for details  ·  hold to save", color = mute, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp))
-            Spacer(Modifier.height(10.dp))
-            when {
-                books.isNotEmpty() -> {
-                    val pager = rememberPagerState(pageCount = { books.size })
-                    HorizontalPager(
-                        state = pager,
-                        contentPadding = PaddingValues(horizontal = 56.dp),
-                        pageSpacing = 14.dp,
-                        modifier = Modifier.fillMaxWidth().height(220.dp)
-                    ) { page ->
-                        val book = books[page]
-                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                            CoverFace(
-                                book.title, null, book.coverUrl,
-                                Modifier.width(148.dp).aspectRatio(0.68f).combinedClickable(
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Text("For You", color = ink, fontFamily = Playfair, fontSize = 16.sp)
+        Text("Fresh picks for today", color = mute, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp, bottom = 10.dp))
+        when {
+            books.isNotEmpty() -> {
+                val pager = rememberPagerState(pageCount = { books.size })
+                HorizontalPager(
+                    state = pager,
+                    contentPadding = PaddingValues(horizontal = 48.dp),
+                    pageSpacing = 10.dp,
+                    modifier = Modifier.fillMaxWidth().height(248.dp)
+                ) { page ->
+                    val book = books[page]
+                    val offset = (pager.currentPage - page) + pager.currentPageOffsetFraction
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        CoverFace(
+                            book.title, null, book.coverUrl,
+                            Modifier
+                                .graphicsLayer {
+                                    val a = kotlin.math.abs(offset).coerceAtMost(1f)
+                                    scaleX = 1f - 0.1f * a
+                                    scaleY = scaleX
+                                    alpha = 1f - 0.22f * a
+                                }
+                                .width(164.dp).aspectRatio(0.68f)
+                                .combinedClickable(
                                     onClick = { onOpen(book) },
                                     onLongClick = { onSave(book) }
                                 ),
-                                dark
-                            )
-                            if (wantToRead.any { Recommendations.sameWork(it, book) }) {
-                                SavedBadge(Modifier.align(Alignment.TopEnd).padding(end = 18.dp, top = 8.dp))
-                            }
+                            dark
+                        )
+                        if (wantToRead.any { Recommendations.sameWork(it, book) }) {
+                            SavedBadge(Modifier.align(Alignment.TopEnd).padding(end = 8.dp, top = 8.dp))
                         }
                     }
-                    val current = books.getOrNull(pager.currentPage)
-                    if (current != null) {
-                        Text(current.title, Modifier.padding(top = 10.dp, start = 16.dp, end = 16.dp), color = ink, fontFamily = Playfair, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(current.authorLine, Modifier.padding(start = 16.dp, top = 2.dp), color = mute, fontSize = 12.sp)
+                }
+                val current = books.getOrNull(pager.currentPage)
+                if (current != null) {
+                    Text(current.title, Modifier.padding(top = 8.dp), color = ink, fontFamily = Playfair, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(current.authorLine, color = mute, fontSize = 12.sp, maxLines = 1)
+                }
+            }
+            !waited -> {
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    repeat(3) {
+                        Box(
+                            Modifier.weight(1f).aspectRatio(0.68f).clip(RoundedCornerShape(10.dp))
+                                .background(Color(0x33FFFFFF))
+                        )
                     }
                 }
-                !waited -> {
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        repeat(3) {
-                            Box(
-                                Modifier.weight(1f).aspectRatio(0.68f).clip(RoundedCornerShape(10.dp))
-                                    .background(Color(0x33FFFFFF))
-                            )
-                        }
-                    }
-                    Text("Gathering today’s books…", color = mute, fontSize = 12.sp, modifier = Modifier.padding(start = 16.dp, top = 4.dp))
-                }
-                else -> {
-                    Text(
-                        "No recommendations right now. Check back tomorrow, or add a Google Books API key if For You is unset.",
-                        color = mute, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                    )
-                }
+                Text("Gathering today’s books…", color = mute, fontSize = 12.sp)
+            }
+            else -> {
+                Text(
+                    "No recommendations right now. Check back tomorrow, or add a Google Books API key if For You is unset.",
+                    color = mute, fontSize = 13.sp, modifier = Modifier.padding(vertical = 8.dp)
+                )
             }
         }
     }

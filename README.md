@@ -1,4 +1,4 @@
-# Lantern
+# Lore
 
 Native Android reader **and** a browser demo. Version **3.5.0**.
 

@@ -318,7 +318,7 @@ private fun RecentlyReadShelf(
                 color = ink, fontFamily = Playfair, fontSize = 16.sp,
                 modifier = Modifier.padding(horizontal = 16.dp)
             )
-            Text("Your books", color = mute, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 16.dp, top = 2.dp))
+            Text("Your books", color = mute, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 16.dp).padding(top = 2.dp))
             Spacer(Modifier.height(8.dp))
             val pager = rememberPagerState(pageCount = { books.size })
             HorizontalPager(

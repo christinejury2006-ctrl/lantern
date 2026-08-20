@@ -118,11 +118,11 @@ object DriveLibrary {
             val multipart = MultipartBody.Builder()
                 .setType(relatedType)
                 .addPart(
-                    Headers.of("Content-Type", "application/json; charset=UTF-8"),
+                    Headers.headersOf("Content-Type", "application/json; charset=UTF-8"),
                     meta.toString().toRequestBody(jsonType)
                 )
                 .addPart(
-                    Headers.of("Content-Type", mimeFor(book)),
+                    Headers.headersOf("Content-Type", mimeFor(book)),
                     file.asRequestBody(mimeFor(book).toMediaType())
                 )
                 .build()

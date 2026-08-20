@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lantern.library.data.CatalogBook
 import com.lantern.library.data.DiscoveryBook
+import com.lantern.library.data.GoogleAuth
 import com.lantern.library.data.Gutendex
 import com.lantern.library.data.LanternStore
 import com.lantern.library.data.ReaderTheme
@@ -94,8 +96,20 @@ private fun LanternRoot(store: LanternStore) {
     val theme = store.readingPrefs.theme
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val activity = context as Activity
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         if (res.resultCode == Activity.RESULT_OK) res.data?.data?.let { store.importUri(it) }
+    }
+    val googleSignIn = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+        val acc = GoogleAuth.parseResult(res.data)
+        if (acc != null) store.onGoogleSignedIn(acc) else store.toast("Google sign-in cancelled")
+    }
+    val driveConsent = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        store.onDriveConsentFinished()
+    }
+    LaunchedEffect(store.driveConsentIntent) {
+        val intent = store.takeDriveConsentIntent() ?: return@LaunchedEffect
+        driveConsent.launch(intent)
     }
     fun import() {
         picker.launch(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
@@ -116,7 +130,7 @@ private fun LanternRoot(store: LanternStore) {
         val owned = store.books.firstOrNull { Recommendations.inLibrary(book, listOf(it)) }
         if (owned != null) {
             details = null
-            tab = Route.Reader(owned.id)
+            store.openForReading(owned) { ready -> if (ready != null) tab = Route.Reader(ready.id) }
             return
         }
         if (book.publicDomain) {
@@ -141,15 +155,21 @@ private fun LanternRoot(store: LanternStore) {
             when (val r = tab) {
                 Route.Library -> LibraryScreen(
                     store.books, store.forYou, store.wantToRead, theme,
-                    onOpen = { tab = Route.Reader(it.id) },
+                    onOpen = { book -> store.openForReading(book) { ready -> if (ready != null) tab = Route.Reader(ready.id) } },
                     onRemove = { store.remove(it) },
                     onImport = { import() },
                     onOpenDiscovery = { details = it },
                     onSaveWant = { store.addWantToRead(it) }
                 )
-                Route.Search -> SearchScreen(theme) { remote -> store.download(remote) { book -> tab = Route.Reader(book.id) } }
-                Route.Explore -> ExploreScreen(theme) { remote -> store.download(remote) { book -> tab = Route.Reader(book.id) } }
-                Route.Profile -> ProfileScreen(store.books, store.account, store.readingPrefs, { store.setPrefs(it) }, { n, e -> store.signIn(n, e) }, { store.signOut() })
+                Route.Search -> SearchScreen(theme) { remote -> store.download(remote) { book -> store.openForReading(book) { ready -> if (ready != null) tab = Route.Reader(ready.id) } } }
+                Route.Explore -> ExploreScreen(theme) { remote -> store.download(remote) { book -> store.openForReading(book) { ready -> if (ready != null) tab = Route.Reader(ready.id) } } }
+                Route.Profile -> ProfileScreen(
+                    store.books, store.account, store.readingPrefs,
+                    { store.setPrefs(it) },
+                    { googleSignIn.launch(GoogleAuth.signInIntent(activity)) },
+                    { store.signOut(activity) },
+                    { store.requestDriveConnect() }
+                )
                 is Route.Reader -> {
                     val book = store.book(r.id)
                     if (book == null) tab = Route.Library

@@ -41,7 +41,9 @@ data class LibraryBook(
     val lastReadAt: Long = 0L,
     val category: String = "Library",
     val synopsis: String = "",
-    val chapters: List<Chapter> = emptyList()
+    val chapters: List<Chapter> = emptyList(),
+    val driveFileId: String? = null,
+    val pendingUpload: Boolean = false
 ) {
     val progress: Float
         get() = if (pageCount <= 0) 0f else ((currentPage + 1).toFloat() / pageCount.toFloat()).coerceIn(0f, 1f)
@@ -109,7 +111,8 @@ data class CloudAccount(
     val signedIn: Boolean = false,
     val displayName: String = "",
     val email: String = "",
-    val provider: String = ""
+    val provider: String = "",
+    val driveConnected: Boolean = false
 )
 
 data class Notice(

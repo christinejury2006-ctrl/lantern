@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -72,7 +74,7 @@ fun resolveGoogleBooksApiKey(): String {
     if (fromProp.isNotEmpty()) return fromProp
     val file = rootProject.file("local.properties")
     if (!file.exists()) return ""
-    val props = java.util.Properties()
+    val props = Properties()
     file.inputStream().use { props.load(it) }
     for (name in listOf("GOOGLE_BOOKS_API_KEY", "google.books.api.key")) {
         val value = props.getProperty(name)?.trim().orEmpty()

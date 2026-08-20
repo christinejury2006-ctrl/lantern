@@ -14,7 +14,7 @@ android {
         versionCode = 9
         versionName = "3.5.0"
         vectorDrawables.useSupportLibrary = true
-        buildConfigField("String", "GOOGLE_BOOKS_API_KEY", "\"${escapeBuildConfig(project.resolveGoogleBooksApiKey())}\"")
+        buildConfigField("String", "GOOGLE_BOOKS_API_KEY", "\"${escapeBuildConfig(resolveGoogleBooksApiKey())}\"")
     }
 
     buildTypes {
@@ -65,18 +65,21 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
 
-fun org.gradle.api.Project.resolveGoogleBooksApiKey(): String {
-    System.getenv("GOOGLE_BOOKS_API_KEY")?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
-    (findProperty("GOOGLE_BOOKS_API_KEY") as? String)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+fun resolveGoogleBooksApiKey(): String {
+    val fromEnv = System.getenv("GOOGLE_BOOKS_API_KEY")?.trim().orEmpty()
+    if (fromEnv.isNotEmpty()) return fromEnv
+    val fromProp = (findProperty("GOOGLE_BOOKS_API_KEY") as? String)?.trim().orEmpty()
+    if (fromProp.isNotEmpty()) return fromProp
     val file = rootProject.file("local.properties")
     if (!file.exists()) return ""
     val props = java.util.Properties()
     file.inputStream().use { props.load(it) }
-    listOf("GOOGLE_BOOKS_API_KEY", "google.books.api.key").forEach { name ->
-        props.getProperty(name)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+    for (name in listOf("GOOGLE_BOOKS_API_KEY", "google.books.api.key")) {
+        val value = props.getProperty(name)?.trim().orEmpty()
+        if (value.isNotEmpty()) return value
     }
     return ""
 }
 
-private fun escapeBuildConfig(value: String): String =
+fun escapeBuildConfig(value: String): String =
     value.replace("\\", "\\\\").replace("\"", "\\\"")

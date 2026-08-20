@@ -18,9 +18,14 @@ import org.json.JSONObject
 import java.io.File
 
 class LanternStore(app: Application) : AndroidViewModel(app) {
+    companion object {
+        const val MAX_USER_BOOKS = 200
+    }
+
     private val prefs = app.getSharedPreferences("lantern", Context.MODE_PRIVATE)
     private val booksFile = File(app.filesDir, "library.json")
     private val wantFile = File(app.filesDir, "want_to_read.json")
+    private val libraryLock = Any()
     val books = mutableStateListOf<LibraryBook>()
     val wantToRead = mutableStateListOf<DiscoveryBook>()
     var forYou by mutableStateOf<List<DiscoveryBook>>(emptyList())
@@ -44,7 +49,11 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             useMobileData = prefs.getBoolean("mobile", true)
         )
         account = CloudAccount(prefs.getBoolean("in", false), prefs.getString("name", "") ?: "", prefs.getString("email", "") ?: "", prefs.getString("prov", "") ?: "")
-        loadBooks(); mergeSeed(); loadWantToRead()
+        synchronized(libraryLock) {
+            loadBooks()
+            mergeSeed()
+        }
+        loadWantToRead()
         forYou = Recommendations.filterExcluded(
             Recommendations.cached(app).orEmpty(),
             books.toList(),
@@ -52,6 +61,16 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         )
         ensureRecommendations()
     }
+
+    fun userBookCount(): Int = synchronized(libraryLock) { userBookCountUnlocked() }
+
+    fun libraryFull(): Boolean = userBookCount() >= MAX_USER_BOOKS
+
+    private fun userBookCountUnlocked(): Int =
+        books.count { it.origin == BookOrigin.IMPORT || it.origin == BookOrigin.DOWNLOAD }
+
+    private fun isUserBook(book: LibraryBook): Boolean =
+        book.origin == BookOrigin.IMPORT || book.origin == BookOrigin.DOWNLOAD
 
     fun setPrefs(next: ReadingPrefs) {
         val clean = if (next.theme == ReaderTheme.DARK) next else next.copy(theme = ReaderTheme.LIGHT)
@@ -62,17 +81,74 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             .putBoolean("mobile", clean.useMobileData).apply()
     }
     fun toast(msg: String) { viewModelScope.launch { toast = msg; delay(5000); if (toast == msg) toast = null } }
-    fun book(id: String) = books.firstOrNull { it.id == id }
+    fun book(id: String) = synchronized(libraryLock) { books.firstOrNull { it.id == id } }
+
     fun upsert(book: LibraryBook) {
-        val i = books.indexOfFirst { it.id == book.id }
-        if (i >= 0) books[i] = book else books.add(0, book)
-        persistBooks()
+        synchronized(libraryLock) {
+            val i = books.indexOfFirst { it.id == book.id }
+            if (i >= 0) {
+                books[i] = book
+            } else if (isUserBook(book) && userBookCountUnlocked() >= MAX_USER_BOOKS) {
+                return
+            } else {
+                books.add(0, book)
+            }
+            persistBooks()
+        }
         dropFromRecommendations { Recommendations.inLibrary(it, listOf(book)) }
     }
+
+    private enum class CommitUserBookResult { ACCEPTED, LIBRARY_FULL, PERSIST_FAILED }
+
+    private fun commitNewUserBook(book: LibraryBook): CommitUserBookResult {
+        var discardCopiedFile = false
+        val result = synchronized(libraryLock) {
+            val i = books.indexOfFirst { it.id == book.id }
+            when {
+                i >= 0 -> {
+                    books[i] = book
+                    persistBooks()
+                    CommitUserBookResult.ACCEPTED
+                }
+                isUserBook(book) && userBookCountUnlocked() >= MAX_USER_BOOKS ->
+                    CommitUserBookResult.LIBRARY_FULL
+                else -> {
+                    books.add(0, book)
+                    try {
+                        persistBooks()
+                        CommitUserBookResult.ACCEPTED
+                    } catch (_: Exception) {
+                        books.removeAll { it.id == book.id }
+                        discardCopiedFile = true
+                        CommitUserBookResult.PERSIST_FAILED
+                    }
+                }
+            }
+        }
+        if (discardCopiedFile) discardOrphan(book)
+        if (result == CommitUserBookResult.ACCEPTED) {
+            dropFromRecommendations { Recommendations.inLibrary(it, listOf(book)) }
+        }
+        return result
+    }
+
+    private fun discardOrphan(book: LibraryBook) {
+        book.filePath?.let { runCatching { File(it).delete() } }
+        book.remoteCover?.let { path ->
+            if (!path.startsWith("http")) runCatching { File(path).delete() }
+        }
+    }
+
     fun remove(id: String) {
-        val b = books.firstOrNull { it.id == id } ?: return
-        if (b.origin == BookOrigin.BUNDLED) return
-        books.removeAll { it.id == id }; b.filePath?.let { runCatching { File(it).delete() } }; persistBooks(); toast("Removed from library")
+        val b = synchronized(libraryLock) {
+            val found = books.firstOrNull { it.id == id } ?: return
+            if (found.origin == BookOrigin.BUNDLED) return
+            books.removeAll { it.id == id }
+            persistBooks()
+            found
+        }
+        b.filePath?.let { runCatching { File(it).delete() } }
+        toast("Removed from library")
     }
     fun markRead(id: String, page: Int, pages: Int) {
         val b = book(id) ?: return
@@ -106,16 +182,41 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     fun importUri(uri: Uri) {
         viewModelScope.launch {
             val book = withContext(Dispatchers.IO) { runCatching { BookIo.importUri(getApplication(), uri) }.getOrNull() }
-            if (book == null) toast("Could not import that file") else { upsert(book); toast("Added ${book.title}") }
+            if (book == null) {
+                toast("Could not import that file")
+                return@launch
+            }
+            when (commitNewUserBook(book)) {
+                CommitUserBookResult.ACCEPTED -> toast("Added ${book.title}")
+                CommitUserBookResult.LIBRARY_FULL -> {
+                    withContext(Dispatchers.IO) { discardOrphan(book) }
+                    toast("Library is full (200 books)")
+                }
+                CommitUserBookResult.PERSIST_FAILED -> toast("Could not import that file")
+            }
         }
     }
     fun download(remote: CatalogBook, then: ((LibraryBook) -> Unit)? = null) {
         viewModelScope.launch {
-            val existing = books.firstOrNull { it.id == "pg_${remote.remoteId}" }
+            val existing = synchronized(libraryLock) { books.firstOrNull { it.id == "pg_${remote.remoteId}" } }
             if (existing != null) { then?.invoke(existing); return@launch }
             toast("Downloading ${remote.title}…")
             val book = withContext(Dispatchers.IO) { runCatching { BookIo.downloadCatalog(getApplication(), remote, false) }.getOrNull() }
-            if (book == null) toast("Download failed") else { upsert(book); toast("Saved ${book.title}"); then?.invoke(book) }
+            if (book == null) {
+                toast("Download failed")
+                return@launch
+            }
+            when (commitNewUserBook(book)) {
+                CommitUserBookResult.ACCEPTED -> {
+                    toast("Saved ${book.title}")
+                    then?.invoke(book)
+                }
+                CommitUserBookResult.LIBRARY_FULL -> {
+                    withContext(Dispatchers.IO) { discardOrphan(book) }
+                    toast("Library is full (200 books)")
+                }
+                CommitUserBookResult.PERSIST_FAILED -> toast("Download failed")
+            }
         }
     }
     fun signIn(name: String, email: String) { account = CloudAccount(true, name, email, "email"); prefs.edit().putBoolean("in", true).putString("name", name).putString("email", email).apply(); toast("Signed in as $name") }
@@ -151,7 +252,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 .put("pageCount", b.pageCount).put("currentPage", b.currentPage).put("finished", b.finished).put("addedAt", b.addedAt)
                 .put("lastReadAt", b.lastReadAt).put("category", b.category).put("synopsis", b.synopsis))
         }
-        runCatching { booksFile.writeText(arr.toString()) }
+        booksFile.writeText(arr.toString())
     }
     private fun loadWantToRead() {
         if (!wantFile.exists()) return

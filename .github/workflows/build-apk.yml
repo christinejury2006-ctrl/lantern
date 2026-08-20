@@ -24,6 +24,8 @@ jobs:
           sdkmanager "platforms;android-34" "build-tools;34.0.0" "build-tools;30.0.3"
 
       - name: Build debug APK
+        env:
+          GOOGLE_BOOKS_API_KEY: ${{ secrets.GOOGLE_BOOKS_API_KEY }}
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace

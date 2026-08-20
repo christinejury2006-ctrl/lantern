@@ -1,2 +1,8 @@
 ## sdk.dir is created automatically by Android Studio
 # sdk.dir=/Users/YOU/Library/Android/sdk
+#
+# Optional. Google Books API key for daily For You recommendations (metadata only).
+# Do not commit a real key. Restrict it to this Android app in Google Cloud Console.
+# Local: uncomment and set the next line in local.properties (gitignored).
+# CI: set repository secret GOOGLE_BOOKS_API_KEY.
+# GOOGLE_BOOKS_API_KEY=

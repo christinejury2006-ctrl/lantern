@@ -14,6 +14,7 @@ android {
         versionCode = 9
         versionName = "3.5.0"
         vectorDrawables.useSupportLibrary = true
+        buildConfigField("String", "GOOGLE_BOOKS_API_KEY", "\"${escapeBuildConfig(project.resolveGoogleBooksApiKey())}\"")
     }
 
     buildTypes {
@@ -62,3 +63,19 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
+
+fun org.gradle.api.Project.resolveGoogleBooksApiKey(): String {
+    System.getenv("GOOGLE_BOOKS_API_KEY")?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+    (findProperty("GOOGLE_BOOKS_API_KEY") as? String)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+    val file = rootProject.file("local.properties")
+    if (!file.exists()) return ""
+    val props = java.util.Properties()
+    file.inputStream().use { props.load(it) }
+    listOf("GOOGLE_BOOKS_API_KEY", "google.books.api.key").forEach { name ->
+        props.getProperty(name)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+    }
+    return ""
+}
+
+private fun escapeBuildConfig(value: String): String =
+    value.replace("\\", "\\\\").replace("\"", "\\\"")

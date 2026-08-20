@@ -65,6 +65,28 @@ data class CatalogBook(
     val downloads: Int
 )
 
+data class DiscoveryBook(
+    val volumeId: String,
+    val title: String,
+    val authors: List<String> = emptyList(),
+    val description: String = "",
+    val categories: List<String> = emptyList(),
+    val coverUrl: String? = null,
+    val publishedDate: String = "",
+    val averageRating: Float = 0f,
+    val ratingsCount: Int = 0,
+    val isbn: String? = null,
+    val infoLink: String? = null,
+    val previewLink: String? = null,
+    val canonicalLink: String? = null,
+    val buyLink: String? = null,
+    val publicDomain: Boolean = false,
+    val savedAt: Long = 0L
+) {
+    val authorLine: String
+        get() = authors.joinToString(", ").ifBlank { "Unknown" }
+}
+
 data class Highlight(
     val bookId: String,
     val pageIndex: Int,

@@ -2,6 +2,7 @@ package com.lantern.library
 
 import android.app.Activity
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -31,17 +32,24 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.lantern.library.data.CatalogBook
+import com.lantern.library.data.DiscoveryBook
+import com.lantern.library.data.Gutendex
 import com.lantern.library.data.LanternStore
 import com.lantern.library.data.ReaderTheme
+import com.lantern.library.data.Recommendations
 import com.lantern.library.ui.components.FadeToast
+import com.lantern.library.ui.screens.BookDetailsOverlay
 import com.lantern.library.ui.screens.ExploreScreen
 import com.lantern.library.ui.screens.LibraryScreen
 import com.lantern.library.ui.screens.ProfileScreen
@@ -50,12 +58,24 @@ import com.lantern.library.ui.screens.SearchScreen
 import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.LanternTheme
 import com.lantern.library.ui.theme.NightText
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private val store: LanternStore by viewModels()
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent { LanternRoot(store) }
+    }
+}
+
+private fun strongGutendexMatch(book: DiscoveryBook, hits: List<CatalogBook>): CatalogBook? {
+    val wantTitle = Recommendations.normalize(book.title)
+    if (wantTitle.isEmpty()) return null
+    return hits.firstOrNull { hit ->
+        Recommendations.normalize(hit.title) == wantTitle &&
+            Recommendations.authorsCompatible(book.authors, listOf(hit.author))
     }
 }
 
@@ -70,7 +90,10 @@ private sealed class Route {
 @Composable
 private fun LanternRoot(store: LanternStore) {
     var tab by remember { mutableStateOf<Route>(Route.Library) }
+    var details by remember { mutableStateOf<DiscoveryBook?>(null) }
     val theme = store.readingPrefs.theme
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         if (res.resultCode == Activity.RESULT_OK) res.data?.data?.let { store.importUri(it) }
     }
@@ -81,10 +104,49 @@ private fun LanternRoot(store: LanternStore) {
             putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/epub+zip", "application/pdf", "application/octet-stream"))
         })
     }
+    fun openDiscoveryLink(book: DiscoveryBook): Boolean {
+        val url = book.infoLink ?: book.buyLink ?: book.previewLink ?: book.canonicalLink
+        if (url.isNullOrBlank()) return false
+        return runCatching {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            true
+        }.getOrDefault(false)
+    }
+    fun getDiscovery(book: DiscoveryBook) {
+        val owned = store.books.firstOrNull { Recommendations.inLibrary(book, listOf(it)) }
+        if (owned != null) {
+            details = null
+            tab = Route.Reader(owned.id)
+            return
+        }
+        if (book.publicDomain) {
+            scope.launch {
+                val hits = withContext(Dispatchers.IO) {
+                    runCatching { Gutendex.search(book.title, null) }.getOrDefault(emptyList())
+                }
+                val hit = strongGutendexMatch(book, hits)
+                if (hit != null) {
+                    details = null
+                    store.download(hit) { opened -> tab = Route.Reader(opened.id) }
+                } else if (!openDiscoveryLink(book)) {
+                    store.toast("No free edition found")
+                }
+            }
+            return
+        }
+        if (!openDiscoveryLink(book)) store.toast("No store link available")
+    }
     LanternTheme(theme) {
         Box(Modifier.fillMaxSize()) {
             when (val r = tab) {
-                Route.Library -> LibraryScreen(store.books, theme, onOpen = { tab = Route.Reader(it.id) }, onRemove = { store.remove(it) }, onImport = { import() })
+                Route.Library -> LibraryScreen(
+                    store.books, store.forYou, store.wantToRead, theme,
+                    onOpen = { tab = Route.Reader(it.id) },
+                    onRemove = { store.remove(it) },
+                    onImport = { import() },
+                    onOpenDiscovery = { details = it },
+                    onSaveWant = { store.addWantToRead(it) }
+                )
                 Route.Search -> SearchScreen(theme) { remote -> store.download(remote) { book -> tab = Route.Reader(book.id) } }
                 Route.Explore -> ExploreScreen(theme) { remote -> store.download(remote) { book -> tab = Route.Reader(book.id) } }
                 Route.Profile -> ProfileScreen(store.books, store.account, store.readingPrefs, { store.setPrefs(it) }, { n, e -> store.signIn(n, e) }, { store.signOut() })
@@ -94,7 +156,20 @@ private fun LanternRoot(store: LanternStore) {
                     else ReaderScreen(book, store.readingPrefs, { store.setPrefs(it) }, { tab = Route.Library }, { p, n -> store.markRead(book.id, p, n) }, { store.addBookmark(book.id, it) })
                 }
             }
-            if (tab !is Route.Reader) BottomBar(theme, tab, { tab = it }, Modifier.align(Alignment.BottomCenter))
+            val detail = details
+            if (detail != null && tab is Route.Library) {
+                BookDetailsOverlay(
+                    book = detail,
+                    theme = theme,
+                    saved = store.isWantToRead(detail),
+                    onDismiss = { details = null },
+                    onWant = { store.addWantToRead(detail) },
+                    onGet = { getDiscovery(detail) }
+                )
+            }
+            if (tab !is Route.Reader && details == null) {
+                BottomBar(theme, tab, { tab = it }, Modifier.align(Alignment.BottomCenter))
+            }
             Box(Modifier.align(Alignment.TopCenter).padding(top = 48.dp)) { FadeToast(store.toast) }
         }
     }

@@ -20,7 +20,11 @@ import java.io.File
 class LanternStore(app: Application) : AndroidViewModel(app) {
     private val prefs = app.getSharedPreferences("lantern", Context.MODE_PRIVATE)
     private val booksFile = File(app.filesDir, "library.json")
+    private val wantFile = File(app.filesDir, "want_to_read.json")
     val books = mutableStateListOf<LibraryBook>()
+    val wantToRead = mutableStateListOf<DiscoveryBook>()
+    var forYou by mutableStateOf<List<DiscoveryBook>>(emptyList())
+        private set
     var readingPrefs by mutableStateOf(ReadingPrefs())
         private set
     var account by mutableStateOf(CloudAccount())
@@ -40,7 +44,13 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             useMobileData = prefs.getBoolean("mobile", true)
         )
         account = CloudAccount(prefs.getBoolean("in", false), prefs.getString("name", "") ?: "", prefs.getString("email", "") ?: "", prefs.getString("prov", "") ?: "")
-        loadBooks(); mergeSeed()
+        loadBooks(); mergeSeed(); loadWantToRead()
+        forYou = Recommendations.filterExcluded(
+            Recommendations.cached(app).orEmpty(),
+            books.toList(),
+            wantToRead.toList()
+        )
+        ensureRecommendations()
     }
 
     fun setPrefs(next: ReadingPrefs) {
@@ -53,7 +63,12 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     }
     fun toast(msg: String) { viewModelScope.launch { toast = msg; delay(5000); if (toast == msg) toast = null } }
     fun book(id: String) = books.firstOrNull { it.id == id }
-    fun upsert(book: LibraryBook) { val i = books.indexOfFirst { it.id == book.id }; if (i >= 0) books[i] = book else books.add(0, book); persistBooks() }
+    fun upsert(book: LibraryBook) {
+        val i = books.indexOfFirst { it.id == book.id }
+        if (i >= 0) books[i] = book else books.add(0, book)
+        persistBooks()
+        dropFromRecommendations { Recommendations.inLibrary(it, listOf(book)) }
+    }
     fun remove(id: String) {
         val b = books.firstOrNull { it.id == id } ?: return
         if (b.origin == BookOrigin.BUNDLED) return
@@ -64,6 +79,30 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         upsert(b.copy(currentPage = page.coerceAtLeast(0), pageCount = pages.coerceAtLeast(1), lastReadAt = System.currentTimeMillis(), finished = pages > 0 && page >= pages - 1))
     }
     fun addBookmark(bookId: String, page: Int) { toast("Bookmark saved · page ${page + 1}") }
+    fun isWantToRead(book: DiscoveryBook) = wantToRead.any { Recommendations.sameWork(it, book) }
+    fun addWantToRead(book: DiscoveryBook) {
+        if (wantToRead.any { Recommendations.sameWork(it, book) }) return
+        wantToRead.add(0, book.copy(savedAt = System.currentTimeMillis()))
+        persistWantToRead()
+        dropFromRecommendations { Recommendations.sameWork(it, book) }
+        toast("Saved to Want to Read")
+    }
+    fun removeWantToRead(book: DiscoveryBook) {
+        val removed = wantToRead.removeAll { Recommendations.sameWork(it, book) }
+        if (!removed) return
+        persistWantToRead()
+        toast("Removed from Want to Read")
+    }
+    fun ensureRecommendations() {
+        viewModelScope.launch {
+            val list = Recommendations.daily(
+                getApplication(),
+                { books.toList() },
+                { wantToRead.toList() }
+            )
+            forYou = Recommendations.filterExcluded(list, books.toList(), wantToRead.toList())
+        }
+    }
     fun importUri(uri: Uri) {
         viewModelScope.launch {
             val book = withContext(Dispatchers.IO) { runCatching { BookIo.importUri(getApplication(), uri) }.getOrNull() }
@@ -113,5 +152,25 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 .put("lastReadAt", b.lastReadAt).put("category", b.category).put("synopsis", b.synopsis))
         }
         runCatching { booksFile.writeText(arr.toString()) }
+    }
+    private fun loadWantToRead() {
+        if (!wantFile.exists()) return
+        runCatching {
+            val arr = JSONArray(wantFile.readText())
+            for (i in 0 until arr.length()) {
+                val row = arr.optJSONObject(i) ?: continue
+                val incoming = Recommendations.parseBook(row) ?: continue
+                if (wantToRead.none { Recommendations.sameWork(it, incoming) }) wantToRead += incoming
+            }
+        }
+    }
+    private fun dropFromRecommendations(drop: (DiscoveryBook) -> Boolean) {
+        if (forYou.any(drop)) forYou = forYou.filterNot(drop)
+        Recommendations.excludeFromCache(getApplication(), drop)
+    }
+    private fun persistWantToRead() {
+        val arr = JSONArray()
+        wantToRead.forEach { arr.put(Recommendations.toJson(it)) }
+        runCatching { wantFile.writeText(arr.toString()) }
     }
 }

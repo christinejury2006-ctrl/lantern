@@ -21,7 +21,19 @@ enum class BookOrigin { BUNDLED, DOWNLOAD, IMPORT }
 
 enum class ReaderTheme(val label: String) { LIGHT("Light Mode"), DARK("Dark Mode") }
 
-data class Chapter(val title: String, val body: String)
+data class Chapter(val title: String, val body: String, val href: String = "")
+
+data class TocEntry(
+    val title: String,
+    val href: String = "",
+    val level: Int = 0,
+    val chapterIndex: Int = -1
+)
+
+data class EpubDocument(
+    val chapters: List<Chapter>,
+    val toc: List<TocEntry>
+)
 
 data class LibraryBook(
     val id: String,

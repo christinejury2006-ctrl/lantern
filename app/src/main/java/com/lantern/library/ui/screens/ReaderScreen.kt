@@ -66,6 +66,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -86,6 +87,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -105,6 +108,7 @@ import com.lantern.library.data.LanternFonts
 import com.lantern.library.data.LibraryBook
 import com.lantern.library.data.Paginator
 import com.lantern.library.data.ReaderPage
+import com.lantern.library.data.TocEntry
 import com.lantern.library.data.ReaderTheme
 import com.lantern.library.data.ReadingPrefs
 import com.lantern.library.ui.theme.Aqua
@@ -143,6 +147,7 @@ fun ReaderScreen(
     var menu by remember { mutableStateOf(ReaderMenu.None) }
     val bookmarks = remember { mutableStateListOf<Int>() }
     var chapters by remember { mutableStateOf(book.chapters) }
+    var toc by remember { mutableStateOf<List<TocEntry>>(emptyList()) }
     var pdfCount by remember { mutableStateOf(book.pageCount.coerceAtLeast(1)) }
     var ready by remember { mutableStateOf(book.format == BookFormat.TEXT || book.chapters.isNotEmpty()) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -214,29 +219,39 @@ fun ReaderScreen(
     LaunchedEffect(book.id, book.filePath, book.format) {
         if (book.format == BookFormat.TEXT) {
             chapters = book.chapters
+            toc = book.chapters.mapIndexed { i, ch ->
+                TocEntry(ch.title.ifBlank { "Chapter ${i + 1}" }, ch.href, 0, i)
+            }
             ready = true
             return@LaunchedEffect
         }
         ready = false
         error = null
+        toc = emptyList()
         val loaded = withContext(Dispatchers.IO) {
             runCatching {
                 val file = book.filePath?.let { File(it) }
-                if (file == null || !file.exists()) Triple(emptyList<Chapter>(), 1, "File is missing. Import it again.")
-                else when (book.format) {
-                    BookFormat.PDF -> Triple(emptyList(), BookIo.pdfPageCount(file).coerceAtLeast(1), null)
+                if (file == null || !file.exists()) {
+                    Triple(emptyList<Chapter>(), emptyList<TocEntry>(), "File is missing. Import it again." to 1)
+                } else when (book.format) {
+                    BookFormat.PDF -> Triple(
+                        emptyList<Chapter>(),
+                        emptyList<TocEntry>(),
+                        null to BookIo.pdfPageCount(file).coerceAtLeast(1)
+                    )
                     BookFormat.EPUB -> {
-                        val ch = BookIo.readEpubChapters(file)
-                        if (ch.isEmpty()) Triple(emptyList(), 1, "This file has no readable text.")
-                        else Triple(ch, ch.size, null)
+                        val doc = BookIo.readEpubDocument(file)
+                        if (doc.chapters.isEmpty()) Triple(emptyList(), emptyList(), "This file has no readable text." to 1)
+                        else Triple(doc.chapters, doc.toc, null to doc.chapters.size)
                     }
-                    else -> Triple(book.chapters, 1, null)
+                    else -> Triple(book.chapters, emptyList(), null to 1)
                 }
-            }.getOrElse { Triple(emptyList(), 1, "Could not open this book.") }
+            }.getOrElse { Triple(emptyList(), emptyList(), "Could not open this book." to 1) }
         }
         chapters = loaded.first
-        pdfCount = loaded.second
-        error = loaded.third
+        toc = loaded.second
+        pdfCount = loaded.third.second
+        error = loaded.third.first
         ready = true
     }
 
@@ -250,7 +265,9 @@ fun ReaderScreen(
         pageCount = { pageCount }
     )
     val scrollState = rememberScrollState()
+    val chapterY = remember(book.id) { mutableStateMapOf<Int, Int>() }
     val scope = rememberCoroutineScope()
+    val epubUsesPager = prefs.swipeMode && book.format != BookFormat.PDF
     LaunchedEffect(pager, pageCount, prefs.swipeMode, book.format) {
         if (!prefs.swipeMode && book.format != BookFormat.PDF) return@LaunchedEffect
         snapshotFlow { pager.currentPage }.collect { onProgress(it, pageCount) }
@@ -304,6 +321,23 @@ fun ReaderScreen(
             onProgress(target, pageCount)
         }
     }
+    fun goToChapter(index: Int) {
+        if (index < 0) return
+        val page = pages.indexOfFirst { it.chapterIndex == index }
+        if (book.format == BookFormat.PDF || prefs.swipeMode) {
+            if (page < 0) return
+            go(page)
+            closeMenus()
+            return
+        }
+        val y = chapterY[index] ?: return
+        if (y > 0 && scrollState.maxValue <= 0) return
+        scope.launch {
+            scrollState.scrollTo(y.coerceIn(0, scrollState.maxValue))
+            if (page >= 0) onProgress(page, pageCount)
+        }
+        closeMenus()
+    }
 
     BackHandler {
         if (menuOpen) closeMenus() else onBack()
@@ -345,40 +379,50 @@ fun ReaderScreen(
                     ) else Text("Page ${i + 1}", color = ink)
                 }
             }
-            prefs.swipeMode -> HorizontalPager(
-                state = pager,
-                modifier = Modifier.fillMaxSize(),
-                userScrollEnabled = !menuOpen
-            ) { i ->
-                key(prefs.fontSizeSp, i) {
-                    PageLeaf(
-                        pages.getOrNull(i), family, prefs.fontSizeSp, ink,
-                        Modifier.fillMaxSize().then(pageTap)
-                    )
-                }
-            }
-            else -> Column(
-                Modifier
-                    .fillMaxSize()
-                    .verticalScroll(scrollState, enabled = !menuOpen)
-                    .padding(26.dp, 88.dp, 26.dp, 96.dp)
-            ) {
-                val body = chapters.ifEmpty { listOf(Chapter(book.title, book.synopsis.ifBlank { "This book has no text yet." })) }
-                body.forEachIndexed { index, ch ->
-                    Text(
-                        ch.title.ifBlank { "Chapter ${index + 1}" },
-                        color = ink, fontFamily = family, fontSize = (prefs.fontSizeSp + 10).sp,
-                        modifier = Modifier.fillMaxWidth().padding(top = if (index == 0) 0.dp else 28.dp),
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    val paras = ch.body.split(Regex("\n\\s*\n")).map { it.trim() }.filter { it.isNotEmpty() }
-                    paras.forEachIndexed { pi, para ->
-                        if (pi == 0) Drop(para, family, prefs.fontSizeSp, ink)
-                        else Text(
-                            para, color = ink, fontFamily = family, fontSize = prefs.fontSizeSp.sp,
-                            lineHeight = (prefs.fontSizeSp * 1.55f).sp, modifier = Modifier.padding(bottom = 12.dp)
-                        )
+            else -> key(book.id, epubUsesPager) {
+                if (epubUsesPager) {
+                    HorizontalPager(
+                        state = pager,
+                        modifier = Modifier.fillMaxSize(),
+                        userScrollEnabled = !menuOpen
+                    ) { i ->
+                        key(prefs.fontSizeSp, i) {
+                            PageLeaf(
+                                pages.getOrNull(i), family, prefs.fontSizeSp, ink,
+                                Modifier.fillMaxSize().then(pageTap)
+                            )
+                        }
+                    }
+                } else {
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .verticalScroll(scrollState, enabled = !menuOpen)
+                            .padding(26.dp, 88.dp, 26.dp, 96.dp)
+                    ) {
+                        val body = chapters.ifEmpty { listOf(Chapter(book.title, book.synopsis.ifBlank { "This book has no text yet." })) }
+                        body.forEachIndexed { index, ch ->
+                            Text(
+                                ch.title.ifBlank { "Chapter ${index + 1}" },
+                                color = ink, fontFamily = family, fontSize = (prefs.fontSizeSp + 10).sp,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .onGloballyPositioned { coords ->
+                                        chapterY[index] = coords.positionInParent().y.toInt()
+                                    }
+                                    .padding(top = if (index == 0) 0.dp else 28.dp),
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(Modifier.height(16.dp))
+                            val paras = ch.body.split(Regex("\n\\s*\n")).map { it.trim() }.filter { it.isNotEmpty() }
+                            paras.forEachIndexed { pi, para ->
+                                if (pi == 0) Drop(para, family, prefs.fontSizeSp, ink)
+                                else Text(
+                                    para, color = ink, fontFamily = family, fontSize = prefs.fontSizeSp.sp,
+                                    lineHeight = (prefs.fontSizeSp * 1.55f).sp, modifier = Modifier.padding(bottom = 12.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -608,18 +652,24 @@ fun ReaderScreen(
                     .padding(16.dp)
             ) {
                 Text("Chapters", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-                val list = chapters.ifEmpty { listOf(Chapter(book.title, "")) }
-                list.forEachIndexed { index, ch ->
+                val list = toc.filter { it.chapterIndex >= 0 }
+                if (list.isEmpty()) {
                     Text(
-                        ch.title.ifBlank { "Chapter ${index + 1}" },
-                        color = Color.White,
-                        modifier = Modifier.fillMaxWidth().clickable {
-                            val page = pages.indexOfFirst { it.chapterIndex == index }.takeIf { it >= 0 }
-                                ?: ((index.toFloat() / list.size.coerceAtLeast(1)) * (pageCount - 1).coerceAtLeast(0)).toInt()
-                            go(page)
-                            closeMenus()
-                        }.padding(vertical = 10.dp)
+                        "No table of contents in this book.",
+                        color = Color.White.copy(0.75f), fontSize = 13.sp,
+                        modifier = Modifier.padding(top = 8.dp)
                     )
+                } else {
+                    list.forEach { entry ->
+                        Text(
+                            entry.title,
+                            color = Color.White,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { goToChapter(entry.chapterIndex) }
+                                .padding(start = (entry.level * 16).dp, top = 10.dp, bottom = 10.dp)
+                        )
+                    }
                 }
             }
         }

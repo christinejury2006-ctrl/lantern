@@ -21,7 +21,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -54,6 +53,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
@@ -101,6 +101,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.lantern.library.data.BookFormat
 import com.lantern.library.data.BookIo
 import com.lantern.library.data.Chapter
+import com.lantern.library.data.LanternFonts
 import com.lantern.library.data.LibraryBook
 import com.lantern.library.data.Paginator
 import com.lantern.library.data.ReaderPage
@@ -109,7 +110,6 @@ import com.lantern.library.data.ReadingPrefs
 import com.lantern.library.ui.theme.Aqua
 import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.Lilac
-import com.lantern.library.ui.theme.Lora
 import com.lantern.library.ui.theme.NightText
 import com.lantern.library.ui.theme.Periwinkle
 import com.lantern.library.ui.theme.Playfair
@@ -123,7 +123,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private enum class ReaderMenu { None, Settings, Nav, Marks }
+private enum class ReaderMenu { None, Settings, Nav, Chapters, Marks }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -136,7 +136,7 @@ fun ReaderScreen(
     onBookmark: (Int) -> Unit
 ) {
     val activity = LocalContext.current as Activity
-    val family = Lora
+    val family = LanternFonts.family(prefs.fontId)
     val dark = prefs.readerTheme == ReaderTheme.DARK
     val ink = if (dark) NightText else Ink
     var chrome by remember { mutableStateOf(true) }
@@ -149,7 +149,6 @@ fun ReaderScreen(
     var clock by remember { mutableStateOf(nowTime()) }
     var batteryPct by remember { mutableStateOf(100) }
     var batteryCharging by remember { mutableStateOf(false) }
-    var restoredBookId by remember { mutableStateOf<String?>(null) }
 
     DisposableEffect(prefs.landscape, prefs.brightness) {
         activity.requestedOrientation = if (prefs.landscape)
@@ -213,7 +212,6 @@ fun ReaderScreen(
     }
 
     LaunchedEffect(book.id, book.filePath, book.format) {
-        restoredBookId = null
         if (book.format == BookFormat.TEXT) {
             chapters = book.chapters
             ready = true
@@ -268,15 +266,10 @@ fun ReaderScreen(
     LaunchedEffect(book.id, ready, pageCount, prefs.swipeMode) {
         if (!ready || pageCount <= 0) return@LaunchedEffect
         val max = pageCount - 1
-        val target = if (restoredBookId != book.id) {
-            book.currentPage.coerceIn(0, max)
-        } else {
-            pager.currentPage.coerceIn(0, max)
-        }
+        val target = book.currentPage.coerceIn(0, max)
         if (prefs.swipeMode || book.format == BookFormat.PDF) {
             if (pager.currentPage != target) pager.scrollToPage(target)
         }
-        restoredBookId = book.id
     }
     LaunchedEffect(book.id, ready, prefs.swipeMode, book.format, scrollState.maxValue, pageCount) {
         if (!ready || prefs.swipeMode || book.format == BookFormat.PDF) return@LaunchedEffect
@@ -299,7 +292,18 @@ fun ReaderScreen(
         }
         chrome = !chrome
     }
-    fun go(p: Int) { scope.launch { pager.scrollToPage(p.coerceIn(0, pageCount - 1)) } }
+    fun go(p: Int) {
+        val target = p.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
+        scope.launch {
+            if (book.format == BookFormat.PDF || prefs.swipeMode) {
+                pager.scrollToPage(target)
+            } else if (scrollState.maxValue > 0 && pageCount > 1) {
+                val dest = ((target.toFloat() / (pageCount - 1)) * scrollState.maxValue).toInt()
+                scrollState.scrollTo(dest.coerceIn(0, scrollState.maxValue))
+            }
+            onProgress(target, pageCount)
+        }
+    }
 
     BackHandler {
         if (menuOpen) closeMenus() else onBack()
@@ -354,20 +358,29 @@ fun ReaderScreen(
                 }
             }
             else -> Column(
-                Modifier.fillMaxSize()
-                    .verticalScroll(rememberScrollState(), enabled = !menuOpen)
-                    .pointerInput(menuOpen) {
-                        detectTapGestures(onTap = { if (!menuOpen) toggleChrome() })
-                    }
-                    .padding(26.dp, 88.dp)
+                Modifier
+                    .fillMaxSize()
+                    .verticalScroll(scrollState, enabled = !menuOpen)
+                    .padding(26.dp, 88.dp, 26.dp, 96.dp)
             ) {
-                Text(
-                    chapters.firstOrNull()?.title ?: book.title,
-                    color = ink, fontFamily = family, fontSize = (prefs.fontSizeSp + 10).sp,
-                    modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center
-                )
-                Spacer(Modifier.height(20.dp))
-                Drop(chapters.joinToString("\n\n") { it.body }.ifBlank { book.synopsis }, family, prefs.fontSizeSp, ink)
+                val body = chapters.ifEmpty { listOf(Chapter(book.title, book.synopsis.ifBlank { "This book has no text yet." })) }
+                body.forEachIndexed { index, ch ->
+                    Text(
+                        ch.title.ifBlank { "Chapter ${index + 1}" },
+                        color = ink, fontFamily = family, fontSize = (prefs.fontSizeSp + 10).sp,
+                        modifier = Modifier.fillMaxWidth().padding(top = if (index == 0) 0.dp else 28.dp),
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    val paras = ch.body.split(Regex("\n\\s*\n")).map { it.trim() }.filter { it.isNotEmpty() }
+                    paras.forEachIndexed { pi, para ->
+                        if (pi == 0) Drop(para, family, prefs.fontSizeSp, ink)
+                        else Text(
+                            para, color = ink, fontFamily = family, fontSize = prefs.fontSizeSp.sp,
+                            lineHeight = (prefs.fontSizeSp * 1.55f).sp, modifier = Modifier.padding(bottom = 12.dp)
+                        )
+                    }
+                }
             }
         }
 
@@ -388,7 +401,7 @@ fun ReaderScreen(
                 percent = batteryPct,
                 charging = batteryCharging,
                 ink = ink,
-                modifier = Modifier
+                modifier = Modifier.clickable { toggleChrome() }
             )
             if (chrome) {
                 Row(
@@ -416,7 +429,12 @@ fun ReaderScreen(
                     .padding(bottom = 8.dp, top = 18.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                ColBtn(Icons.Filled.List, "Navigate", ink) { toggleMenu(ReaderMenu.Nav) }
+                ColBtn(Icons.Filled.List, "Chapters", ink, selected = menu == ReaderMenu.Chapters) {
+                    toggleMenu(ReaderMenu.Chapters)
+                }
+                ColBtn(Icons.Filled.Search, "Navigate", ink, selected = menu == ReaderMenu.Nav) {
+                    toggleMenu(ReaderMenu.Nav)
+                }
                 Column(
                     Modifier.clickable {
                         onPrefs(prefs.copy(readerTheme = if (dark) ReaderTheme.LIGHT else ReaderTheme.DARK))
@@ -426,9 +444,15 @@ fun ReaderScreen(
                     SunMoonIcon(dark, ink, Modifier.size(22.dp))
                     Text(if (dark) "Dark" else "Light", color = ink.copy(0.85f), fontSize = 10.sp)
                 }
-                ColBtn(Icons.Filled.Settings, "Settings", ink) { toggleMenu(ReaderMenu.Settings) }
-                ColBtn(Icons.Filled.Favorite, "Bookmarks", ink) {
-                    val page = pager.currentPage
+                ColBtn(Icons.Filled.Settings, "Settings", ink, selected = menu == ReaderMenu.Settings) {
+                    toggleMenu(ReaderMenu.Settings)
+                }
+                ColBtn(Icons.Filled.Favorite, "Bookmarks", ink, selected = menu == ReaderMenu.Marks) {
+                    val page = when {
+                        book.format == BookFormat.PDF || prefs.swipeMode -> pager.currentPage
+                        scrollState.maxValue <= 0 -> 0
+                        else -> ((scrollState.value.toFloat() / scrollState.maxValue) * (pageCount - 1).coerceAtLeast(0)).toInt()
+                    }
                     if (bookmarks.none { it == page }) {
                         bookmarks.add(page)
                         onBookmark(page)
@@ -506,6 +530,19 @@ fun ReaderScreen(
                                 )
                             }
                         }
+                        Text("Font", color = Color.White, modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
+                        LanternFonts.options.forEach { opt ->
+                            val on = prefs.fontId == opt.id || (prefs.fontId == "times" && opt.id == "lora")
+                            Text(
+                                opt.label,
+                                Modifier.fillMaxWidth().padding(bottom = 4.dp).clip(RoundedCornerShape(10.dp))
+                                    .background(if (on) Color(0xFFE8D9A8) else Color(0x22FFFFFF))
+                                    .clickable { onPrefs(prefs.copy(fontId = opt.id)) }
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                color = if (on) Color(0xFF2B2430) else Color.White,
+                                fontSize = 13.sp
+                            )
+                        }
                     }
                     Text("Reading Mode", color = Color.White, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
                     ModeSwitch("Swipe", "Scroll", prefs.swipeMode) { onPrefs(prefs.copy(swipeMode = it)) }
@@ -528,24 +565,61 @@ fun ReaderScreen(
                     )
             ) {
                 Column(Modifier.padding(16.dp)) {
+                    val at = when {
+                        book.format == BookFormat.PDF || prefs.swipeMode -> pager.currentPage
+                        scrollState.maxValue <= 0 -> 0
+                        else -> ((scrollState.value.toFloat() / scrollState.maxValue) * (pageCount - 1).coerceAtLeast(0)).toInt()
+                    }
                     Text("Navigate", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
                     Text(
-                        "Page ${pager.currentPage + 1} of $pageCount",
+                        "Page ${at + 1} of $pageCount",
                         color = Color.White.copy(0.8f), fontSize = 13.sp,
                         modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
                     )
                     Slider(
-                        pager.currentPage.toFloat(),
+                        at.toFloat(),
                         { go(it.toInt()) },
                         valueRange = 0f..(pageCount - 1).coerceAtLeast(0).toFloat(),
                         colors = SliderDefaults.colors(thumbColor = gold, activeTrackColor = gold)
                     )
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("First", color = Color.White, modifier = Modifier.clickable { go(0) }.padding(8.dp))
-                        Text("Previous", color = Color.White, modifier = Modifier.clickable { go(pager.currentPage - 1) }.padding(8.dp))
-                        Text("Next", color = Color.White, modifier = Modifier.clickable { go(pager.currentPage + 1) }.padding(8.dp))
+                        Text("Previous", color = Color.White, modifier = Modifier.clickable { go(at - 1) }.padding(8.dp))
+                        Text("Next", color = Color.White, modifier = Modifier.clickable { go(at + 1) }.padding(8.dp))
                         Text("Last", color = Color.White, modifier = Modifier.clickable { go(pageCount - 1) }.padding(8.dp))
                     }
+                }
+            }
+        }
+
+        if (menu == ReaderMenu.Chapters) {
+            Column(
+                Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
+                    .padding(16.dp, 0.dp, 16.dp, 78.dp)
+                    .clip(RoundedCornerShape(18.dp)).background(Color(0xE62B2B2B))
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() },
+                        onClick = {}
+                    )
+                    .fillMaxWidth()
+                    .height(280.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp)
+            ) {
+                Text("Chapters", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                val list = chapters.ifEmpty { listOf(Chapter(book.title, "")) }
+                list.forEachIndexed { index, ch ->
+                    Text(
+                        ch.title.ifBlank { "Chapter ${index + 1}" },
+                        color = Color.White,
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            val page = pages.indexOfFirst { it.chapterIndex == index }.takeIf { it >= 0 }
+                                ?: ((index.toFloat() / list.size.coerceAtLeast(1)) * (pageCount - 1).coerceAtLeast(0)).toInt()
+                            go(page)
+                            closeMenus()
+                        }.padding(vertical = 10.dp)
+                    )
                 }
             }
         }
@@ -696,14 +770,18 @@ private fun ColBtn(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     tint: Color,
+    selected: Boolean = false,
     onClick: () -> Unit
 ) {
+    val gold = Color(0xFFE8D9A8)
     Column(
-        Modifier.clickable(onClick = onClick).padding(8.dp, 4.dp),
+        Modifier.clip(RoundedCornerShape(12.dp))
+            .background(if (selected) Color(0x33E8D9A8) else Color.Transparent)
+            .clickable(onClick = onClick).padding(8.dp, 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Icon(icon, label, tint = tint, modifier = Modifier.size(22.dp))
-        Text(label, color = tint.copy(0.85f), fontSize = 10.sp, maxLines = 1)
+        Icon(icon, label, tint = if (selected) gold else tint, modifier = Modifier.size(22.dp))
+        Text(label, color = (if (selected) gold else tint).copy(0.85f), fontSize = 10.sp, maxLines = 1)
     }
 }
 

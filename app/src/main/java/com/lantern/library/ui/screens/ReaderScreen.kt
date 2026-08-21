@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -268,12 +269,13 @@ fun ReaderScreen(
     val chapterY = remember(book.id) { mutableStateMapOf<Int, Int>() }
     val scope = rememberCoroutineScope()
     val epubUsesPager = prefs.swipeMode && book.format != BookFormat.PDF
+    val pdfUsesPager = book.format == BookFormat.PDF && prefs.swipeMode
     LaunchedEffect(pager, pageCount, prefs.swipeMode, book.format) {
-        if (!prefs.swipeMode && book.format != BookFormat.PDF) return@LaunchedEffect
+        if (!prefs.swipeMode) return@LaunchedEffect
         snapshotFlow { pager.currentPage }.collect { onProgress(it, pageCount) }
     }
     LaunchedEffect(scrollState, pageCount, prefs.swipeMode, book.format, ready) {
-        if (prefs.swipeMode || book.format == BookFormat.PDF || !ready) return@LaunchedEffect
+        if (prefs.swipeMode || !ready) return@LaunchedEffect
         snapshotFlow { scrollState.value to scrollState.maxValue }.collect { (value, max) ->
             if (max <= 0 || pageCount <= 0) return@collect
             val page = ((value.toFloat() / max.toFloat()) * (pageCount - 1).coerceAtLeast(0)).toInt()
@@ -284,12 +286,12 @@ fun ReaderScreen(
         if (!ready || pageCount <= 0) return@LaunchedEffect
         val max = pageCount - 1
         val target = book.currentPage.coerceIn(0, max)
-        if (prefs.swipeMode || book.format == BookFormat.PDF) {
+        if (prefs.swipeMode) {
             if (pager.currentPage != target) pager.scrollToPage(target)
         }
     }
     LaunchedEffect(book.id, ready, prefs.swipeMode, book.format, scrollState.maxValue, pageCount) {
-        if (!ready || prefs.swipeMode || book.format == BookFormat.PDF) return@LaunchedEffect
+        if (!ready || prefs.swipeMode) return@LaunchedEffect
         if (scrollState.maxValue <= 0 || pageCount <= 0) return@LaunchedEffect
         val frac = if (pageCount <= 1) 0f else book.currentPage.toFloat() / (pageCount - 1).coerceAtLeast(1)
         val target = (frac * scrollState.maxValue).toInt().coerceIn(0, scrollState.maxValue)
@@ -312,7 +314,7 @@ fun ReaderScreen(
     fun go(p: Int) {
         val target = p.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
         scope.launch {
-            if (book.format == BookFormat.PDF || prefs.swipeMode) {
+            if (prefs.swipeMode) {
                 pager.scrollToPage(target)
             } else if (scrollState.maxValue > 0 && pageCount > 1) {
                 val dest = ((target.toFloat() / (pageCount - 1)) * scrollState.maxValue).toInt()
@@ -361,22 +363,42 @@ fun ReaderScreen(
                 Modifier.fillMaxSize().padding(32.dp).then(pageTap),
                 contentAlignment = Alignment.Center
             ) { Text(error ?: "", color = ink, textAlign = TextAlign.Center) }
-            book.format == BookFormat.PDF -> HorizontalPager(
-                state = pager,
-                modifier = Modifier.fillMaxSize(),
-                userScrollEnabled = !menuOpen
-            ) { i ->
-                Box(Modifier.fillMaxSize().then(pageTap), contentAlignment = Alignment.Center) {
-                    var bmp by remember(book.filePath, i) { mutableStateOf<Bitmap?>(null) }
-                    LaunchedEffect(book.filePath, i) {
-                        bmp = withContext(Dispatchers.IO) {
-                            book.filePath?.let { File(it) }?.takeIf { it.exists() }?.let { renderPdf(it, i) }
+            book.format == BookFormat.PDF -> key(book.id, pdfUsesPager) {
+                if (pdfUsesPager) {
+                    HorizontalPager(
+                        state = pager,
+                        modifier = Modifier.fillMaxSize(),
+                        userScrollEnabled = !menuOpen
+                    ) { i ->
+                        Box(Modifier.fillMaxSize().then(pageTap), contentAlignment = Alignment.Center) {
+                            PdfPageImage(
+                                path = book.filePath,
+                                index = i,
+                                ink = ink,
+                                modifier = Modifier.fillMaxSize(),
+                                fillViewport = true
+                            )
                         }
                     }
-                    if (bmp != null) Image(
-                        bmp!!.asImageBitmap(), null, Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Fit
-                    ) else Text("Page ${i + 1}", color = ink)
+                } else {
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .verticalScroll(scrollState, enabled = !menuOpen)
+                            .padding(horizontal = 8.dp, vertical = 0.dp)
+                            .padding(top = 88.dp, bottom = 96.dp)
+                    ) {
+                        repeat(pdfCount) { i ->
+                            PdfPageImage(
+                                path = book.filePath,
+                                index = i,
+                                ink = ink,
+                                modifier = Modifier.fillMaxWidth().then(pageTap),
+                                fillViewport = false
+                            )
+                            if (i < pdfCount - 1) Spacer(Modifier.height(8.dp))
+                        }
+                    }
                 }
             }
             else -> key(book.id, epubUsesPager) {
@@ -493,7 +515,7 @@ fun ReaderScreen(
                 }
                 ColBtn(Icons.Filled.Favorite, "Bookmarks", ink, selected = menu == ReaderMenu.Marks) {
                     val page = when {
-                        book.format == BookFormat.PDF || prefs.swipeMode -> pager.currentPage
+                        prefs.swipeMode -> pager.currentPage
                         scrollState.maxValue <= 0 -> 0
                         else -> ((scrollState.value.toFloat() / scrollState.maxValue) * (pageCount - 1).coerceAtLeast(0)).toInt()
                     }
@@ -610,7 +632,7 @@ fun ReaderScreen(
             ) {
                 Column(Modifier.padding(16.dp)) {
                     val at = when {
-                        book.format == BookFormat.PDF || prefs.swipeMode -> pager.currentPage
+                        prefs.swipeMode -> pager.currentPage
                         scrollState.maxValue <= 0 -> 0
                         else -> ((scrollState.value.toFloat() / scrollState.maxValue) * (pageCount - 1).coerceAtLeast(0)).toInt()
                     }
@@ -890,6 +912,37 @@ private fun registerBatteryReceiver(
 
 private fun nowTime(): String =
     SimpleDateFormat("h:mm", Locale.getDefault()).format(Date())
+
+@Composable
+private fun PdfPageImage(
+    path: String?,
+    index: Int,
+    ink: Color,
+    modifier: Modifier,
+    fillViewport: Boolean
+) {
+    var bmp by remember(path, index) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(path, index) {
+        bmp = withContext(Dispatchers.IO) {
+            path?.let { File(it) }?.takeIf { it.exists() }?.let { renderPdf(it, index) }
+        }
+    }
+    val image = bmp
+    if (image != null) {
+        val aspect = (image.width.toFloat() / image.height.toFloat()).coerceIn(0.4f, 2.2f)
+        Image(
+            image.asImageBitmap(),
+            contentDescription = "Page ${index + 1}",
+            modifier = if (fillViewport) modifier else modifier.aspectRatio(aspect),
+            contentScale = if (fillViewport) ContentScale.Fit else ContentScale.FillWidth
+        )
+    } else {
+        Box(
+            (if (fillViewport) modifier else modifier.aspectRatio(1f / 1.294f)),
+            contentAlignment = Alignment.Center
+        ) { Text("Page ${index + 1}", color = ink) }
+    }
+}
 
 private fun renderPdf(file: File, index: Int): Bitmap? {
     return try {

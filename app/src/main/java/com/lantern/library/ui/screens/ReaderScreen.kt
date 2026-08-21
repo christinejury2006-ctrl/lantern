@@ -25,6 +25,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -45,6 +46,8 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -120,6 +123,7 @@ import com.lantern.library.ui.theme.Periwinkle
 import com.lantern.library.ui.theme.Playfair
 import com.lantern.library.ui.theme.Sky
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -266,20 +270,37 @@ fun ReaderScreen(
         pageCount = { pageCount }
     )
     val scrollState = rememberScrollState()
+    val pdfList = rememberLazyListState(
+        initialFirstVisibleItemIndex = book.currentPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
+    )
     val chapterY = remember(book.id) { mutableStateMapOf<Int, Int>() }
     val scope = rememberCoroutineScope()
     val epubUsesPager = prefs.swipeMode && book.format != BookFormat.PDF
     val pdfUsesPager = book.format == BookFormat.PDF && prefs.swipeMode
+    val pdfSession = remember(book.id, book.filePath, pdfUsesPager) {
+        if (book.format == BookFormat.PDF && !pdfUsesPager)
+            book.filePath?.let { PdfDocSession(File(it)) }
+        else null
+    }
+    DisposableEffect(pdfSession) {
+        onDispose { pdfSession?.close() }
+    }
     LaunchedEffect(pager, pageCount, prefs.swipeMode, book.format) {
         if (!prefs.swipeMode) return@LaunchedEffect
         snapshotFlow { pager.currentPage }.collect { onProgress(it, pageCount) }
     }
     LaunchedEffect(scrollState, pageCount, prefs.swipeMode, book.format, ready) {
-        if (prefs.swipeMode || !ready) return@LaunchedEffect
+        if (prefs.swipeMode || book.format == BookFormat.PDF || !ready) return@LaunchedEffect
         snapshotFlow { scrollState.value to scrollState.maxValue }.collect { (value, max) ->
             if (max <= 0 || pageCount <= 0) return@collect
             val page = ((value.toFloat() / max.toFloat()) * (pageCount - 1).coerceAtLeast(0)).toInt()
             onProgress(page, pageCount)
+        }
+    }
+    LaunchedEffect(pdfList, pageCount, prefs.swipeMode, book.format, ready) {
+        if (prefs.swipeMode || book.format != BookFormat.PDF || !ready) return@LaunchedEffect
+        snapshotFlow { pdfList.firstVisibleItemIndex }.collect { index ->
+            onProgress(index.coerceIn(0, (pageCount - 1).coerceAtLeast(0)), pageCount)
         }
     }
     LaunchedEffect(book.id, ready, pageCount, prefs.swipeMode) {
@@ -291,11 +312,16 @@ fun ReaderScreen(
         }
     }
     LaunchedEffect(book.id, ready, prefs.swipeMode, book.format, scrollState.maxValue, pageCount) {
-        if (!ready || prefs.swipeMode) return@LaunchedEffect
+        if (!ready || prefs.swipeMode || book.format == BookFormat.PDF) return@LaunchedEffect
         if (scrollState.maxValue <= 0 || pageCount <= 0) return@LaunchedEffect
         val frac = if (pageCount <= 1) 0f else book.currentPage.toFloat() / (pageCount - 1).coerceAtLeast(1)
         val target = (frac * scrollState.maxValue).toInt().coerceIn(0, scrollState.maxValue)
         if (kotlin.math.abs(scrollState.value - target) > 8) scrollState.scrollTo(target)
+    }
+    LaunchedEffect(book.id, ready, prefs.swipeMode, book.format, pageCount) {
+        if (!ready || prefs.swipeMode || book.format != BookFormat.PDF || pageCount <= 0) return@LaunchedEffect
+        val target = book.currentPage.coerceIn(0, pageCount - 1)
+        if (pdfList.firstVisibleItemIndex != target) pdfList.scrollToItem(target)
     }
 
     val menuOpen = menu != ReaderMenu.None
@@ -316,6 +342,8 @@ fun ReaderScreen(
         scope.launch {
             if (prefs.swipeMode) {
                 pager.scrollToPage(target)
+            } else if (book.format == BookFormat.PDF) {
+                pdfList.scrollToItem(target)
             } else if (scrollState.maxValue > 0 && pageCount > 1) {
                 val dest = ((target.toFloat() / (pageCount - 1)) * scrollState.maxValue).toInt()
                 scrollState.scrollTo(dest.coerceIn(0, scrollState.maxValue))
@@ -381,20 +409,23 @@ fun ReaderScreen(
                         }
                     }
                 } else {
-                    Column(
-                        Modifier
-                            .fillMaxSize()
-                            .verticalScroll(scrollState, enabled = !menuOpen)
-                            .padding(horizontal = 8.dp, vertical = 0.dp)
-                            .padding(top = 88.dp, bottom = 96.dp)
+                    LazyColumn(
+                        state = pdfList,
+                        modifier = Modifier.fillMaxSize(),
+                        userScrollEnabled = !menuOpen,
+                        contentPadding = PaddingValues(start = 8.dp, end = 8.dp, top = 88.dp, bottom = 96.dp)
                     ) {
-                        repeat(pdfCount) { i ->
+                        items(
+                            count = pdfCount,
+                            key = { index -> index }
+                        ) { i ->
                             PdfPageImage(
                                 path = book.filePath,
                                 index = i,
                                 ink = ink,
                                 modifier = Modifier.fillMaxWidth().then(pageTap),
-                                fillViewport = false
+                                fillViewport = false,
+                                session = pdfSession
                             )
                             if (i < pdfCount - 1) Spacer(Modifier.height(8.dp))
                         }
@@ -516,6 +547,7 @@ fun ReaderScreen(
                 ColBtn(Icons.Filled.Favorite, "Bookmarks", ink, selected = menu == ReaderMenu.Marks) {
                     val page = when {
                         prefs.swipeMode -> pager.currentPage
+                        book.format == BookFormat.PDF -> pdfList.firstVisibleItemIndex
                         scrollState.maxValue <= 0 -> 0
                         else -> ((scrollState.value.toFloat() / scrollState.maxValue) * (pageCount - 1).coerceAtLeast(0)).toInt()
                     }
@@ -633,6 +665,7 @@ fun ReaderScreen(
                 Column(Modifier.padding(16.dp)) {
                     val at = when {
                         prefs.swipeMode -> pager.currentPage
+                        book.format == BookFormat.PDF -> pdfList.firstVisibleItemIndex
                         scrollState.maxValue <= 0 -> 0
                         else -> ((scrollState.value.toFloat() / scrollState.maxValue) * (pageCount - 1).coerceAtLeast(0)).toInt()
                     }
@@ -919,45 +952,135 @@ private fun PdfPageImage(
     index: Int,
     ink: Color,
     modifier: Modifier,
-    fillViewport: Boolean
+    fillViewport: Boolean,
+    session: PdfDocSession? = null
 ) {
     var bmp by remember(path, index) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(path, index) {
-        bmp = withContext(Dispatchers.IO) {
-            path?.let { File(it) }?.takeIf { it.exists() }?.let { renderPdf(it, index) }
+    var aspect by remember(path, index, session) {
+        mutableStateOf(session?.cachedAspect(index) ?: session?.typicalAspect ?: (1f / 1.294f))
+    }
+    LaunchedEffect(path, index, session, fillViewport) {
+        if (fillViewport || session == null) {
+            bmp = withContext(Dispatchers.IO) {
+                path?.let { File(it) }?.takeIf { it.exists() }?.let { renderPdf(it, index) }
+            }
+            return@LaunchedEffect
+        }
+        try {
+            val measured = withContext(Dispatchers.IO) { session.aspect(index) }
+            if (measured != null) aspect = measured
+            val image = withContext(Dispatchers.IO) { session.render(index) }
+            bmp = image
+            awaitCancellation()
+        } finally {
+            bmp = null
+            session.release(index)
         }
     }
     val image = bmp
-    if (image != null) {
-        val aspect = (image.width.toFloat() / image.height.toFloat()).coerceIn(0.4f, 2.2f)
+    if (image != null && !image.isRecycled) {
+        val drawn = (image.width.toFloat() / image.height.toFloat()).coerceIn(0.4f, 2.2f)
         Image(
             image.asImageBitmap(),
             contentDescription = "Page ${index + 1}",
-            modifier = if (fillViewport) modifier else modifier.aspectRatio(aspect),
+            modifier = if (fillViewport) modifier else modifier.aspectRatio(drawn),
             contentScale = if (fillViewport) ContentScale.Fit else ContentScale.FillWidth
         )
     } else {
         Box(
-            (if (fillViewport) modifier else modifier.aspectRatio(1f / 1.294f)),
+            (if (fillViewport) modifier else modifier.aspectRatio(aspect)),
             contentAlignment = Alignment.Center
         ) { Text("Page ${index + 1}", color = ink) }
     }
+}
+
+private class PdfDocSession(private val file: File) {
+    private val lock = Any()
+    private var pfd: ParcelFileDescriptor? = null
+    private var renderer: PdfRenderer? = null
+    private val aspects = HashMap<Int, Float>()
+    private val bitmaps = HashMap<Int, Bitmap>()
+    @Volatile var typicalAspect = 1f / 1.294f
+        private set
+
+    fun cachedAspect(index: Int): Float? = synchronized(lock) { aspects[index] }
+
+    fun aspect(index: Int): Float? = synchronized(lock) {
+        aspects[index] ?: run {
+            val r = openLocked() ?: return@run null
+            if (index !in 0 until r.pageCount) return@run null
+            val page = r.openPage(index)
+            val a = (page.width.toFloat() / page.height.toFloat()).coerceIn(0.4f, 2.2f)
+            page.close()
+            aspects[index] = a
+            typicalAspect = a
+            a
+        }
+    }
+
+    fun render(index: Int): Bitmap? = synchronized(lock) {
+        bitmaps[index]?.takeIf { !it.isRecycled }?.let { return it }
+        val r = openLocked() ?: return null
+        val painted = paintPdfPage(r, index) ?: return null
+        aspects[index] = painted.second
+        typicalAspect = painted.second
+        bitmaps[index] = painted.first
+        painted.first
+    }
+
+    fun release(index: Int) {
+        synchronized(lock) {
+            bitmaps.remove(index)?.let { if (!it.isRecycled) it.recycle() }
+        }
+    }
+
+    fun close() {
+        synchronized(lock) {
+            bitmaps.values.forEach { if (!it.isRecycled) it.recycle() }
+            bitmaps.clear()
+            runCatching { renderer?.close() }
+            renderer = null
+            runCatching { pfd?.close() }
+            pfd = null
+        }
+    }
+
+    private fun openLocked(): PdfRenderer? {
+        renderer?.let { return it }
+        return try {
+            val fd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+            pfd = fd
+            val r = PdfRenderer(fd)
+            renderer = r
+            r
+        } catch (_: Exception) {
+            runCatching { pfd?.close() }
+            pfd = null
+            renderer = null
+            null
+        }
+    }
+}
+
+private fun paintPdfPage(renderer: PdfRenderer, index: Int): Pair<Bitmap, Float>? {
+    if (index !in 0 until renderer.pageCount) return null
+    val page = renderer.openPage(index)
+    val w = 1080
+    val h = ((w.toFloat() * page.height) / page.width).toInt().coerceIn(200, 1800)
+    val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+    val aspect = (page.width.toFloat() / page.height.toFloat()).coerceIn(0.4f, 2.2f)
+    page.close()
+    return bmp to aspect
 }
 
 private fun renderPdf(file: File, index: Int): Bitmap? {
     return try {
         val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
         val renderer = PdfRenderer(pfd)
-        if (index !in 0 until renderer.pageCount) {
-            renderer.close(); pfd.close(); return null
-        }
-        val page = renderer.openPage(index)
-        val w = 1080
-        val h = ((w.toFloat() * page.height) / page.width).toInt().coerceIn(200, 1800)
-        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-        page.close(); renderer.close(); pfd.close()
-        bmp
+        val out = paintPdfPage(renderer, index)?.first
+        renderer.close(); pfd.close()
+        out
     } catch (_: Exception) {
         null
     }

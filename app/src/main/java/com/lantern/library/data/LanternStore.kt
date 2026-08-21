@@ -47,8 +47,13 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
 
     init {
         val themeName = prefs.getString("theme", "LIGHT") ?: "LIGHT"
+        val appTheme = if (themeName == "DARK") ReaderTheme.DARK else ReaderTheme.LIGHT
+        val readerThemeName = prefs.getString("readerTheme", null)
         readingPrefs = ReadingPrefs(
-            theme = if (themeName == "DARK") ReaderTheme.DARK else ReaderTheme.LIGHT,
+            theme = appTheme,
+            readerTheme = if (readerThemeName == "DARK") ReaderTheme.DARK
+                else if (readerThemeName == "LIGHT") ReaderTheme.LIGHT
+                else appTheme,
             fontId = prefs.getString("fontId", "times") ?: "times",
             fontSizeSp = prefs.getFloat("fontSize", 17f),
             brightness = prefs.getFloat("brightness", 0.85f),
@@ -93,9 +98,13 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         book.origin == BookOrigin.IMPORT || book.origin == BookOrigin.DOWNLOAD
 
     fun setPrefs(next: ReadingPrefs) {
-        val clean = if (next.theme == ReaderTheme.DARK) next else next.copy(theme = ReaderTheme.LIGHT)
+        val clean = next.copy(
+            theme = if (next.theme == ReaderTheme.DARK) ReaderTheme.DARK else ReaderTheme.LIGHT,
+            readerTheme = if (next.readerTheme == ReaderTheme.DARK) ReaderTheme.DARK else ReaderTheme.LIGHT
+        )
         readingPrefs = clean
-        prefs.edit().putString("theme", clean.theme.name).putString("fontId", clean.fontId)
+        prefs.edit().putString("theme", clean.theme.name).putString("readerTheme", clean.readerTheme.name)
+            .putString("fontId", clean.fontId)
             .putFloat("fontSize", clean.fontSizeSp).putFloat("brightness", clean.brightness)
             .putBoolean("swipe", clean.swipeMode).putBoolean("landscape", clean.landscape)
             .putBoolean("mobile", clean.useMobileData).apply()

@@ -46,7 +46,11 @@ data class LibraryBook(
     val pendingUpload: Boolean = false
 ) {
     val progress: Float
-        get() = if (pageCount <= 0) 0f else ((currentPage + 1).toFloat() / pageCount.toFloat()).coerceIn(0f, 1f)
+        get() = when {
+            pageCount <= 0 -> 0f
+            lastReadAt == 0L && currentPage == 0 -> 0f
+            else -> ((currentPage + 1).toFloat() / pageCount.toFloat()).coerceIn(0f, 1f)
+        }
 
     val shelf: Shelf
         get() = when {
@@ -98,6 +102,7 @@ data class Highlight(
 
 data class ReadingPrefs(
     val theme: ReaderTheme = ReaderTheme.LIGHT,
+    val readerTheme: ReaderTheme = ReaderTheme.LIGHT,
     val fontId: String = "times",
     val fontSizeSp: Float = 17f,
     val brightness: Float = 0.85f,

@@ -9,8 +9,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -38,6 +40,7 @@ import com.lantern.library.data.CoverCache
 import com.lantern.library.data.LibraryBook
 import com.lantern.library.data.ReaderTheme
 import com.lantern.library.ui.theme.Aqua
+import com.lantern.library.ui.theme.Coral
 import com.lantern.library.ui.theme.Garamond
 import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.Inter
@@ -69,6 +72,27 @@ fun BookCover(book: LibraryBook, modifier: Modifier = Modifier, dark: Boolean = 
 }
 
 @Composable
+fun ReadingProgressBar(progress: Float, modifier: Modifier = Modifier) {
+    val filled = progress.coerceIn(0f, 1f)
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(4.dp)
+            .clip(RoundedCornerShape(2.dp))
+            .background(Color(0x33FFFFFF))
+    ) {
+        if (filled > 0f) {
+            Box(
+                Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(filled)
+                    .background(Brush.horizontalGradient(listOf(Aqua, Lilac, Coral)))
+            )
+        }
+    }
+}
+
+@Composable
 fun CoverFace(title: String, localRes: Int?, pathOrUrl: String?, modifier: Modifier = Modifier, dark: Boolean = false) {
     val shape = RoundedCornerShape(10.dp)
     Box(modifier.shadow(8.dp, shape).clip(shape).background(if (dark) SlateHi else Color(0xFFD8C8E8))) {
@@ -78,9 +102,9 @@ fun CoverFace(title: String, localRes: Int?, pathOrUrl: String?, modifier: Modif
                 var bmp by remember(pathOrUrl) { mutableStateOf<Bitmap?>(null) }
                 LaunchedEffect(pathOrUrl) { bmp = CoverCache.load(pathOrUrl) }
                 if (bmp != null) Image(bmp!!.asImageBitmap(), title, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                else Text(title, Modifier.align(Alignment.Center).padding(8.dp), color = if (dark) NightText else Ink, fontFamily = Playfair, fontSize = 13.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center, maxLines = 4)
+                else Text("Lore", Modifier.align(Alignment.Center).padding(8.dp), color = if (dark) NightText else Ink, fontFamily = Playfair, fontSize = 16.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center, maxLines = 1)
             }
-            else -> Text(title, Modifier.align(Alignment.Center).padding(8.dp), color = if (dark) NightText else Ink, fontFamily = Playfair, fontSize = 13.sp, textAlign = TextAlign.Center, maxLines = 4)
+            else -> Text("Lore", Modifier.align(Alignment.Center).padding(8.dp), color = if (dark) NightText else Ink, fontFamily = Playfair, fontSize = 16.sp, textAlign = TextAlign.Center, maxLines = 1)
         }
     }
 }

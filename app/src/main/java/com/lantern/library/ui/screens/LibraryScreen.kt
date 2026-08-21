@@ -54,6 +54,7 @@ import com.lantern.library.ui.components.AuroraBackdrop
 import com.lantern.library.ui.components.BookCover
 import com.lantern.library.ui.components.CoverFace
 import com.lantern.library.ui.components.GlassCard
+import com.lantern.library.ui.components.ReadingProgressBar
 import com.lantern.library.ui.theme.Coral
 import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.InkSoft
@@ -201,6 +202,8 @@ fun LibraryScreen(
                             dark
                         )
                         Spacer(Modifier.height(6.dp))
+                        ReadingProgressBar(book.progress)
+                        Spacer(Modifier.height(4.dp))
                         Text(book.title, color = ink, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         Text(book.author, color = mute, fontSize = 11.sp, maxLines = 1)
                     }
@@ -325,15 +328,17 @@ private fun RecentlyReadShelf(
                 state = pager,
                 contentPadding = PaddingValues(horizontal = 72.dp),
                 pageSpacing = 12.dp,
-                modifier = Modifier.fillMaxWidth().height(150.dp)
+                modifier = Modifier.fillMaxWidth().height(168.dp)
             ) { page ->
                 val book = books[page]
-                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                     BookCover(
                         book,
                         Modifier.width(96.dp).aspectRatio(0.68f).combinedClickable(onClick = { onOpen(book) }),
                         dark
                     )
+                    Spacer(Modifier.height(6.dp))
+                    ReadingProgressBar(book.progress, Modifier.width(96.dp))
                 }
             }
             val current = books.getOrNull(pager.currentPage)

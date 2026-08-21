@@ -21,6 +21,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -63,6 +64,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -135,7 +137,7 @@ fun ReaderScreen(
 ) {
     val activity = LocalContext.current as Activity
     val family = Lora
-    val dark = prefs.theme == ReaderTheme.DARK
+    val dark = prefs.readerTheme == ReaderTheme.DARK
     val ink = if (dark) NightText else Ink
     var chrome by remember { mutableStateOf(true) }
     var menu by remember { mutableStateOf(ReaderMenu.None) }
@@ -249,9 +251,19 @@ fun ReaderScreen(
         initialPage = book.currentPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0)),
         pageCount = { pageCount }
     )
+    val scrollState = rememberScrollState()
     val scope = rememberCoroutineScope()
-    LaunchedEffect(pager, pageCount) {
+    LaunchedEffect(pager, pageCount, prefs.swipeMode, book.format) {
+        if (!prefs.swipeMode && book.format != BookFormat.PDF) return@LaunchedEffect
         snapshotFlow { pager.currentPage }.collect { onProgress(it, pageCount) }
+    }
+    LaunchedEffect(scrollState, pageCount, prefs.swipeMode, book.format, ready) {
+        if (prefs.swipeMode || book.format == BookFormat.PDF || !ready) return@LaunchedEffect
+        snapshotFlow { scrollState.value to scrollState.maxValue }.collect { (value, max) ->
+            if (max <= 0 || pageCount <= 0) return@collect
+            val page = ((value.toFloat() / max.toFloat()) * (pageCount - 1).coerceAtLeast(0)).toInt()
+            onProgress(page, pageCount)
+        }
     }
     LaunchedEffect(book.id, ready, pageCount, prefs.swipeMode) {
         if (!ready || pageCount <= 0) return@LaunchedEffect
@@ -261,8 +273,17 @@ fun ReaderScreen(
         } else {
             pager.currentPage.coerceIn(0, max)
         }
-        if (pager.currentPage != target) pager.scrollToPage(target)
+        if (prefs.swipeMode || book.format == BookFormat.PDF) {
+            if (pager.currentPage != target) pager.scrollToPage(target)
+        }
         restoredBookId = book.id
+    }
+    LaunchedEffect(book.id, ready, prefs.swipeMode, book.format, scrollState.maxValue, pageCount) {
+        if (!ready || prefs.swipeMode || book.format == BookFormat.PDF) return@LaunchedEffect
+        if (scrollState.maxValue <= 0 || pageCount <= 0) return@LaunchedEffect
+        val frac = if (pageCount <= 1) 0f else book.currentPage.toFloat() / (pageCount - 1).coerceAtLeast(1)
+        val target = (frac * scrollState.maxValue).toInt().coerceIn(0, scrollState.maxValue)
+        if (kotlin.math.abs(scrollState.value - target) > 8) scrollState.scrollTo(target)
     }
 
     val menuOpen = menu != ReaderMenu.None
@@ -325,15 +346,19 @@ fun ReaderScreen(
                 modifier = Modifier.fillMaxSize(),
                 userScrollEnabled = !menuOpen
             ) { i ->
-                PageLeaf(
-                    pages.getOrNull(i), family, prefs.fontSizeSp, ink,
-                    Modifier.fillMaxSize().then(pageTap)
-                )
+                key(prefs.fontSizeSp, i) {
+                    PageLeaf(
+                        pages.getOrNull(i), family, prefs.fontSizeSp, ink,
+                        Modifier.fillMaxSize().then(pageTap)
+                    )
+                }
             }
             else -> Column(
                 Modifier.fillMaxSize()
                     .verticalScroll(rememberScrollState(), enabled = !menuOpen)
-                    .then(pageTap)
+                    .pointerInput(menuOpen) {
+                        detectTapGestures(onTap = { if (!menuOpen) toggleChrome() })
+                    }
                     .padding(26.dp, 88.dp)
             ) {
                 Text(
@@ -394,7 +419,7 @@ fun ReaderScreen(
                 ColBtn(Icons.Filled.List, "Navigate", ink) { toggleMenu(ReaderMenu.Nav) }
                 Column(
                     Modifier.clickable {
-                        onPrefs(prefs.copy(theme = if (dark) ReaderTheme.LIGHT else ReaderTheme.DARK))
+                        onPrefs(prefs.copy(readerTheme = if (dark) ReaderTheme.LIGHT else ReaderTheme.DARK))
                     }.padding(8.dp, 4.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
@@ -459,19 +484,27 @@ fun ReaderScreen(
                         { onPrefs(prefs.copy(brightness = it)) },
                         colors = SliderDefaults.colors(thumbColor = gold, activeTrackColor = gold)
                     )
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf(
-                            "A+" to (prefs.fontSizeSp + 2f).coerceAtMost(28f),
-                            "A-" to (prefs.fontSizeSp - 2f).coerceAtLeast(13f),
-                            "A" to 17f,
-                            "a" to 15f
-                        ).forEach { (l, s) ->
-                            Text(
-                                l,
-                                Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(Color(0x33FFFFFF))
-                                    .clickable { onPrefs(prefs.copy(fontSizeSp = s)) }.padding(10.dp),
-                                color = Color.White, textAlign = TextAlign.Center
-                            )
+                    if (book.format == BookFormat.PDF) {
+                        Text(
+                            "Font size is for EPUB text. PDFs stay as printed.",
+                            color = Color.White.copy(0.7f), fontSize = 12.sp,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                    } else {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf(
+                                "A+" to (prefs.fontSizeSp + 2f).coerceAtMost(28f),
+                                "A-" to (prefs.fontSizeSp - 2f).coerceAtLeast(13f),
+                                "A" to 17f,
+                                "a" to 15f
+                            ).forEach { (l, s) ->
+                                Text(
+                                    l,
+                                    Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(Color(0x33FFFFFF))
+                                        .clickable { onPrefs(prefs.copy(fontSizeSp = s)) }.padding(10.dp),
+                                    color = Color.White, textAlign = TextAlign.Center
+                                )
+                            }
                         }
                     }
                     Text("Reading Mode", color = Color.White, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))

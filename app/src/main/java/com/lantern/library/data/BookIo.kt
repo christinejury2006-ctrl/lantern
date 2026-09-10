@@ -175,9 +175,12 @@ object BookIo {
                     val entry = zipEntry(z, path) ?: zipEntry(z, item.href) ?: return@forEach
                     val raw = runCatching { z.getInputStream(entry).bufferedReader().use { it.readText() } }.getOrNull() ?: return@forEach
                     val body = stripHtml(raw)
-                    if (body.isBlank()) return@forEach
                     val href = normalizeEpubPath(entry.name)
-                    chapters += Chapter(titleFromHtml(raw) ?: item.href.substringAfterLast('/'), body, href)
+                    chapters += Chapter(
+                        titleFromHtml(raw) ?: item.href.substringAfterLast('/'),
+                        body.ifBlank { " " },
+                        href
+                    )
                 }
             }
             if (chapters.isEmpty()) {
@@ -191,10 +194,9 @@ object BookIo {
                     .forEach { entry ->
                         val raw = z.getInputStream(entry).bufferedReader().use { it.readText() }
                         val body = stripHtml(raw)
-                        if (body.isBlank()) return@forEach
                         chapters += Chapter(
                             titleFromHtml(raw) ?: entry.name.substringAfterLast('/'),
-                            body,
+                            body.ifBlank { " " },
                             normalizeEpubPath(entry.name)
                         )
                     }
@@ -224,14 +226,29 @@ object BookIo {
         s = s.replace(Regex("(?is)<script.*?>.*?</script>"), " ")
         s = s.replace(Regex("(?is)<style.*?>.*?</style>"), " ")
         s = s.replace(Regex("(?i)<br\\s*/?>"), "\n")
-        s = s.replace(Regex("(?i)</p>"), "\n\n")
-        s = s.replace(Regex("(?i)</div>"), "\n")
-        s = s.replace(Regex("(?i)</h[1-6]>"), "\n\n")
+        s = s.replace(Regex("(?i)</(p|h[1-6]|li|blockquote|tr|section|article|header|footer)>"), "\n\n")
+        s = s.replace(Regex("(?i)</(div|td|th|dt|dd)>"), "\n")
         s = s.replace(Regex("<[^>]+>"), " ")
-        s = s.replace("&nbsp;", " ").replace("&amp;", "&")
-            .replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"")
-            .replace(Regex("&#\\d+;"), " ")
-        return s.replace(Regex("[ \\t]+"), " ").replace(Regex("\\n{3,}"), "\n\n").trim()
+        s = decodeEntities(s)
+        return s.replace('\u00ad', ' ').replace(Regex("[ \\t]+"), " ").replace(Regex("\\n{3,}"), "\n\n").trim()
+    }
+
+    private fun decodeEntities(raw: String): String {
+        var s = raw
+            .replace("&nbsp;", " ").replace("&amp;", "&")
+            .replace("&lt;", "<").replace("&gt;", ">")
+            .replace("&quot;", "\"").replace("&apos;", "'")
+            .replace("&rsquo;", "'").replace("&lsquo;", "'")
+            .replace("&rdquo;", "\"").replace("&ldquo;", "\"")
+            .replace("&mdash;", "—").replace("&ndash;", "–")
+            .replace("&hellip;", "...").replace("&shy;", "")
+        s = Regex("&#(\\d+);").replace(s) { m ->
+            m.groupValues[1].toIntOrNull()?.toChar()?.toString() ?: " "
+        }
+        s = Regex("&#x([0-9a-fA-F]+);").replace(s) { m ->
+            m.groupValues[1].toIntOrNull(16)?.toChar()?.toString() ?: " "
+        }
+        return s
     }
 
     private fun titleFromHtml(html: String): String? {
@@ -337,14 +354,17 @@ object BookIo {
             val base = path.substringBeforeLast('/', "")
             xml?.let { parseNavXhtml(it, base) }.orEmpty()
         } else emptyList()
-        val ncxEntries = if (navEntries.isEmpty() && ncxItem != null) {
+        val ncxEntries = if (ncxItem != null) {
             val path = resolveEpubPath(opfDir, ncxItem.href)
             val entry = zipEntry(zip, path) ?: zipEntry(zip, ncxItem.href)
             val xml = entry?.let { runCatching { zip.getInputStream(it).bufferedReader().use { r -> r.readText() } }.getOrNull() }
             val base = path.substringBeforeLast('/', "")
             xml?.let { parseNcx(it, base) }.orEmpty()
         } else emptyList()
-        val raw = navEntries.ifEmpty { ncxEntries }
+        val byHref = linkedMapOf<String, TocEntry>()
+        navEntries.forEach { byHref[it.href] = it }
+        ncxEntries.forEach { if (it.href !in byHref) byHref[it.href] = it }
+        val raw = byHref.values.toList()
         return raw.map { entry ->
             val chapterIndex = indexForTocHref(entry.href, chapters)
             entry.copy(chapterIndex = chapterIndex)
@@ -538,8 +558,8 @@ object BookIo {
         return props.any { it.equals("nav", true) } ||
             item.mediaType.equals("application/x-dtbncx+xml", true) ||
             href.endsWith(".ncx") ||
-            href.contains("/nav.") || href.endsWith("nav.xhtml") || href.endsWith("nav.html") ||
-            href.contains("toc.xhtml") || href.contains("toc.html") || href.contains("toc.ncx")
+            href.endsWith("nav.xhtml") || href.endsWith("nav.html") ||
+            href.substringAfterLast('/') == "toc.xhtml" || href.substringAfterLast('/') == "toc.html"
     }
 
     private fun isHtmlItem(item: OpfItem): Boolean {

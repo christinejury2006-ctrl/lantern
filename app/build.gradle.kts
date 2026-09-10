@@ -61,12 +61,14 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.6.2")
     implementation("androidx.navigation:navigation-compose:2.7.6")
     implementation("androidx.core:core-ktx:1.12.0")
+    implementation("androidx.core:core-splashscreen:1.0.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.android.gms:play-services-auth:20.7.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
 
+/** Dev: GOOGLE_BOOKS_API_KEY or google.books.api.key in local.properties (gitignored), or env/Gradle property. CI: GitHub secret GOOGLE_BOOKS_API_KEY. Never commit the key. */
 fun resolveGoogleBooksApiKey(): String {
     val fromEnv = System.getenv("GOOGLE_BOOKS_API_KEY")?.trim().orEmpty()
     if (fromEnv.isNotEmpty()) return fromEnv

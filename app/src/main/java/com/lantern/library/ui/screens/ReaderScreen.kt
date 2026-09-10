@@ -277,6 +277,10 @@ fun ReaderScreen(
     val scope = rememberCoroutineScope()
     val epubUsesPager = prefs.swipeMode && book.format != BookFormat.PDF
     val pdfUsesPager = book.format == BookFormat.PDF && prefs.swipeMode
+    var epubRestored by remember(book.id) { mutableStateOf(book.format == BookFormat.PDF) }
+    LaunchedEffect(book.id, prefs.swipeMode) {
+        if (book.format != BookFormat.PDF) epubRestored = false
+    }
     val pdfSession = remember(book.id, book.filePath, pdfUsesPager) {
         if (book.format == BookFormat.PDF && !pdfUsesPager)
             book.filePath?.let { PdfDocSession(File(it)) }
@@ -285,12 +289,13 @@ fun ReaderScreen(
     DisposableEffect(pdfSession) {
         onDispose { pdfSession?.close() }
     }
-    LaunchedEffect(pager, pageCount, prefs.swipeMode, book.format) {
+    LaunchedEffect(pager, pageCount, prefs.swipeMode, book.format, ready, epubRestored) {
         if (!prefs.swipeMode) return@LaunchedEffect
+        if (book.format != BookFormat.PDF && (!ready || !epubRestored)) return@LaunchedEffect
         snapshotFlow { pager.currentPage }.collect { onProgress(it, pageCount) }
     }
-    LaunchedEffect(scrollState, pageCount, prefs.swipeMode, book.format, ready) {
-        if (prefs.swipeMode || book.format == BookFormat.PDF || !ready) return@LaunchedEffect
+    LaunchedEffect(scrollState, pageCount, prefs.swipeMode, book.format, ready, epubRestored) {
+        if (prefs.swipeMode || book.format == BookFormat.PDF || !ready || !epubRestored) return@LaunchedEffect
         snapshotFlow { scrollState.value to scrollState.maxValue }.collect { (value, max) ->
             if (max <= 0 || pageCount <= 0) return@collect
             val page = ((value.toFloat() / max.toFloat()) * (pageCount - 1).coerceAtLeast(0)).toInt()
@@ -303,13 +308,13 @@ fun ReaderScreen(
             onProgress(index.coerceIn(0, (pageCount - 1).coerceAtLeast(0)), pageCount)
         }
     }
-    LaunchedEffect(book.id, ready, pageCount, prefs.swipeMode) {
+    LaunchedEffect(book.id, ready, pageCount, prefs.swipeMode, book.format) {
+        if (book.format == BookFormat.PDF) return@LaunchedEffect
+        if (!prefs.swipeMode) return@LaunchedEffect
         if (!ready || pageCount <= 0) return@LaunchedEffect
-        val max = pageCount - 1
-        val target = book.currentPage.coerceIn(0, max)
-        if (prefs.swipeMode) {
-            if (pager.currentPage != target) pager.scrollToPage(target)
-        }
+        val target = book.currentPage.coerceIn(0, pageCount - 1)
+        if (pager.currentPage != target) pager.scrollToPage(target)
+        epubRestored = true
     }
     LaunchedEffect(book.id, ready, prefs.swipeMode, book.format, scrollState.maxValue, pageCount) {
         if (!ready || prefs.swipeMode || book.format == BookFormat.PDF) return@LaunchedEffect
@@ -317,6 +322,7 @@ fun ReaderScreen(
         val frac = if (pageCount <= 1) 0f else book.currentPage.toFloat() / (pageCount - 1).coerceAtLeast(1)
         val target = (frac * scrollState.maxValue).toInt().coerceIn(0, scrollState.maxValue)
         if (kotlin.math.abs(scrollState.value - target) > 8) scrollState.scrollTo(target)
+        epubRestored = true
     }
     LaunchedEffect(book.id, ready, prefs.swipeMode, book.format, pageCount) {
         if (!ready || prefs.swipeMode || book.format != BookFormat.PDF || pageCount <= 0) return@LaunchedEffect
@@ -983,7 +989,7 @@ private fun PdfPageImage(
         Image(
             image.asImageBitmap(),
             contentDescription = "Page ${index + 1}",
-            modifier = if (fillViewport) modifier else modifier.aspectRatio(drawn),
+            modifier = if (fillViewport) modifier else modifewport) modifier else modifier.aspectRatio(drawn),
             contentScale = if (fillViewport) ContentScale.Fit else ContentScale.FillWidth
         )
     } else {

@@ -28,8 +28,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -81,6 +83,7 @@ fun LibraryScreen(
     val ink = if (dark) NightText else Ink
     val mute = if (dark) Color(0xFFD0D6DE) else InkSoft
     var filter by remember { mutableStateOf(LibFilter.ALL) }
+    var pendingRemove by remember { mutableStateOf<LibraryBook?>(null) }
     val shown = when (filter) {
         LibFilter.ALL -> books
         LibFilter.CURRENT -> books.filter { it.shelf == Shelf.CURRENT }
@@ -197,7 +200,7 @@ fun LibraryScreen(
                             book,
                             Modifier.fillMaxWidth().aspectRatio(0.68f).combinedClickable(
                                 onClick = { onOpen(book) },
-                                onLongClick = { onRemove(book.id) }
+                                onLongClick = { pendingRemove = book }
                             ),
                             dark
                         )
@@ -209,6 +212,23 @@ fun LibraryScreen(
                     }
                 }
             }
+        }
+        val doomed = pendingRemove
+        if (doomed != null) {
+            AlertDialog(
+                onDismissRequest = { pendingRemove = null },
+                title = { Text("Remove book") },
+                text = { Text("Remove “${doomed.title}” from your library?") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        pendingRemove = null
+                        onRemove(doomed.id)
+                    }) { Text("Remove") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingRemove = null }) { Text("Cancel") }
+                }
+            )
         }
     }
 }

@@ -24,6 +24,19 @@ object Recommendations {
     private const val CACHE_FILE = "recommendations.json"
     private const val LIMIT = 24
     private val cacheLock = Any()
+    private val SUBJECT_STOP = setOf(
+        "fiction", "general", "literature", "imported", "library", "books",
+        "unclassified", "miscellaneous"
+    )
+    private val GENERIC_QUERIES = listOf(
+        Query("subject:Fantasy", "relevance", 0),
+        Query("subject:Romance", "relevance", 0),
+        Query("subject:Adventure", "relevance", 0),
+        Query("romantasy", "relevance", 0),
+        Query("subject:Fantasy", "newest", 0),
+        Query("subject:Adventure", "newest", 0),
+        Query("subject:Fantasy", "relevance", 20)
+    )
 
     fun localDay(): String {
         val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
@@ -115,15 +128,8 @@ object Recommendations {
         wantToRead: List<DiscoveryBook>,
         day: String
     ): List<DiscoveryBook> {
-        val specs = listOf(
-            Query("subject:Fantasy", "relevance", 0),
-            Query("subject:Romance", "relevance", 0),
-            Query("subject:Adventure", "relevance", 0),
-            Query("romantasy", "relevance", 0),
-            Query("subject:Fantasy", "newest", 0),
-            Query("subject:Adventure", "newest", 0),
-            Query("subject:Fantasy", "relevance", 20)
-        )
+        val profile = buildProfile(library, wantToRead)
+        val specs = queriesFromProfile(profile)
         val raw = ArrayList<DiscoveryBook>()
         specs.chunked(3).forEachIndexed { wave, chunk ->
             if (wave > 0) delay(280)
@@ -145,8 +151,132 @@ object Recommendations {
             if (wantToRead.any { sameWork(it, book) }) return@forEach
             deduped[book.volumeId] = book
         }
-        val rng = Random(day.hashCode())
-        return pickDiverse(deduped.values.toList(), rng)
+        return rankByTaste(deduped.values.toList(), profile)
+    }
+
+    private data class TasteAuthor(val name: String, val weight: Int, val recency: Long)
+    private data class TasteSubject(val token: String, val weight: Int)
+    private data class TasteProfile(val authors: List<TasteAuthor>, val subjects: List<TasteSubject>) {
+        val empty: Boolean get() = authors.isEmpty() && subjects.isEmpty()
+    }
+
+    private fun buildProfile(library: List<LibraryBook>, wantToRead: List<DiscoveryBook>): TasteProfile {
+        val authors = HashMap<String, TasteAuthor>()
+        val subjects = HashMap<String, Int>()
+        fun addAuthor(raw: String, weight: Int, recency: Long) {
+            val name = raw.trim()
+            if (!usableAuthor(name)) return
+            val key = normalize(name)
+            if (key.length < 3) return
+            val prev = authors[key]
+            if (prev == null) {
+                authors[key] = TasteAuthor(name, weight, recency)
+            } else {
+                authors[key] = TasteAuthor(prev.name, prev.weight + weight, maxOf(prev.recency, recency))
+            }
+        }
+        fun addSubject(raw: String, weight: Int) {
+            subjectTokens(raw).forEach { token ->
+                subjects[token] = (subjects[token] ?: 0) + weight
+            }
+        }
+        library.forEach { book ->
+            val weight = when (book.shelf) {
+                Shelf.FINISHED -> 3
+                Shelf.CURRENT -> 2
+                else -> 1
+            }
+            addAuthor(book.author, weight, book.lastReadAt)
+            addSubject(book.category, weight)
+        }
+        wantToRead.forEach { book ->
+            val recency = if (book.savedAt > 0L) book.savedAt else 0L
+            book.authors.forEach { addAuthor(it, 2, recency) }
+            book.categories.forEach { addSubject(it, 2) }
+        }
+        val authorList = authors.values
+            .sortedWith(compareByDescending<TasteAuthor> { it.weight }.thenByDescending { it.recency })
+        val subjectList = subjects.entries
+            .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
+            .map { TasteSubject(it.key, it.value) }
+        return TasteProfile(authorList, subjectList)
+    }
+
+    private fun usableAuthor(name: String): Boolean {
+        val n = normalize(name)
+        return n.isNotEmpty() && n != "imported" && n != "unknown" && n != "unknown author" && n != "anonymous"
+    }
+
+    private fun subjectTokens(raw: String): List<String> {
+        if (raw.isBlank()) return emptyList()
+        return raw.split(Regex("[,/&;|]+|(?:\\s+--+\\s+)"))
+            .map { normalize(it) }
+            .flatMap { part -> part.split(" ").filter { it.isNotEmpty() }.let { tokens ->
+                val kept = tokens.filter { it !in SUBJECT_STOP && it.length >= 4 }
+                if (kept.isEmpty()) emptyList() else listOf(kept.joinToString(" "))
+            } }
+            .distinct()
+    }
+
+    private fun queriesFromProfile(profile: TasteProfile): List<Query> {
+        if (profile.empty) return GENERIC_QUERIES
+        val out = ArrayList<Query>(7)
+        val seen = HashSet<String>()
+        fun add(q: String, orderBy: String, start: Int = 0) {
+            if (out.size >= 7) return
+            val id = "$q|$orderBy|$start"
+            if (!seen.add(id)) return
+            out += Query(q, orderBy, start)
+        }
+        profile.authors.take(3).forEach { author ->
+            val safe = author.name.replace("\"", "").trim()
+            if (safe.length >= 3) add("inauthor:\"$safe\"", "relevance")
+        }
+        profile.subjects.take(3).forEach { subject ->
+            val token = subject.token
+            val q = if (token.contains(" ")) "subject:\"$token\"" else "subject:$token"
+            add(q, "relevance")
+        }
+        GENERIC_QUERIES.forEach { add(it.q, it.orderBy, it.startIndex) }
+        return out
+    }
+
+    private fun rankByTaste(books: List<DiscoveryBook>, profile: TasteProfile): List<DiscoveryBook> {
+        if (books.isEmpty()) return emptyList()
+        val yearNow = Calendar.getInstance().get(Calendar.YEAR)
+        val ranked = books.sortedWith(
+            compareByDescending<DiscoveryBook> { tasteScore(it, profile) }
+                .thenByDescending { quality(it, yearNow) }
+        )
+        val usedIds = HashSet<String>()
+        val authorCount = HashMap<String, Int>()
+        val picked = ArrayList<DiscoveryBook>(LIMIT)
+        ranked.forEach { book ->
+            if (picked.size >= LIMIT) return@forEach
+            if (book.volumeId in usedIds) return@forEach
+            if (picked.any { sameWork(it, book) }) return@forEach
+            val key = authorKey(book)
+            if (key.isNotEmpty() && (authorCount[key] ?: 0) >= 2) return@forEach
+            picked += book
+            usedIds += book.volumeId
+            if (key.isNotEmpty()) authorCount[key] = (authorCount[key] ?: 0) + 1
+        }
+        return picked
+    }
+
+    private fun tasteScore(book: DiscoveryBook, profile: TasteProfile): Double {
+        if (profile.empty) return 0.0
+        var score = 0.0
+        val authorHit = profile.authors.filter { authorsCompatible(book.authors, listOf(it.name)) }
+        score += authorHit.maxOfOrNull { it.weight.toDouble() } ?: 0.0
+        val bookTokens = book.categories.flatMap { subjectTokens(it) }.toSet()
+        profile.subjects.forEach { sub ->
+            val hit = sub.token in bookTokens || bookTokens.any { token ->
+                token == sub.token || token.contains(sub.token) || sub.token.contains(token)
+            }
+            if (hit) score += sub.weight * 0.5
+        }
+        return score
     }
 
     private fun pickDiverse(books: List<DiscoveryBook>, rng: Random): List<DiscoveryBook> {

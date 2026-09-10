@@ -3,6 +3,8 @@ package com.lantern.library.data
 import com.lantern.library.R
 
 object BundledBooks {
+    val seedIds: Set<String> = setOf("eldoria", "aurora", "ember")
+
     fun seed(): List<LibraryBook> = listOf(
         LibraryBook(
             id = "eldoria",

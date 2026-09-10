@@ -562,22 +562,51 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
 
     private fun loadBooksUnlocked() {
         if (!booksFile.exists()) return
+        var originDirty = false
         runCatching {
             val arr = JSONArray(booksFile.readText())
+            val booksDir = BookIo.booksDir(getApplication())
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
-                val origin = runCatching { BookOrigin.valueOf(o.optString("origin", "BUNDLED")) }.getOrDefault(BookOrigin.BUNDLED)
+                val id = o.getString("id")
+                val storedOrigin = runCatching {
+                    BookOrigin.valueOf(o.optString("origin", "BUNDLED"))
+                }.getOrDefault(BookOrigin.BUNDLED)
+                val filePath = o.optString("filePath").ifBlank { null }
+                val origin = migrateLoadedOrigin(id, storedOrigin, filePath, booksDir)
+                if (origin != storedOrigin) originDirty = true
                 if (origin == BookOrigin.BUNDLED) continue
                 books += LibraryBook(
-                    o.getString("id"), o.getString("title"), o.optString("author"), null, o.optString("remoteCover").ifBlank { null },
+                    id, o.getString("title"), o.optString("author"), null, o.optString("remoteCover").ifBlank { null },
                     runCatching { BookFormat.valueOf(o.optString("format", "TEXT")) }.getOrDefault(BookFormat.TEXT), origin,
-                    o.optString("filePath").ifBlank { null }, o.optString("remoteEpub").ifBlank { null }, null,
+                    filePath, o.optString("remoteEpub").ifBlank { null }, null,
                     o.optInt("pageCount", 1), o.optInt("currentPage", 0), o.optBoolean("finished"), o.optLong("addedAt", System.currentTimeMillis()),
                     o.optLong("lastReadAt"), o.optString("category", "Library"), o.optString("synopsis"), emptyList(),
                     o.optString("driveFileId").ifBlank { null }, o.optBoolean("pendingUpload", false)
                 )
             }
         }
+        if (originDirty) persistBooksUnlocked()
+    }
+
+    /** Legacy BUNDLED/missing origin with a real file under books/ becomes IMPORT. Seed ids stay BUNDLED. Never deletes files. */
+    private fun migrateLoadedOrigin(
+        id: String,
+        origin: BookOrigin,
+        filePath: String?,
+        booksDir: File
+    ): BookOrigin {
+        if (id in BundledBooks.seedIds) return BookOrigin.BUNDLED
+        if (origin != BookOrigin.BUNDLED) return origin
+        val path = filePath ?: return origin
+        val file = File(path)
+        if (!file.exists() || file.length() <= 0L) return origin
+        val underBooks = runCatching {
+            val dir = booksDir.canonicalFile
+            val target = file.canonicalFile
+            target.path == dir.path || target.path.startsWith(dir.path + File.separator)
+        }.getOrDefault(false)
+        return if (underBooks) BookOrigin.IMPORT else origin
     }
 
     private fun persistBooksUnlocked() {

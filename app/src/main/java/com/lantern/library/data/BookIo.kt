@@ -215,7 +215,7 @@ object BookIo {
         }
     }
 
-    fun readPdfOutline(file: File): List<TocEntry> = PdfOutline.read(file)
+    fun readPdfOutline(context: Context, file: File): List<TocEntry> = PdfOutline.read(context, file)
 
     private fun estimateEpubPages(file: File): Int {
         val chapters = readEpubChapters(file)

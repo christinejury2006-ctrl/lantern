@@ -241,7 +241,7 @@ fun ReaderScreen(
                 } else when (book.format) {
                     BookFormat.PDF -> {
                         val count = BookIo.pdfPageCount(file).coerceAtLeast(1)
-                        Triple(emptyList<Chapter>(), BookIo.readPdfOutline(file), null to count)
+                        Triple(emptyList<Chapter>(), BookIo.readPdfOutline(activity.applicationContext, file), null to count)
                     }
                     BookFormat.EPUB -> {
                         val doc = BookIo.readEpubDocument(file)

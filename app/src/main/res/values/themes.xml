@@ -11,9 +11,9 @@
     </style>
 
     <style name="Theme.Lantern.Splash" parent="Theme.SplashScreen">
-        <item name="windowSplashScreenBackground">@color/lore_lilac</item>
+        <!-- System splash API is a solid color; wash sits in the Library aurora (lilac→sky). -->
+        <item name="windowSplashScreenBackground">@color/lore_aurora_wash</item>
         <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash</item>
-        <item name="windowSplashScreenIconBackgroundColor">@color/lore_lilac</item>
         <item name="postSplashScreenTheme">@style/Theme.Lantern</item>
         <item name="android:windowBackground">@drawable/lore_aurora</item>
         <item name="android:statusBarColor">@android:color/transparent</item>

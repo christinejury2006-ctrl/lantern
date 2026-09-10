@@ -40,7 +40,10 @@ android {
             "-opt-in=androidx.compose.foundation.ExperimentalFoundationApi"
         )
     }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
     composeOptions { kotlinCompilerExtensionVersion = "1.4.8" }
     packagingOptions {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"

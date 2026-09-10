@@ -239,11 +239,10 @@ fun ReaderScreen(
                 if (file == null || !file.exists()) {
                     Triple(emptyList<Chapter>(), emptyList<TocEntry>(), "File is missing. Import it again." to 1)
                 } else when (book.format) {
-                    BookFormat.PDF -> Triple(
-                        emptyList<Chapter>(),
-                        emptyList<TocEntry>(),
-                        null to BookIo.pdfPageCount(file).coerceAtLeast(1)
-                    )
+                    BookFormat.PDF -> {
+                        val count = BookIo.pdfPageCount(file).coerceAtLeast(1)
+                        Triple(emptyList<Chapter>(), BookIo.readPdfOutline(file), null to count)
+                    }
                     BookFormat.EPUB -> {
                         val doc = BookIo.readEpubDocument(file)
                         if (doc.chapters.isEmpty()) Triple(emptyList(), emptyList(), "This file has no readable text." to 1)
@@ -359,8 +358,13 @@ fun ReaderScreen(
     }
     fun goToChapter(index: Int) {
         if (index < 0) return
+        if (book.format == BookFormat.PDF) {
+            go(index)
+            closeMenus()
+            return
+        }
         val page = pages.indexOfFirst { it.chapterIndex == index }
-        if (book.format == BookFormat.PDF || prefs.swipeMode) {
+        if (prefs.swipeMode) {
             if (page < 0) return
             go(page)
             closeMenus()

@@ -12,17 +12,16 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.text.SimpleDateFormat
 import java.util.Calendar
-import java.util.Date
 import java.util.Locale
-import java.util.TimeZone
 import kotlin.math.ln
 import kotlin.random.Random
 
 object Recommendations {
     private const val CACHE_FILE = "recommendations.json"
-    private const val LIMIT = 24
+    private const val LIMIT = 12
+    /** For You set lifetime. Change this to retune refresh cadence. */
+    const val REFRESH_INTERVAL_MS = 24L * 60L * 60L * 1000L
     private val cacheLock = Any()
     private val SUBJECT_STOP = setOf(
         "fiction", "general", "literature", "imported", "library", "books",
@@ -38,12 +37,6 @@ object Recommendations {
         Query("subject:Fantasy", "relevance", 20)
     )
 
-    fun localDay(): String {
-        val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-        fmt.timeZone = TimeZone.getDefault()
-        return fmt.format(Date())
-    }
-
     fun cached(context: Context): List<DiscoveryBook>? =
         synchronized(cacheLock) { readUnlocked(context)?.books }
 
@@ -52,7 +45,7 @@ object Recommendations {
             val cache = readUnlocked(context) ?: return
             val kept = cache.books.filterNot(drop)
             if (kept.size == cache.books.size) return
-            writeUnlocked(context, cache.day, kept)
+            writeUnlocked(context, cache.lastRefreshAt, kept)
         }
     }
 
@@ -61,38 +54,43 @@ object Recommendations {
         library: () -> List<LibraryBook>,
         wantToRead: () -> List<DiscoveryBook>
     ): List<DiscoveryBook> {
-        val today = localDay()
-        val todayBooks = synchronized(cacheLock) {
-            val cache = readUnlocked(context)
-            if (cache != null && cache.day == today) cache.books else null
-        }
-        if (todayBooks != null) {
-            return filterExcluded(todayBooks, library(), wantToRead())
+        val cached = synchronized(cacheLock) { readUnlocked(context) }
+        if (cached != null && !isExpired(cached.lastRefreshAt)) {
+            return filterExcluded(cached.books, library(), wantToRead())
         }
         if (!GoogleBooks.isConfigured() || !isOnline(context)) {
             val previous = synchronized(cacheLock) { readUnlocked(context)?.books.orEmpty() }
             return filterExcluded(previous, library(), wantToRead())
         }
+        val avoidIds = cached?.books?.map { it.volumeId }?.toSet().orEmpty()
         val built = withContext(Dispatchers.IO) {
-            runCatching { buildPool(library(), wantToRead(), today) }.getOrNull()
+            runCatching { buildPool(library(), wantToRead(), avoidIds) }.getOrNull()
         }
         return synchronized(cacheLock) {
             val existing = readUnlocked(context)
             val lib = library()
             val want = wantToRead()
-            if (existing != null && existing.day == today) {
+            if (existing != null && !isExpired(existing.lastRefreshAt) &&
+                existing.lastRefreshAt != cached?.lastRefreshAt
+            ) {
                 val merged = filterExcluded(existing.books, lib, want)
-                if (merged.size != existing.books.size) writeUnlocked(context, today, merged)
+                if (merged.size != existing.books.size) {
+                    writeUnlocked(context, existing.lastRefreshAt, merged)
+                }
                 merged
             } else if (built.isNullOrEmpty()) {
                 filterExcluded(existing?.books.orEmpty(), lib, want)
             } else {
                 val filtered = filterExcluded(built, lib, want)
-                writeUnlocked(context, today, filtered)
+                writeUnlocked(context, System.currentTimeMillis(), filtered)
                 filtered
             }
         }
     }
+
+    private fun isExpired(lastRefreshAt: Long): Boolean =
+        lastRefreshAt <= 0L ||
+            System.currentTimeMillis() - lastRefreshAt >= REFRESH_INTERVAL_MS
 
     fun filterExcluded(
         books: List<DiscoveryBook>,
@@ -126,7 +124,7 @@ object Recommendations {
     private suspend fun buildPool(
         library: List<LibraryBook>,
         wantToRead: List<DiscoveryBook>,
-        day: String
+        avoidIds: Set<String>
     ): List<DiscoveryBook> {
         val profile = buildProfile(library, wantToRead)
         val specs = queriesFromProfile(profile)
@@ -151,7 +149,7 @@ object Recommendations {
             if (wantToRead.any { sameWork(it, book) }) return@forEach
             deduped[book.volumeId] = book
         }
-        return rankByTaste(deduped.values.toList(), profile)
+        return rankByTaste(deduped.values.toList(), profile, avoidIds)
     }
 
     private data class TasteAuthor(val name: String, val weight: Int, val recency: Long)
@@ -241,11 +239,16 @@ object Recommendations {
         return out
     }
 
-    private fun rankByTaste(books: List<DiscoveryBook>, profile: TasteProfile): List<DiscoveryBook> {
+    private fun rankByTaste(
+        books: List<DiscoveryBook>,
+        profile: TasteProfile,
+        avoidIds: Set<String>
+    ): List<DiscoveryBook> {
         if (books.isEmpty()) return emptyList()
         val yearNow = Calendar.getInstance().get(Calendar.YEAR)
         val ranked = books.sortedWith(
-            compareByDescending<DiscoveryBook> { tasteScore(it, profile) }
+            compareBy<DiscoveryBook> { if (it.volumeId in avoidIds) 1 else 0 }
+                .thenByDescending { tasteScore(it, profile) }
                 .thenByDescending { quality(it, yearNow) }
         )
         val usedIds = HashSet<String>()
@@ -432,22 +435,22 @@ object Recommendations {
         if (!file.exists()) return null
         return runCatching {
             val o = JSONObject(file.readText())
-            val day = o.optString("day")
-            if (day.isBlank()) return@runCatching null
+            val lastRefreshAt = o.optLong("lastRefreshAt", 0L)
+            if (lastRefreshAt <= 0L) return@runCatching null
             val arr = o.optJSONArray("books") ?: JSONArray()
             val books = ArrayList<DiscoveryBook>(arr.length())
             for (i in 0 until arr.length()) {
                 val row = arr.optJSONObject(i) ?: continue
                 parseBook(row)?.let { books += it }
             }
-            Cache(day, books)
+            Cache(lastRefreshAt, books)
         }.getOrNull()
     }
 
-    private fun writeUnlocked(context: Context, day: String, books: List<DiscoveryBook>) {
+    private fun writeUnlocked(context: Context, lastRefreshAt: Long, books: List<DiscoveryBook>) {
         val arr = JSONArray()
         books.forEach { arr.put(toJson(it)) }
-        val o = JSONObject().put("day", day).put("books", arr)
+        val o = JSONObject().put("lastRefreshAt", lastRefreshAt).put("books", arr)
         val dir = context.filesDir
         val target = File(dir, CACHE_FILE)
         val tmp = File(dir, "$CACHE_FILE.tmp")
@@ -522,6 +525,6 @@ object Recommendations {
         value.lowercase(Locale.US).replace(Regex("[^a-z0-9]+"), " ").trim()
 
     private data class Query(val q: String, val orderBy: String, val startIndex: Int)
-    private data class Cache(val day: String, val books: List<DiscoveryBook>)
+    private data class Cache(val lastRefreshAt: Long, val books: List<DiscoveryBook>)
     private enum class Bucket { ROMANTASY, FANTASY, ROMANCE, ADVENTURE, NEW, POPULAR }
 }

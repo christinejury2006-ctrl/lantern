@@ -215,6 +215,8 @@ object BookIo {
         }
     }
 
+    fun readPdfOutline(file: File): List<TocEntry> = PdfOutline.read(file)
+
     private fun estimateEpubPages(file: File): Int {
         val chapters = readEpubChapters(file)
         val chars = chapters.sumOf { it.body.length }

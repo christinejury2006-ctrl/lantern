@@ -12,7 +12,8 @@
 
     <style name="Theme.Lantern.Splash" parent="Theme.SplashScreen">
         <item name="windowSplashScreenBackground">@color/lore_lilac</item>
-        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash</item>
+        <item name="windowSplashScreenIconBackgroundColor">@color/lore_lilac</item>
         <item name="postSplashScreenTheme">@style/Theme.Lantern</item>
         <item name="android:windowBackground">@drawable/lore_aurora</item>
         <item name="android:statusBarColor">@android:color/transparent</item>

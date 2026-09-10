@@ -989,7 +989,7 @@ private fun PdfPageImage(
         Image(
             image.asImageBitmap(),
             contentDescription = "Page ${index + 1}",
-            modifier = if (fillViewport) modifier else modifewport) modifier else modifier.aspectRatio(drawn),
+            modifier = if (fillViewport) modifier else modifier.aspectRatio(drawn),
             contentScale = if (fillViewport) ContentScale.Fit else ContentScale.FillWidth
         )
     } else {

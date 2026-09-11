@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Starting window is lore_launch (windowBackground). Empty splash icon so
-         Android 12 does not paint the launcher glyph over it. Background color is
-         the artwork's first-pixel match only if the platform still draws a splash. -->
+    <!-- Android 12+ splash background is a color only. Use the artwork top so
+         it matches the XML ombré windowBackground (startColor). Empty icon so
+         the launcher glyph is not painted over it. -->
     <style name="Theme.Lantern" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowDrawsSystemBarBackgrounds">true</item>
-        <item name="android:windowBackground">@drawable/lore_launch</item>
+        <item name="android:windowBackground">@drawable/lore_launch_gradient</item>
         <item name="android:windowSplashScreenBackground">@color/lore_launch_top</item>
         <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_splash_empty</item>
         <item name="android:windowSplashScreenIconBackgroundColor">@android:color/transparent</item>

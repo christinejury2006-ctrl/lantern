@@ -51,14 +51,66 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     var interests by mutableStateOf<List<String>>(emptyList())
         private set
     var editingInterests by mutableStateOf(false)
+    var hydrated by mutableStateOf(false)
+        private set
     private var driveConsentPrompted = false
     private var googleAccountKey: String? = null
 
+    private data class DiskHydrate(
+        val readingPrefs: ReadingPrefs,
+        val account: CloudAccount,
+        val googleAcc: GoogleSignInAccount?,
+        val books: List<LibraryBook>,
+        val want: List<DiscoveryBook>,
+        val interestsChosen: Boolean,
+        val interests: List<String>,
+        val forYouCached: List<DiscoveryBook>
+    )
+
     init {
+        StartupTrace.mark("LanternStore.init scheduled")
+        viewModelScope.launch {
+            StartupTrace.mark("LanternStore hydrate start")
+            val disk = withContext(Dispatchers.IO) {
+                StartupTrace.mark("LanternStore hydrate IO")
+                hydrateFromDisk()
+            }
+            readingPrefs = disk.readingPrefs
+            val acc = disk.googleAcc
+            if (acc != null) {
+                googleAccountKey = GoogleAuth.accountKey(acc)
+                applyAccount(acc, announce = false)
+            } else {
+                account = disk.account
+            }
+            synchronized(libraryLock) {
+                books.clear()
+                books.addAll(disk.books)
+            }
+            wantToRead.clear()
+            wantToRead.addAll(disk.want)
+            interestsChosen = disk.interestsChosen
+            interests = disk.interests
+            StartupTrace.mark("LanternStore prefs interestsChosen=$interestsChosen n=${interests.size}")
+            if (interestsChosen) {
+                forYou = disk.forYouCached
+                StartupTrace.mark("LanternStore cached forYou=${forYou.size}")
+            }
+            hydrated = true
+            StartupTrace.mark("LanternStore hydrated")
+            if (interestsChosen) ensureRecommendations()
+            if (account.signedIn && account.provider == "google") {
+                viewModelScope.launch(Dispatchers.IO) { connectDrive(migrate = true, quiet = true) }
+            }
+        }
+    }
+
+    private fun hydrateFromDisk(): DiskHydrate {
+        val app = getApplication<Application>()
         val themeName = prefs.getString("theme", "LIGHT") ?: "LIGHT"
         val appTheme = if (themeName == "DARK") ReaderTheme.DARK else ReaderTheme.LIGHT
         val readerThemeName = prefs.getString("readerTheme", null)
-        readingPrefs = ReadingPrefs(
+        val loadedPrefs = ReadingPrefs(
             theme = appTheme,
             readerTheme = if (readerThemeName == "DARK") ReaderTheme.DARK
                 else if (readerThemeName == "LIGHT") ReaderTheme.LIGHT
@@ -70,34 +122,31 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             landscape = prefs.getBoolean("landscape", false),
             useMobileData = prefs.getBoolean("mobile", true)
         )
-        account = CloudAccount(
+        val accountFromPrefs = CloudAccount(
             prefs.getBoolean("in", false),
             prefs.getString("name", "") ?: "",
             prefs.getString("email", "") ?: "",
             prefs.getString("prov", "") ?: ""
         )
+        val loadedBooks = ArrayList<LibraryBook>()
         synchronized(libraryLock) {
-            loadBooksUnlocked()
-            mergeSeedUnlocked()
+            loadBooksInto(loadedBooks)
+            mergeSeedInto(loadedBooks)
+            persistBooksList(loadedBooks)
         }
-        loadWantToRead()
-        GoogleAuth.lastAccount(app)?.let { acc ->
-            googleAccountKey = GoogleAuth.accountKey(acc)
-            applyAccount(acc, announce = false)
-        }
-        interestsChosen = prefs.getBoolean("interests_chosen", false)
-        interests = prefs.getString("interests", "")
+        val want = readWantFile()
+        val googleAcc = runCatching { GoogleAuth.lastAccount(app) }.getOrNull()
+        val chosen = prefs.getBoolean("interests_chosen", false)
+        val chosenInterests = prefs.getString("interests", "")
             .orEmpty()
             .split("|")
             .map { it.trim() }
             .filter { it.isNotEmpty() }
-        if (interestsChosen) {
-            forYou = Recommendations.cached(app, interests).orEmpty()
-            ensureRecommendations()
-        }
-        if (account.signedIn && account.provider == "google") {
-            viewModelScope.launch(Dispatchers.IO) { connectDrive(migrate = true, quiet = true) }
-        }
+        val cached = if (chosen) Recommendations.cached(app, chosenInterests).orEmpty() else emptyList()
+        return DiskHydrate(
+            loadedPrefs, accountFromPrefs, googleAcc, loadedBooks, want,
+            chosen, chosenInterests, cached
+        )
     }
 
     fun userBookCount(): Int = synchronized(libraryLock) { userBookCountUnlocked() }
@@ -228,6 +277,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             .putBoolean("interests_chosen", true)
             .putString("interests", clean.joinToString("|"))
             .apply()
+        StartupTrace.mark("saveInterests n=${clean.size} ids=${clean.joinToString(",")}")
         Recommendations.clearCache(getApplication())
         forYou = emptyList()
         forYouFailed = false
@@ -247,8 +297,13 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     }
 
     fun ensureRecommendations(force: Boolean = false) {
-        if (!interestsChosen || forYouBusy) return
+        StartupTrace.mark("ensureRecommendations force=$force chosen=$interestsChosen busy=$forYouBusy")
+        if (!interestsChosen || forYouBusy) {
+            StartupTrace.mark("ensureRecommendations SKIP chosen=$interestsChosen busy=$forYouBusy")
+            return
+        }
         viewModelScope.launch {
+            StartupTrace.mark("ensureRecommendations coroutine start")
             forYouBusy = true
             forYouFailed = false
             try {
@@ -256,6 +311,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 forYou = list
                 RecDiag.storeCount = forYou.size
                 RecDiag.log(RecDiag.summary())
+                StartupTrace.mark("ensureRecommendations done n=${list.size} failed=${list.isEmpty()}")
                 if (list.isEmpty()) forYouFailed = true
                 if (com.lantern.library.BuildConfig.DEBUG) toast(RecDiag.summary())
             } finally {
@@ -592,23 +648,22 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         return "${book.id}.$ext"
     }
 
-    private fun mergeSeedUnlocked() {
+    private fun mergeSeedInto(target: MutableList<LibraryBook>) {
         BundledBooks.seed().forEach { s ->
-            val i = books.indexOfFirst { it.id == s.id }
-            if (i < 0) books.add(s) else books[i] = s.copy(
-                currentPage = books[i].currentPage,
-                lastReadAt = books[i].lastReadAt,
-                finished = books[i].finished,
-                addedAt = books[i].addedAt,
-                driveFileId = books[i].driveFileId,
-                pendingUpload = books[i].pendingUpload,
-                filePath = books[i].filePath
+            val i = target.indexOfFirst { it.id == s.id }
+            if (i < 0) target.add(s) else target[i] = s.copy(
+                currentPage = target[i].currentPage,
+                lastReadAt = target[i].lastReadAt,
+                finished = target[i].finished,
+                addedAt = target[i].addedAt,
+                driveFileId = target[i].driveFileId,
+                pendingUpload = target[i].pendingUpload,
+                filePath = target[i].filePath
             )
         }
-        persistBooksUnlocked()
     }
 
-    private fun loadBooksUnlocked() {
+    private fun loadBooksInto(target: MutableList<LibraryBook>) {
         if (!booksFile.exists()) return
         var originDirty = false
         runCatching {
@@ -624,7 +679,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 val origin = migrateLoadedOrigin(id, storedOrigin, filePath, booksDir)
                 if (origin != storedOrigin) originDirty = true
                 if (origin == BookOrigin.BUNDLED) continue
-                books += LibraryBook(
+                target += LibraryBook(
                     id, o.getString("title"), o.optString("author"), null, o.optString("remoteCover").ifBlank { null },
                     runCatching { BookFormat.valueOf(o.optString("format", "TEXT")) }.getOrDefault(BookFormat.TEXT), origin,
                     filePath, o.optString("remoteEpub").ifBlank { null }, null,
@@ -634,7 +689,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 )
             }
         }
-        if (originDirty) persistBooksUnlocked()
+        if (originDirty) persistBooksList(target)
     }
 
     /** Legacy BUNDLED/missing origin with a real file under books/ becomes IMPORT. Seed ids stay BUNDLED. Never deletes files. */
@@ -658,8 +713,12 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     }
 
     private fun persistBooksUnlocked() {
+        persistBooksList(books.toList())
+    }
+
+    private fun persistBooksList(list: List<LibraryBook>) {
         val arr = JSONArray()
-        books.forEach { b ->
+        list.forEach { b ->
             arr.put(
                 JSONObject().put("id", b.id).put("title", b.title).put("author", b.author).put("remoteCover", b.remoteCover ?: "")
                     .put("format", b.format.name).put("origin", b.origin.name).put("filePath", b.filePath ?: "").put("remoteEpub", b.remoteEpub ?: "")
@@ -680,16 +739,18 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun loadWantToRead() {
-        if (!wantFile.exists()) return
+    private fun readWantFile(): List<DiscoveryBook> {
+        if (!wantFile.exists()) return emptyList()
+        val out = ArrayList<DiscoveryBook>()
         runCatching {
             val arr = JSONArray(wantFile.readText())
             for (i in 0 until arr.length()) {
                 val row = arr.optJSONObject(i) ?: continue
                 val incoming = Recommendations.parseBook(row) ?: continue
-                if (wantToRead.none { Recommendations.sameWork(it, incoming) }) wantToRead += incoming
+                if (out.none { Recommendations.sameWork(it, incoming) }) out += incoming
             }
         }
+        return out
     }
     private fun dropFromRecommendations(drop: (DiscoveryBook) -> Boolean) {
         if (forYou.any(drop)) forYou = forYou.filterNot(drop)

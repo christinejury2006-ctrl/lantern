@@ -5,7 +5,7 @@
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowDrawsSystemBarBackgrounds">true</item>
-        <item name="android:windowBackground">@drawable/lore_launch</item>
+        <item name="android:windowBackground">@drawable/lore_launch_gradient</item>
         <item name="android:enforceNavigationBarContrast">false</item>
         <item name="android:enforceStatusBarContrast">false</item>
     </style>

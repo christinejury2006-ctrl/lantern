@@ -9,6 +9,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -41,7 +42,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lantern.library.data.CatalogBook
@@ -68,22 +71,45 @@ import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        com.lantern.library.data.StartupTrace.mark("MainActivity.onCreate")
         super.onCreate(savedInstanceState)
+        com.lantern.library.data.StartupTrace.mark("setContent")
         setContent { LaunchGate() }
     }
 }
 
 @Composable
 private fun LaunchGate() {
-    var startApp by remember { mutableStateOf(false) }
+    var firstFrame by remember { mutableStateOf(false) }
+    var loreFrame by remember { mutableStateOf(false) }
+    androidx.compose.runtime.SideEffect {
+        com.lantern.library.data.StartupTrace.mark("Compose composition firstFrame=$firstFrame loreFrame=$loreFrame")
+    }
     LaunchedEffect(Unit) {
         withFrameNanos { }
-        startApp = true
+        com.lantern.library.data.StartupTrace.mark("first frame drawn")
+        firstFrame = true
+    }
+    LaunchedEffect(firstFrame) {
+        if (!firstFrame) return@LaunchedEffect
+        withFrameNanos { }
+        com.lantern.library.data.StartupTrace.mark("lore artwork frame")
+        loreFrame = true
     }
     Box(Modifier.fillMaxSize()) {
-        if (startApp) {
+        if (firstFrame) {
+            Image(
+                painter = painterResource(R.drawable.lore_launch),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        }
+        if (loreFrame) {
             val store: LanternStore = viewModel()
-            LanternRoot(store)
+            if (store.hydrated) {
+                LanternRoot(store)
+            }
         }
     }
 }

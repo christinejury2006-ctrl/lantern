@@ -33,11 +33,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -62,7 +61,6 @@ import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.InkSoft
 import com.lantern.library.ui.theme.NightText
 import com.lantern.library.ui.theme.Playfair
-import kotlinx.coroutines.delay
 
 private enum class LibFilter { ALL, CURRENT, TO_READ, WANT, FINISHED }
 
@@ -74,6 +72,7 @@ fun LibraryScreen(
     wantToRead: List<DiscoveryBook>,
     theme: ReaderTheme,
     forYouBusy: Boolean = false,
+    forYouFailed: Boolean = false,
     onOpen: (LibraryBook) -> Unit,
     onRemove: (String) -> Unit,
     onImport: () -> Unit,
@@ -127,6 +126,7 @@ fun LibraryScreen(
                     ink = ink,
                     mute = mute,
                     busy = forYouBusy,
+                    failed = forYouFailed,
                     onOpen = onOpenDiscovery,
                     onSave = onSaveWant,
                     onRefresh = onRefreshForYou
@@ -246,17 +246,11 @@ private fun ForYouShelf(
     ink: Color,
     mute: Color,
     busy: Boolean,
+    failed: Boolean,
     onOpen: (DiscoveryBook) -> Unit,
     onSave: (DiscoveryBook) -> Unit,
     onRefresh: () -> Unit
 ) {
-    var waited by remember { mutableStateOf(false) }
-    LaunchedEffect(books) { if (books.isNotEmpty()) waited = true }
-    LaunchedEffect(busy) { if (busy) waited = false }
-    LaunchedEffect(Unit) {
-        delay(3500)
-        waited = true
-    }
     Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -264,7 +258,7 @@ private fun ForYouShelf(
                 Text("Fresh picks for today", color = mute, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
             }
             Text(
-                if (busy) "…" else "Refresh",
+                "Refresh",
                 color = if (busy) mute else Coral,
                 fontSize = 13.sp,
                 modifier = Modifier
@@ -275,6 +269,20 @@ private fun ForYouShelf(
         }
         Spacer(Modifier.height(10.dp))
         when {
+            busy -> {
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    repeat(3) {
+                        Box(
+                            Modifier.weight(1f).aspectRatio(0.68f).clip(RoundedCornerShape(10.dp))
+                                .background(Color(0x33FFFFFF))
+                        )
+                    }
+                }
+                Text("Gathering today’s books…", color = mute, fontSize = 12.sp)
+            }
             books.isNotEmpty() -> {
                 val pager = rememberPagerState(pageCount = { books.size })
                 HorizontalPager(
@@ -313,7 +321,7 @@ private fun ForYouShelf(
                     Text(current.authorLine, color = mute, fontSize = 12.sp, maxLines = 1)
                 }
             }
-            !waited -> {
+            !failed -> {
                 Row(
                     Modifier.fillMaxWidth().padding(vertical = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)

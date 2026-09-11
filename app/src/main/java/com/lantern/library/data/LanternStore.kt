@@ -42,6 +42,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         private set
     var driveConsentIntent by mutableStateOf<Intent?>(null)
         private set
+    var forYouBusy by mutableStateOf(false)
+        private set
     private var driveConsentPrompted = false
     private var googleAccountKey: String? = null
 
@@ -379,6 +381,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         val ctx = getApplication<Application>()
         val owner = GoogleAuth.accountKey(ctx) ?: return null
         suspend fun token(): String? {
+            if (GoogleAuth.accountKey(ctx) != owner) return null
+            return when (val result = GoogleAuth.driveToken(ctx)) {
+                is DriveTokenResult.Ok -> {
+                    withContext(Dispa     suspend fun token(): String? {
             if (GoogleAuth.accountKey(ctx) != owner) return null
             return when (val result = GoogleAuth.driveToken(ctx)) {
                 is DriveTokenResult.Ok -> {

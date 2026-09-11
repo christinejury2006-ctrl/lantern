@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -73,11 +74,13 @@ fun LibraryScreen(
     forYou: List<DiscoveryBook>,
     wantToRead: List<DiscoveryBook>,
     theme: ReaderTheme,
+    forYouBusy: Boolean = false,
     onOpen: (LibraryBook) -> Unit,
     onRemove: (String) -> Unit,
     onImport: () -> Unit,
     onOpenDiscovery: (DiscoveryBook) -> Unit,
-    onSaveWant: (DiscoveryBook) -> Unit
+    onSaveWant: (DiscoveryBook) -> Unit,
+    onRefreshForYou: () -> Unit = {}
 ) {
     val dark = theme == ReaderTheme.DARK
     val ink = if (dark) NightText else Ink
@@ -124,8 +127,10 @@ fun LibraryScreen(
                     dark = dark,
                     ink = ink,
                     mute = mute,
+                    busy = forYouBusy,
                     onOpen = onOpenDiscovery,
-                    onSave = onSaveWant
+                    onSave = onSaveWant,
+                    onRefresh = onRefreshForYou
                 )
             }
             if (books.isNotEmpty()) {

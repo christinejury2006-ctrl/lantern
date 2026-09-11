@@ -9,7 +9,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -42,11 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lantern.library.data.CatalogBook
@@ -80,30 +75,16 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun LaunchGate() {
     var startApp by remember { mutableStateOf(false) }
-    var libraryFrameReady by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         withFrameNanos { }
         startApp = true
     }
     Box(Modifier.fillMaxSize()) {
         if (startApp) {
-            AppAfterFirstFrame(onLibraryFrame = { libraryFrameReady = true })
-        }
-        if (!libraryFrameReady) {
-            Image(
-                painter = painterResource(R.drawable.lore_launch),
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize().pointerInput(Unit) {},
-                contentScale = ContentScale.Crop
-            )
+            val store: LanternStore = viewModel()
+            LanternRoot(store)
         }
     }
-}
-
-@Composable
-private fun AppAfterFirstFrame(onLibraryFrame: () -> Unit) {
-    val store: LanternStore = viewModel()
-    LanternRoot(store, onLibraryFrame)
 }
 
 private fun strongGutendexMatch(book: DiscoveryBook, hits: List<CatalogBook>): CatalogBook? {
@@ -124,7 +105,7 @@ private sealed class Route {
 }
 
 @Composable
-private fun LanternRoot(store: LanternStore, onLibraryFrame: () -> Unit) {
+private fun LanternRoot(store: LanternStore) {
     var tab by remember { mutableStateOf<Route>(Route.Library) }
     var details by remember { mutableStateOf<DiscoveryBook?>(null) }
     val theme = store.readingPrefs.theme

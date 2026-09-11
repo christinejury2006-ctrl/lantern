@@ -52,16 +52,17 @@ object Recommendations {
     suspend fun daily(
         context: Context,
         library: () -> List<LibraryBook>,
-        wantToRead: () -> List<DiscoveryBook>
+        wantToRead: () -> List<DiscoveryBook>,
+        forceRefresh: Boolean = false
     ): List<DiscoveryBook> {
         RecDiag.reset()
         RecDiag.keyConfigured = GoogleBooks.isConfigured()
         RecDiag.online = isOnline(context)
-        RecDiag.log("daily start key=${RecDiag.keyConfigured} online=${RecDiag.online}")
+        RecDiag.log("daily start key=${RecDiag.keyConfigured} online=${RecDiag.online} force=$forceRefresh")
         val libSnap = library()
         val wantSnap = wantToRead()
         val cached = synchronized(cacheLock) { readUnlocked(context) }
-        if (cached != null && !isExpired(cached.lastRefreshAt)) {
+        if (!forceRefresh && cached != null && !isExpired(cached.lastRefreshAt)) {
             RecDiag.cacheHit = true
             RecDiag.cacheSize = cached.books.size
             val kept = filterExcluded(cached.books, libSnap, wantSnap)
@@ -88,7 +89,7 @@ object Recommendations {
         }
         return synchronized(cacheLock) {
             val existing = readUnlocked(context)
-            if (existing != null && !isExpired(existing.lastRefreshAt) &&
+            if (!forceRefresh && existing != null && !isExpired(existing.lastRefreshAt) &&
                 existing.lastRefreshAt != cached?.lastRefreshAt
             ) {
                 val merged = filterExcluded(existing.books, libSnap, wantSnap)

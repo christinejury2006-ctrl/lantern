@@ -44,6 +44,13 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         private set
     var forYouBusy by mutableStateOf(false)
         private set
+    var forYouFailed by mutableStateOf(false)
+        private set
+    var interestsChosen by mutableStateOf(false)
+        private set
+    var interests by mutableStateOf<List<String>>(emptyList())
+        private set
+    var editingInterests by mutableStateOf(false)
     private var driveConsentPrompted = false
     private var googleAccountKey: String? = null
 
@@ -78,12 +85,16 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             googleAccountKey = GoogleAuth.accountKey(acc)
             applyAccount(acc, announce = false)
         }
-        forYou = Recommendations.filterExcluded(
-            Recommendations.cached(app).orEmpty(),
-            books.toList(),
-            wantToRead.toList()
-        )
-        ensureRecommendations()
+        interestsChosen = prefs.getBoolean("interests_chosen", false)
+        interests = prefs.getString("interests", "")
+            .orEmpty()
+            .split("|")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        if (interestsChosen) {
+            forYou = Recommendations.cached(app, interests).orEmpty()
+            ensureRecommendations()
+        }
         if (account.signedIn && account.provider == "google") {
             viewModelScope.launch(Dispatchers.IO) { connectDrive(migrate = true, quiet = true) }
         }
@@ -207,24 +218,45 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         persistWantToRead()
         toast("Removed from Want to Read")
     }
+    fun saveInterests(ids: List<String>) {
+        val clean = ids.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (clean.isEmpty()) return
+        interests = clean
+        interestsChosen = true
+        editingInterests = false
+        prefs.edit()
+            .putBoolean("interests_chosen", true)
+            .putString("interests", clean.joinToString("|"))
+            .apply()
+        Recommendations.clearCache(getApplication())
+        forYou = emptyList()
+        forYouFailed = false
+        ensureRecommendations(force = true)
+    }
+
+    fun openInterestEditor() {
+        if (interestsChosen) editingInterests = true
+    }
+
+    fun closeInterestEditor() {
+        editingInterests = false
+    }
+
     fun refreshForYou() {
         ensureRecommendations(force = true)
     }
 
     fun ensureRecommendations(force: Boolean = false) {
-        if (forYouBusy) return
+        if (!interestsChosen || forYouBusy) return
         viewModelScope.launch {
             forYouBusy = true
+            forYouFailed = false
             try {
-                val list = Recommendations.daily(
-                    getApplication(),
-                    { books.toList() },
-                    { wantToRead.toList() },
-                    force
-                )
-                forYou = Recommendations.filterExcluded(list, books.toList(), wantToRead.toList())
+                val list = Recommendations.daily(getApplication(), interests, force)
+                forYou = list
                 RecDiag.storeCount = forYou.size
                 RecDiag.log(RecDiag.summary())
+                if (list.isEmpty()) forYouFailed = true
                 if (com.lantern.library.BuildConfig.DEBUG) toast(RecDiag.summary())
             } finally {
                 forYouBusy = false
@@ -655,6 +687,21 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             for (i in 0 until arr.length()) {
                 val row = arr.optJSONObject(i) ?: continue
                 val incoming = Recommendations.parseBook(row) ?: continue
+                if (wantToRead.none { Recommendations.sameWork(it, incoming) }) wantToRead += incoming
+            }
+        }
+    }
+    private fun dropFromRecommendations(drop: (DiscoveryBook) -> Boolean) {
+        if (forYou.any(drop)) forYou = forYou.filterNot(drop)
+        Recommendations.excludeFromCache(getApplication(), drop)
+    }
+    private fun persistWantToRead() {
+        val arr = JSONArray()
+        wantToRead.forEach { arr.put(Recommendations.toJson(it)) }
+        runCatching { wantFile.writeText(arr.toString()) }
+    }
+}
+tions.parseBook(row) ?: continue
                 if (wantToRead.none { Recommendations.sameWork(it, incoming) }) wantToRead += incoming
             }
         }

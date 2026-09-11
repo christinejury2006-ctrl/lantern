@@ -20,6 +20,7 @@ import kotlin.random.Random
 object Recommendations {
     private const val CACHE_FILE = "recommendations.json"
     private const val LIMIT = 12
+    private const val SCHEMA = 2
     /** For You set lifetime. Change this to retune refresh cadence. */
     const val REFRESH_INTERVAL_MS = 24L * 60L * 60L * 1000L
     private val cacheLock = Any()
@@ -37,49 +38,62 @@ object Recommendations {
         Query("subject:Fantasy", "relevance", 20)
     )
 
-    fun cached(context: Context): List<DiscoveryBook>? =
-        synchronized(cacheLock) { readUnlocked(context)?.books }
+    fun cached(context: Context, interests: List<String>): List<DiscoveryBook>? =
+        synchronized(cacheLock) { readUnlocked(context, InterestCatalog.key(interests))?.books }
 
     fun excludeFromCache(context: Context, drop: (DiscoveryBook) -> Boolean) {
         synchronized(cacheLock) {
-            val cache = readUnlocked(context) ?: return
+            val cache = readUnlocked(context, null) ?: return
             val kept = cache.books.filterNot(drop)
             if (kept.size == cache.books.size) return
-            writeUnlocked(context, cache.lastRefreshAt, kept)
+            writeUnlocked(context, cache.lastRefreshAt, kept, cache.interestsKey)
+        }
+    }
+
+    fun clearCache(context: Context) {
+        synchronized(cacheLock) {
+            runCatching { File(context.filesDir, CACHE_FILE).delete() }
+            runCatching { File(context.filesDir, "$CACHE_FILE.tmp").delete() }
         }
     }
 
     suspend fun daily(
         context: Context,
-        library: () -> List<LibraryBook>,
-        wantToRead: () -> List<DiscoveryBook>,
+        interests: List<String>,
         forceRefresh: Boolean = false
     ): List<DiscoveryBook> {
         RecDiag.reset()
         RecDiag.keyConfigured = GoogleBooks.isConfigured()
         RecDiag.online = isOnline(context)
-        RecDiag.log("daily start key=${RecDiag.keyConfigured} online=${RecDiag.online} force=$forceRefresh")
-        val libSnap = library()
-        val wantSnap = wantToRead()
-        val cached = synchronized(cacheLock) { readUnlocked(context) }
+        val interestKey = InterestCatalog.key(interests)
+        RecDiag.log("daily start key=${RecDiag.keyConfigured} online=${RecDiag.online} force=$forceRefresh interests=${interests.size}")
+        if (interestKey.isEmpty()) {
+            RecDiag.skip = "no interests"
+            RecDiag.log("daily skip no interests")
+            clearCache(context)
+            return emptyList()
+        }
+        val cached = synchronized(cacheLock) { readUnlocked(context, interestKey) }
         if (!forceRefresh && cached != null && !isExpired(cached.lastRefreshAt)) {
             RecDiag.cacheHit = true
             RecDiag.cacheSize = cached.books.size
-            val kept = filterExcluded(cached.books, libSnap, wantSnap)
-            RecDiag.log("cache hit n=${cached.books.size} afterFilter=${kept.size}")
-            return kept
+            RecDiag.log("cache hit n=${cached.books.size}")
+            return cached.books
         }
         if (!GoogleBooks.isConfigured() || !isOnline(context)) {
             RecDiag.skip = if (!GoogleBooks.isConfigured()) "missing key" else "offline"
             RecDiag.log("daily skip ${RecDiag.skip}")
-            val previous = synchronized(cacheLock) { readUnlocked(context)?.books.orEmpty() }
-            return filterExcluded(previous, libSnap, wantSnap)
+            if (forceRefresh) {
+                clearCache(context)
+                return emptyList()
+            }
+            return cached?.books.orEmpty()
         }
-        val avoidIds = cached?.books?.map { it.volumeId }?.toSet().orEmpty()
-        RecDiag.log("buildPool start")
+        val avoidIds = if (forceRefresh) cached?.books?.map { it.volumeId }?.toSet().orEmpty() else emptySet()
+        RecDiag.log("buildPool start interests=$interestKey")
         val built = withContext(Dispatchers.IO) {
             try {
-                buildPool(libSnap, wantSnap, avoidIds)
+                buildPool(interests, avoidIds)
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 RecDiag.skip = e.javaClass.simpleName
@@ -87,29 +101,17 @@ object Recommendations {
                 null
             }
         }
-        return synchronized(cacheLock) {
-            val existing = readUnlocked(context)
-            if (!forceRefresh && existing != null && !isExpired(existing.lastRefreshAt) &&
-                existing.lastRefreshAt != cached?.lastRefreshAt
-            ) {
-                val merged = filterExcluded(existing.books, libSnap, wantSnap)
-                RecDiag.cachedWriteSize = merged.size
-                RecDiag.log("other writer cache n=${merged.size}")
-                if (merged.size != existing.books.size) {
-                    writeUnlocked(context, existing.lastRefreshAt, merged)
-                }
-                merged
-            } else if (built.isNullOrEmpty()) {
-                RecDiag.log("built empty, not writing cache")
-                filterExcluded(existing?.books.orEmpty(), libSnap, wantSnap)
-            } else {
-                val filtered = filterExcluded(built, libSnap, wantSnap)
-                RecDiag.cachedWriteSize = filtered.size
-                RecDiag.log("cache write n=${filtered.size}")
-                writeUnlocked(context, System.currentTimeMillis(), filtered)
-                filtered
-            }
+        if (built.isNullOrEmpty()) {
+            RecDiag.log("built empty, clearing cache")
+            clearCache(context)
+            return emptyList()
         }
+        synchronized(cacheLock) {
+            RecDiag.cachedWriteSize = built.size
+            RecDiag.log("cache write n=${built.size}")
+            writeUnlocked(context, System.currentTimeMillis(), built, interestKey)
+        }
+        return built
     }
 
     private fun isExpired(lastRefreshAt: Long): Boolean =
@@ -146,14 +148,13 @@ object Recommendations {
     }
 
     private suspend fun buildPool(
-        library: List<LibraryBook>,
-        wantToRead: List<DiscoveryBook>,
+        interests: List<String>,
         avoidIds: Set<String>
     ): List<DiscoveryBook> {
-        val profile = buildProfile(library, wantToRead)
-        val specs = queriesFromProfile(profile)
+        val specs = queriesFromInterests(interests)
         val raw = ArrayList<DiscoveryBook>()
         RecDiag.log("buildPool queries=${specs.size}")
+        if (specs.isEmpty()) return emptyList()
         specs.chunked(3).forEachIndexed { wave, chunk ->
             if (wave > 0) delay(280)
             val part = coroutineScope {
@@ -171,15 +172,62 @@ object Recommendations {
         val deduped = LinkedHashMap<String, DiscoveryBook>()
         raw.forEach { book ->
             if (deduped.values.any { sameWork(it, book) }) return@forEach
-            if (inLibrary(book, library)) return@forEach
-            if (wantToRead.any { sameWork(it, book) }) return@forEach
             deduped[book.volumeId] = book
         }
         RecDiag.filteredPoolCount = deduped.size
-        val ranked = rankByTaste(deduped.values.toList(), profile, avoidIds)
+        val ranked = rankByInterests(deduped.values.toList(), interests, avoidIds)
         RecDiag.rankedCount = ranked.size
         RecDiag.log("pool raw=${raw.size} filt=${deduped.size} rank=${ranked.size}")
         return ranked
+    }
+
+    private fun queriesFromInterests(interests: List<String>): List<Query> {
+        val out = ArrayList<Query>(8)
+        val seen = HashSet<String>()
+        fun add(q: String) {
+            if (out.size >= 8) return
+            if (q.isBlank() || !seen.add(q)) return
+            out += Query(q, "relevance", 0)
+        }
+        interests.forEach { id ->
+            InterestCatalog.byId(id)?.queries?.forEach { add(it) }
+        }
+        return out
+    }
+
+    private fun rankByInterests(
+        books: List<DiscoveryBook>,
+        interests: List<String>,
+        avoidIds: Set<String>
+    ): List<DiscoveryBook> {
+        if (books.isEmpty()) return emptyList()
+        val yearNow = Calendar.getInstance().get(Calendar.YEAR)
+        val needles = interests.mapNotNull { InterestCatalog.byId(it)?.label?.lowercase(Locale.US) }
+        val ranked = books.sortedWith(
+            compareBy<DiscoveryBook> { if (it.volumeId in avoidIds) 1 else 0 }
+                .thenByDescending { interestHit(it, needles) }
+                .thenByDescending { quality(it, yearNow) }
+        )
+        val usedIds = HashSet<String>()
+        val authorCount = HashMap<String, Int>()
+        val picked = ArrayList<DiscoveryBook>(LIMIT)
+        ranked.forEach { book ->
+            if (picked.size >= LIMIT) return@forEach
+            if (book.volumeId in usedIds) return@forEach
+            if (picked.any { sameWork(it, book) }) return@forEach
+            val key = authorKey(book)
+            if (key.isNotEmpty() && (authorCount[key] ?: 0) >= 2) return@forEach
+            picked += book
+            usedIds += book.volumeId
+            if (key.isNotEmpty()) authorCount[key] = (authorCount[key] ?: 0) + 1
+        }
+        return picked
+    }
+
+    private fun interestHit(book: DiscoveryBook, needles: List<String>): Int {
+        if (needles.isEmpty()) return 0
+        val blob = (book.categories + book.title).joinToString(" ").lowercase(Locale.US)
+        return needles.count { it.isNotEmpty() && blob.contains(it) }
     }
 
     private data class TasteAuthor(val name: String, val weight: Int, val recency: Long)
@@ -460,11 +508,14 @@ object Recommendations {
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
-    private fun readUnlocked(context: Context): Cache? {
+    private fun readUnlocked(context: Context, expectedKey: String?): Cache? {
         val file = File(context.filesDir, CACHE_FILE)
         if (!file.exists()) return null
         return runCatching {
             val o = JSONObject(file.readText())
+            if (o.optInt("schema", 0) != SCHEMA) return@runCatching null
+            val storedKey = o.optString("interestsKey", "")
+            if (expectedKey != null && storedKey != expectedKey) return@runCatching null
             val lastRefreshAt = o.optLong("lastRefreshAt", 0L)
             if (lastRefreshAt <= 0L) return@runCatching null
             val arr = o.optJSONArray("books") ?: JSONArray()
@@ -473,14 +524,23 @@ object Recommendations {
                 val row = arr.optJSONObject(i) ?: continue
                 parseBook(row)?.let { books += it }
             }
-            Cache(lastRefreshAt, books)
+            Cache(lastRefreshAt, books, storedKey)
         }.getOrNull()
     }
 
-    private fun writeUnlocked(context: Context, lastRefreshAt: Long, books: List<DiscoveryBook>) {
+    private fun writeUnlocked(
+        context: Context,
+        lastRefreshAt: Long,
+        books: List<DiscoveryBook>,
+        interestsKey: String
+    ) {
         val arr = JSONArray()
         books.forEach { arr.put(toJson(it)) }
-        val o = JSONObject().put("lastRefreshAt", lastRefreshAt).put("books", arr)
+        val o = JSONObject()
+            .put("schema", SCHEMA)
+            .put("interestsKey", interestsKey)
+            .put("lastRefreshAt", lastRefreshAt)
+            .put("books", arr)
         val dir = context.filesDir
         val target = File(dir, CACHE_FILE)
         val tmp = File(dir, "$CACHE_FILE.tmp")
@@ -552,6 +612,13 @@ object Recommendations {
     }
 
     fun normalize(value: String): String =
+        value.lowercase(Locale.US).replace(Regex("[^a-z0-9]+"), " ").trim()
+
+    private data class Query(val q: String, val orderBy: String, val startIndex: Int)
+    private data class Cache(val lastRefreshAt: Long, val books: List<DiscoveryBook>, val interestsKey: String)
+    private enum class Bucket { ROMANTASY, FANTASY, ROMANCE, ADVENTURE, NEW, POPULAR }
+}
+e: String): String =
         value.lowercase(Locale.US).replace(Regex("[^a-z0-9]+"), " ").trim()
 
     private data class Query(val q: String, val orderBy: String, val startIndex: Int)

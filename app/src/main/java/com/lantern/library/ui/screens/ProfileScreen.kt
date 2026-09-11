@@ -35,7 +35,8 @@ fun ProfileScreen(
     onPrefs: (ReadingPrefs) -> Unit,
     onGoogleSignIn: () -> Unit,
     onSignOut: () -> Unit,
-    onConnectDrive: () -> Unit = {}
+    onConnectDrive: () -> Unit = {},
+    onEditInterests: () -> Unit = {}
 ) {
     val dark = prefs.theme == ReaderTheme.DARK
     val ink = if (dark) NightText else Ink
@@ -50,6 +51,23 @@ fun ProfileScreen(
                     Text("Appearance", color = ink, fontSize = 16.sp)
                     Text("Light Mode", color = if (!dark) Coral else ink, modifier = Modifier.fillMaxWidth().clickable { onPrefs(prefs.copy(theme = ReaderTheme.LIGHT)) }.padding(vertical = 10.dp))
                     Text("Dark Mode", color = if (dark) Coral else ink, modifier = Modifier.fillMaxWidth().clickable { onPrefs(prefs.copy(theme = ReaderTheme.DARK)) }.padding(vertical = 10.dp))
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            GlassCard(Modifier.fillMaxWidth(), dark, 20) {
+                Column(Modifier.padding(18.dp)) {
+                    Text("For You", color = ink, fontSize = 16.sp)
+                    Text(
+                        "Recommendations use only the genres you picked, not your library.",
+                        color = mute,
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                    Text(
+                        "Edit reading interests",
+                        color = Coral,
+                        modifier = Modifier.padding(top = 10.dp).clickable(onClick = onEditInterests)
+                    )
                 }
             }
             Spacer(Modifier.height(12.dp))

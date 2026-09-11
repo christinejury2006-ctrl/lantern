@@ -329,7 +329,7 @@ private fun ForYouShelf(
             }
             else -> {
                 Text(
-                    "No recommendations right now. Check back tomorrow, or add a Google Books API key if For You is unset.",
+                    "Couldn't load recommendations. Tap Refresh to try again.",
                     color = mute, fontSize = 13.sp, modifier = Modifier.padding(vertical = 8.dp)
                 )
             }

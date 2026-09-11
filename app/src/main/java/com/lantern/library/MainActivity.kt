@@ -54,6 +54,7 @@ import com.lantern.library.data.Recommendations
 import com.lantern.library.ui.components.FadeToast
 import com.lantern.library.ui.screens.BookDetailsOverlay
 import com.lantern.library.ui.screens.ExploreScreen
+import com.lantern.library.ui.screens.InterestOnboardingScreen
 import com.lantern.library.ui.screens.LibraryScreen
 import com.lantern.library.ui.screens.ProfileScreen
 import com.lantern.library.ui.screens.ReaderScreen
@@ -165,9 +166,18 @@ private fun LanternRoot(store: LanternStore) {
         }
         if (!openDiscoveryLink(book)) store.toast("No store link available")
     }
+    val needsOnboarding = !store.interestsChosen
     LanternTheme(theme) {
         Box(Modifier.fillMaxSize()) {
-            when (val r = tab) {
+            if (needsOnboarding) {
+                InterestOnboardingScreen(
+                    theme = theme,
+                    initial = store.interests,
+                    allowCancel = false,
+                    onContinue = { store.saveInterests(it) },
+                    onCancel = {}
+                )
+            } else when (val r = tab) {
                 Route.Library -> LibraryScreen(
                     store.books, store.forYou, store.wantToRead, theme,
                     store.forYouBusy,
@@ -185,7 +195,8 @@ private fun LanternRoot(store: LanternStore) {
                     { store.setPrefs(it) },
                     { googleSignIn.launch(GoogleAuth.signInIntent(activity)) },
                     { store.signOut(activity) },
-                    { store.requestDriveConnect() }
+                    { store.requestDriveConnect() },
+                    { store.openInterestEditor() }
                 )
                 is Route.Reader -> {
                     val book = store.book(r.id)
@@ -204,8 +215,17 @@ private fun LanternRoot(store: LanternStore) {
                     onGet = { getDiscovery(detail) }
                 )
             }
-            if (tab !is Route.Reader && details == null) {
+            if (!needsOnboarding && tab !is Route.Reader && details == null) {
                 BottomBar(theme, tab, { tab = it }, Modifier.align(Alignment.BottomCenter))
+            }
+            if (store.editingInterests && store.interestsChosen) {
+                InterestOnboardingScreen(
+                    theme = theme,
+                    initial = store.interests,
+                    allowCancel = true,
+                    onContinue = { store.saveInterests(it) },
+                    onCancel = { store.closeInterestEditor() }
+                )
             }
             Box(Modifier.align(Alignment.TopCenter).padding(top = 48.dp)) { FadeToast(store.toast) }
         }

@@ -104,11 +104,7 @@ object GoogleBooks {
         if (title.isEmpty()) return null
         val authors = stringList(info.optJSONArray("authors"))
         val categories = stringList(info.optJSONArray("categories"))
-        val images = info.optJSONObject("imageLinks")
-        val cover = listOf("thumbnail", "smallThumbnail", "small", "medium")
-            .mapNotNull { images?.optString(it)?.takeIf { u -> u.startsWith("http") } }
-            .firstOrNull()
-            ?.let { https(it) }
+        val cover = pickCover(info.optJSONObject("imageLinks"))
         val identifiers = info.optJSONArray("industryIdentifiers")
         var isbn: String? = null
         if (identifiers != null) {
@@ -153,6 +149,40 @@ object GoogleBooks {
             if (s.isNotEmpty()) out += s
         }
         return out
+    }
+
+    private fun pickCover(images: JSONObject?): String? {
+        if (images == null) return null
+        val fields = listOf("extraLarge", "large", "medium", "small", "thumbnail", "smallThumbnail")
+        for (field in fields) {
+            val raw = images.optString(field).trim()
+            if (!raw.startsWith("http")) continue
+            return normalizeCoverUrl(raw, field)
+        }
+        return null
+    }
+
+    /** Prefer a Google-hosted larger zoom when the API only handed us a tiny thumbnail URL. Does not interpolate pixels. */
+    private fun normalizeCoverUrl(raw: String, field: String): String {
+        val httpsUrl = https(raw)
+        val tiny = field == "thumbnail" || field == "smallThumbnail"
+        return if (tiny) preferLargerGoogleCover(httpsUrl) else httpsUrl
+    }
+
+    private fun preferLargerGoogleCover(url: String): String {
+        val parsed = HttpUrl.parse(url) ?: return url
+        val host = parsed.host.lowercase()
+        val googleHost = host == "books.google.com" ||
+            host.endsWith(".books.google.com") ||
+            host.contains("googleusercontent.com")
+        if (!googleHost) return url
+        val zoom = parsed.queryParameter("zoom")
+        if (zoom != "1" && zoom != "5") return url
+        return parsed.newBuilder()
+            .removeAllQueryParameters("zoom")
+            .addQueryParameter("zoom", "0")
+            .build()
+            .toString()
     }
 
     private fun https(url: String): String =

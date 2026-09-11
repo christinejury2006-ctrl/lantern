@@ -701,18 +701,3 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         runCatching { wantFile.writeText(arr.toString()) }
     }
 }
-tions.parseBook(row) ?: continue
-                if (wantToRead.none { Recommendations.sameWork(it, incoming) }) wantToRead += incoming
-            }
-        }
-    }
-    private fun dropFromRecommendations(drop: (DiscoveryBook) -> Boolean) {
-        if (forYou.any(drop)) forYou = forYou.filterNot(drop)
-        Recommendations.excludeFromCache(getApplication(), drop)
-    }
-    private fun persistWantToRead() {
-        val arr = JSONArray()
-        wantToRead.forEach { arr.put(Recommendations.toJson(it)) }
-        runCatching { wantFile.writeText(arr.toString()) }
-    }
-}

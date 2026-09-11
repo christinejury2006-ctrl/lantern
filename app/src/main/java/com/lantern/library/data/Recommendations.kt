@@ -618,10 +618,3 @@ object Recommendations {
     private data class Cache(val lastRefreshAt: Long, val books: List<DiscoveryBook>, val interestsKey: String)
     private enum class Bucket { ROMANTASY, FANTASY, ROMANCE, ADVENTURE, NEW, POPULAR }
 }
-e: String): String =
-        value.lowercase(Locale.US).replace(Regex("[^a-z0-9]+"), " ").trim()
-
-    private data class Query(val q: String, val orderBy: String, val startIndex: Int)
-    private data class Cache(val lastRefreshAt: Long, val books: List<DiscoveryBook>)
-    private enum class Bucket { ROMANTASY, FANTASY, ROMANCE, ADVENTURE, NEW, POPULAR }
-}

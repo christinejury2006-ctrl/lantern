@@ -246,18 +246,35 @@ private fun ForYouShelf(
     dark: Boolean,
     ink: Color,
     mute: Color,
+    busy: Boolean,
     onOpen: (DiscoveryBook) -> Unit,
-    onSave: (DiscoveryBook) -> Unit
+    onSave: (DiscoveryBook) -> Unit,
+    onRefresh: () -> Unit
 ) {
     var waited by remember { mutableStateOf(false) }
     LaunchedEffect(books) { if (books.isNotEmpty()) waited = true }
+    LaunchedEffect(busy) { if (busy) waited = false }
     LaunchedEffect(Unit) {
         delay(3500)
         waited = true
     }
     Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        Text("For You", color = ink, fontFamily = Playfair, fontSize = 16.sp)
-        Text("Fresh picks for today", color = mute, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp, bottom = 10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("For You", color = ink, fontFamily = Playfair, fontSize = 16.sp)
+                Text("Fresh picks for today", color = mute, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+            }
+            Text(
+                if (busy) "…" else "Refresh",
+                color = if (busy) mute else Coral,
+                fontSize = 13.sp,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .combinedClickable(enabled = !busy, onClick = onRefresh)
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+            )
+        }
+        Spacer(Modifier.height(10.dp))
         when {
             books.isNotEmpty() -> {
                 val pager = rememberPagerState(pageCount = { books.size })

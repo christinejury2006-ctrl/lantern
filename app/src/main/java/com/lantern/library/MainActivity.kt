@@ -165,26 +165,18 @@ private fun LanternRoot(store: LanternStore) {
         }
         if (!openDiscoveryLink(book)) store.toast("No store link available")
     }
-    var libraryLaidOut by remember { mutableStateOf(false) }
-    LaunchedEffect(libraryLaidOut) {
-        if (!libraryLaidOut) return@LaunchedEffect
-        withFrameNanos { }
-        onLibraryFrame()
-    }
     LanternTheme(theme) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .onGloballyPositioned { libraryLaidOut = true }
-        ) {
+        Box(Modifier.fillMaxSize()) {
             when (val r = tab) {
                 Route.Library -> LibraryScreen(
                     store.books, store.forYou, store.wantToRead, theme,
+                    store.forYouBusy,
                     onOpen = { book -> store.openForReading(book) { ready -> if (ready != null) tab = Route.Reader(ready.id) } },
                     onRemove = { store.remove(it) },
                     onImport = { import() },
                     onOpenDiscovery = { details = it },
-                    onSaveWant = { store.addWantToRead(it) }
+                    onSaveWant = { store.addWantToRead(it) },
+                    onRefreshForYou = { store.refreshForYou() }
                 )
                 Route.Search -> SearchScreen(theme) { remote -> store.download(remote) { book -> store.openForReading(book) { ready -> if (ready != null) tab = Route.Reader(ready.id) } } }
                 Route.Explore -> ExploreScreen(theme) { remote -> store.download(remote) { book -> store.openForReading(book) { ready -> if (ready != null) tab = Route.Reader(ready.id) } } }

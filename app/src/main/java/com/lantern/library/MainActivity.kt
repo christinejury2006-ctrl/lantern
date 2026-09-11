@@ -8,8 +8,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.viewModels
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -72,12 +72,41 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
-    private val store: LanternStore by viewModels()
     override fun onCreate(savedInstanceState: Bundle?) {
-        installSplashScreen()
+        val splash = installSplashScreen()
+        splash.setOnExitAnimationListener { it.remove() }
         super.onCreate(savedInstanceState)
-        setContent { LanternRoot(store) }
+        setContent { LaunchGate() }
     }
+}
+
+@Composable
+private fun LaunchGate() {
+    var startApp by remember { mutableStateOf(false) }
+    var libraryFrameReady by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        withFrameNanos { }
+        startApp = true
+    }
+    Box(Modifier.fillMaxSize()) {
+        if (startApp) {
+            AppAfterFirstFrame(onLibraryFrame = { libraryFrameReady = true })
+        }
+        if (!libraryFrameReady) {
+            Image(
+                painter = painterResource(R.drawable.lore_launch),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize().pointerInput(Unit) {},
+                contentScale = ContentScale.Crop
+            )
+        }
+    }
+}
+
+@Composable
+private fun AppAfterFirstFrame(onLibraryFrame: () -> Unit) {
+    val store: LanternStore = viewModel()
+    LanternRoot(store, onLibraryFrame)
 }
 
 private fun strongGutendexMatch(book: DiscoveryBook, hits: List<CatalogBook>): CatalogBook? {
@@ -98,7 +127,7 @@ private sealed class Route {
 }
 
 @Composable
-private fun LanternRoot(store: LanternStore) {
+private fun LanternRoot(store: LanternStore, onLibraryFrame: () -> Unit) {
     var tab by remember { mutableStateOf<Route>(Route.Library) }
     var details by remember { mutableStateOf<DiscoveryBook?>(null) }
     val theme = store.readingPrefs.theme
@@ -159,19 +188,17 @@ private fun LanternRoot(store: LanternStore) {
         if (!openDiscoveryLink(book)) store.toast("No store link available")
     }
     var libraryLaidOut by remember { mutableStateOf(false) }
-    var libraryFrameReady by remember { mutableStateOf(false) }
     LaunchedEffect(libraryLaidOut) {
         if (!libraryLaidOut) return@LaunchedEffect
         withFrameNanos { }
-        libraryFrameReady = true
+        onLibraryFrame()
     }
     LanternTheme(theme) {
-        Box(Modifier.fillMaxSize()) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .onGloballyPositioned { libraryLaidOut = true }
-            ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .onGloballyPositioned { libraryLaidOut = true }
+        ) {
             when (val r = tab) {
                 Route.Library -> LibraryScreen(
                     store.books, store.forYou, store.wantToRead, theme,
@@ -211,15 +238,6 @@ private fun LanternRoot(store: LanternStore) {
                 BottomBar(theme, tab, { tab = it }, Modifier.align(Alignment.BottomCenter))
             }
             Box(Modifier.align(Alignment.TopCenter).padding(top = 48.dp)) { FadeToast(store.toast) }
-            }
-            if (!libraryFrameReady) {
-                Image(
-                    painter = painterResource(R.drawable.lore_launch),
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize().pointerInput(Unit) {},
-                    contentScale = ContentScale.Crop
-                )
-            }
         }
     }
 }

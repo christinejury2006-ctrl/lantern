@@ -29,7 +29,11 @@ object GoogleBooks {
         startIndex: Int = 0
     ): List<DiscoveryBook> = withContext(Dispatchers.IO) {
         val key = apiKey()
-        if (key.isEmpty() || query.isBlank()) return@withContext emptyList()
+        if (key.isEmpty() || query.isBlank()) {
+            if (key.isEmpty()) RecDiag.log("volumes skipped: missing key")
+            return@withContext emptyList()
+        }
+        RecDiag.requestStarted = true
         val url = HttpUrl.Builder()
             .scheme("https")
             .host("www.googleapis.com")
@@ -64,11 +68,21 @@ object GoogleBooks {
             .build()
         return try {
             http.newCall(req).execute().use { res ->
-                Fetch(res.code, res.body?.string())
+                val body = res.body?.string()
+                RecDiag.http(res.code, itemCount(body))
+                Fetch(res.code, body)
             }
         } catch (_: Exception) {
+            RecDiag.http(-1, 0)
             Fetch(-1, null)
         }
+    }
+
+    private fun itemCount(body: String?): Int {
+        if (body.isNullOrBlank()) return 0
+        val root = runCatching { JSONObject(body) }.getOrNull() ?: return 0
+        val items = root.optJSONArray("items")
+        return if (items != null) items.length() else root.optInt("totalItems", 0)
     }
 
     private fun parseVolumes(json: String): List<DiscoveryBook> {

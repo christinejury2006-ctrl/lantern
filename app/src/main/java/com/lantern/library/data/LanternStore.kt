@@ -213,6 +213,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 { wantToRead.toList() }
             )
             forYou = Recommendations.filterExcluded(list, books.toList(), wantToRead.toList())
+            RecDiag.storeCount = forYou.size
+            RecDiag.log(RecDiag.summary())
+            if (com.lantern.library.BuildConfig.DEBUG) toast(RecDiag.summary())
         }
     }
     fun importUri(uri: Uri) {

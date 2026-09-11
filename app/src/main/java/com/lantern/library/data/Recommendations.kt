@@ -54,11 +54,21 @@ object Recommendations {
         library: () -> List<LibraryBook>,
         wantToRead: () -> List<DiscoveryBook>
     ): List<DiscoveryBook> {
+        RecDiag.reset()
+        RecDiag.keyConfigured = GoogleBooks.isConfigured()
+        RecDiag.online = isOnline(context)
+        RecDiag.log("daily start key=${RecDiag.keyConfigured} online=${RecDiag.online}")
         val cached = synchronized(cacheLock) { readUnlocked(context) }
         if (cached != null && !isExpired(cached.lastRefreshAt)) {
-            return filterExcluded(cached.books, library(), wantToRead())
+            RecDiag.cacheHit = true
+            RecDiag.cacheSize = cached.books.size
+            val kept = filterExcluded(cached.books, library(), wantToRead())
+            RecDiag.log("cache hit n=${cached.books.size} afterFilter=${kept.size}")
+            return kept
         }
         if (!GoogleBooks.isConfigured() || !isOnline(context)) {
+            RecDiag.skip = if (!GoogleBooks.isConfigured()) "missing key" else "offline"
+            RecDiag.log("daily skip ${RecDiag.skip}")
             val previous = synchronized(cacheLock) { readUnlocked(context)?.books.orEmpty() }
             return filterExcluded(previous, library(), wantToRead())
         }
@@ -74,14 +84,19 @@ object Recommendations {
                 existing.lastRefreshAt != cached?.lastRefreshAt
             ) {
                 val merged = filterExcluded(existing.books, lib, want)
+                RecDiag.cachedWriteSize = merged.size
+                RecDiag.log("other writer cache n=${merged.size}")
                 if (merged.size != existing.books.size) {
                     writeUnlocked(context, existing.lastRefreshAt, merged)
                 }
                 merged
             } else if (built.isNullOrEmpty()) {
+                RecDiag.log("built empty, not writing cache")
                 filterExcluded(existing?.books.orEmpty(), lib, want)
             } else {
                 val filtered = filterExcluded(built, lib, want)
+                RecDiag.cachedWriteSize = filtered.size
+                RecDiag.log("cache write n=${filtered.size}")
                 writeUnlocked(context, System.currentTimeMillis(), filtered)
                 filtered
             }
@@ -142,6 +157,7 @@ object Recommendations {
             }
             raw += part.flatten()
         }
+        RecDiag.rawCount = raw.size
         val deduped = LinkedHashMap<String, DiscoveryBook>()
         raw.forEach { book ->
             if (deduped.values.any { sameWork(it, book) }) return@forEach
@@ -149,7 +165,11 @@ object Recommendations {
             if (wantToRead.any { sameWork(it, book) }) return@forEach
             deduped[book.volumeId] = book
         }
-        return rankByTaste(deduped.values.toList(), profile, avoidIds)
+        RecDiag.filteredPoolCount = deduped.size
+        val ranked = rankByTaste(deduped.values.toList(), profile, avoidIds)
+        RecDiag.rankedCount = ranked.size
+        RecDiag.log("pool raw=${raw.size} filt=${deduped.size} rank=${ranked.size}")
+        return ranked
     }
 
     private data class TasteAuthor(val name: String, val weight: Int, val recency: Long)

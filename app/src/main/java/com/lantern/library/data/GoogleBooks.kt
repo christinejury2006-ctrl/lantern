@@ -171,7 +171,7 @@ object GoogleBooks {
     }
 
     private fun preferLargerGoogleCover(url: String): String {
-        val parsed = HttpUrl.parse(url) ?: return url
+        val parsed = url.toHttpUrlOrNull() ?: return url
         val host = parsed.host.lowercase()
         val googleHost = host == "books.google.com" ||
             host.endsWith(".books.google.com") ||

@@ -1,16 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Cold-start starting window reads android:* attrs before onCreate.
-         No android:windowBackground here — that hid the splash on first launch.
-         Full Lore artwork is drawn as the first Compose frame, not as the system icon. -->
-    <style name="Theme.Lantern.Splash" parent="Theme.SplashScreen">
-        <item name="windowSplashScreenBackground">@color/lore_launch_top</item>
-        <item name="android:windowSplashScreenBackground">@color/lore_launch_top</item>
-        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_empty</item>
-        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_splash_empty</item>
-        <item name="postSplashScreenTheme">@style/Theme.Lantern</item>
+    <!-- Starting window is lore_launch (windowBackground). Empty splash icon so
+         Android 12 does not paint the launcher glyph over it. Background color is
+         the artwork's first-pixel match only if the platform still draws a splash. -->
+    <style name="Theme.Lantern" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:windowBackground">@drawable/lore_launch</item>
+        <item name="android:windowSplashScreenBackground">@color/lore_launch_top</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_splash_empty</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@android:color/transparent</item>
+        <item name="android:windowSplashScreenAnimationDuration">0</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+        <item name="android:enforceStatusBarContrast">false</item>
     </style>
 </resources>

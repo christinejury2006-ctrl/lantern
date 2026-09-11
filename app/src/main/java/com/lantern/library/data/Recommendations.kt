@@ -58,11 +58,13 @@ object Recommendations {
         RecDiag.keyConfigured = GoogleBooks.isConfigured()
         RecDiag.online = isOnline(context)
         RecDiag.log("daily start key=${RecDiag.keyConfigured} online=${RecDiag.online}")
+        val libSnap = library()
+        val wantSnap = wantToRead()
         val cached = synchronized(cacheLock) { readUnlocked(context) }
         if (cached != null && !isExpired(cached.lastRefreshAt)) {
             RecDiag.cacheHit = true
             RecDiag.cacheSize = cached.books.size
-            val kept = filterExcluded(cached.books, library(), wantToRead())
+            val kept = filterExcluded(cached.books, libSnap, wantSnap)
             RecDiag.log("cache hit n=${cached.books.size} afterFilter=${kept.size}")
             return kept
         }
@@ -70,20 +72,26 @@ object Recommendations {
             RecDiag.skip = if (!GoogleBooks.isConfigured()) "missing key" else "offline"
             RecDiag.log("daily skip ${RecDiag.skip}")
             val previous = synchronized(cacheLock) { readUnlocked(context)?.books.orEmpty() }
-            return filterExcluded(previous, library(), wantToRead())
+            return filterExcluded(previous, libSnap, wantSnap)
         }
         val avoidIds = cached?.books?.map { it.volumeId }?.toSet().orEmpty()
+        RecDiag.log("buildPool start")
         val built = withContext(Dispatchers.IO) {
-            runCatching { buildPool(library(), wantToRead(), avoidIds) }.getOrNull()
+            try {
+                buildPool(libSnap, wantSnap, avoidIds)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                RecDiag.skip = e.javaClass.simpleName
+                RecDiag.log("buildPool failed ${e.javaClass.simpleName}")
+                null
+            }
         }
         return synchronized(cacheLock) {
             val existing = readUnlocked(context)
-            val lib = library()
-            val want = wantToRead()
             if (existing != null && !isExpired(existing.lastRefreshAt) &&
                 existing.lastRefreshAt != cached?.lastRefreshAt
             ) {
-                val merged = filterExcluded(existing.books, lib, want)
+                val merged = filterExcluded(existing.books, libSnap, wantSnap)
                 RecDiag.cachedWriteSize = merged.size
                 RecDiag.log("other writer cache n=${merged.size}")
                 if (merged.size != existing.books.size) {
@@ -92,9 +100,9 @@ object Recommendations {
                 merged
             } else if (built.isNullOrEmpty()) {
                 RecDiag.log("built empty, not writing cache")
-                filterExcluded(existing?.books.orEmpty(), lib, want)
+                filterExcluded(existing?.books.orEmpty(), libSnap, wantSnap)
             } else {
-                val filtered = filterExcluded(built, lib, want)
+                val filtered = filterExcluded(built, libSnap, wantSnap)
                 RecDiag.cachedWriteSize = filtered.size
                 RecDiag.log("cache write n=${filtered.size}")
                 writeUnlocked(context, System.currentTimeMillis(), filtered)
@@ -144,6 +152,7 @@ object Recommendations {
         val profile = buildProfile(library, wantToRead)
         val specs = queriesFromProfile(profile)
         val raw = ArrayList<DiscoveryBook>()
+        RecDiag.log("buildPool queries=${specs.size}")
         specs.chunked(3).forEachIndexed { wave, chunk ->
             if (wave > 0) delay(280)
             val part = coroutineScope {

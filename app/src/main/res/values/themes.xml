@@ -9,13 +9,4 @@
         <item name="android:enforceNavigationBarContrast">false</item>
         <item name="android:enforceStatusBarContrast">false</item>
     </style>
-
-    <style name="Theme.Lantern.Splash" parent="Theme.SplashScreen">
-        <item name="windowSplashScreenBackground">@color/lore_launch_top</item>
-        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_empty</item>
-        <item name="postSplashScreenTheme">@style/Theme.Lantern</item>
-        <item name="android:statusBarColor">@android:color/transparent</item>
-        <item name="android:navigationBarColor">@android:color/transparent</item>
-        <item name="android:windowLightStatusBar">true</item>
-    </style>
 </resources>

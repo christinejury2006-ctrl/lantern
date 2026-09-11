@@ -82,9 +82,11 @@ object RecDiag {
     fun summary(): String {
         val codes = httpCodes.toList().ifEmpty { listOf() }
         val codePart = if (codes.isEmpty()) "http=none" else "http=${codes.joinToString(",")}"
-        return "For You: ${cause()} | key=${if (keyConfigured) "yes" else "NO"} " +
-            "online=$online cache=${if (cacheHit) "hit/$cacheSize" else "miss"} " +
-            "req=${if (requestStarted) "yes" else "no"} $codePart " +
-            "raw=$rawCount filt=$filteredPoolCount rank=$rankedCount store=$storeCount"
+        return redact(
+            "For You: ${cause()} | key=${if (keyConfigured) "yes" else "NO"} " +
+                "online=$online cache=${if (cacheHit) "hit/$cacheSize" else "miss"} " +
+                "req=${if (requestStarted) "yes" else "no"} $codePart " +
+                "raw=$rawCount filt=$filteredPoolCount rank=$rankedCount store=$storeCount"
+        )
     }
 }

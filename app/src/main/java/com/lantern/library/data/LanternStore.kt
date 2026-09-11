@@ -207,17 +207,28 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         persistWantToRead()
         toast("Removed from Want to Read")
     }
-    fun ensureRecommendations() {
+    fun refreshForYou() {
+        ensureRecommendations(force = true)
+    }
+
+    fun ensureRecommendations(force: Boolean = false) {
+        if (forYouBusy) return
         viewModelScope.launch {
-            val list = Recommendations.daily(
-                getApplication(),
-                { books.toList() },
-                { wantToRead.toList() }
-            )
-            forYou = Recommendations.filterExcluded(list, books.toList(), wantToRead.toList())
-            RecDiag.storeCount = forYou.size
-            RecDiag.log(RecDiag.summary())
-            if (com.lantern.library.BuildConfig.DEBUG) toast(RecDiag.summary())
+            forYouBusy = true
+            try {
+                val list = Recommendations.daily(
+                    getApplication(),
+                    { books.toList() },
+                    { wantToRead.toList() },
+                    force
+                )
+                forYou = Recommendations.filterExcluded(list, books.toList(), wantToRead.toList())
+                RecDiag.storeCount = forYou.size
+                RecDiag.log(RecDiag.summary())
+                if (com.lantern.library.BuildConfig.DEBUG) toast(RecDiag.summary())
+            } finally {
+                forYouBusy = false
+            }
         }
     }
     fun importUri(uri: Uri) {
@@ -381,10 +392,6 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         val ctx = getApplication<Application>()
         val owner = GoogleAuth.accountKey(ctx) ?: return null
         suspend fun token(): String? {
-            if (GoogleAuth.accountKey(ctx) != owner) return null
-            return when (val result = GoogleAuth.driveToken(ctx)) {
-                is DriveTokenResult.Ok -> {
-                    withContext(Dispa     suspend fun token(): String? {
             if (GoogleAuth.accountKey(ctx) != owner) return null
             return when (val result = GoogleAuth.driveToken(ctx)) {
                 is DriveTokenResult.Ok -> {

@@ -10,6 +10,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -36,12 +37,17 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lantern.library.data.CatalogBook
@@ -152,8 +158,20 @@ private fun LanternRoot(store: LanternStore) {
         }
         if (!openDiscoveryLink(book)) store.toast("No store link available")
     }
+    var libraryLaidOut by remember { mutableStateOf(false) }
+    var libraryFrameReady by remember { mutableStateOf(false) }
+    LaunchedEffect(libraryLaidOut) {
+        if (!libraryLaidOut) return@LaunchedEffect
+        withFrameNanos { }
+        libraryFrameReady = true
+    }
     LanternTheme(theme) {
         Box(Modifier.fillMaxSize()) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .onGloballyPositioned { libraryLaidOut = true }
+            ) {
             when (val r = tab) {
                 Route.Library -> LibraryScreen(
                     store.books, store.forYou, store.wantToRead, theme,
@@ -193,6 +211,15 @@ private fun LanternRoot(store: LanternStore) {
                 BottomBar(theme, tab, { tab = it }, Modifier.align(Alignment.BottomCenter))
             }
             Box(Modifier.align(Alignment.TopCenter).padding(top = 48.dp)) { FadeToast(store.toast) }
+            }
+            if (!libraryFrameReady) {
+                Image(
+                    painter = painterResource(R.drawable.lore_launch),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize().pointerInput(Unit) {},
+                    contentScale = ContentScale.Crop
+                )
+            }
         }
     }
 }

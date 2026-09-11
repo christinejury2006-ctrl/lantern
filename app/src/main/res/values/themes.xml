@@ -5,17 +5,15 @@
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowDrawsSystemBarBackgrounds">true</item>
-        <item name="android:windowBackground">@drawable/lore_aurora</item>
+        <item name="android:windowBackground">@drawable/lore_launch</item>
         <item name="android:enforceNavigationBarContrast">false</item>
         <item name="android:enforceStatusBarContrast">false</item>
     </style>
 
     <style name="Theme.Lantern.Splash" parent="Theme.SplashScreen">
-        <!-- System splash API is a solid color; wash sits in the Library aurora (lilac→sky). -->
-        <item name="windowSplashScreenBackground">@color/lore_aurora_wash</item>
-        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash</item>
+        <item name="windowSplashScreenBackground">@color/lore_launch_top</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_empty</item>
         <item name="postSplashScreenTheme">@style/Theme.Lantern</item>
-        <item name="android:windowBackground">@drawable/lore_aurora</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">true</item>

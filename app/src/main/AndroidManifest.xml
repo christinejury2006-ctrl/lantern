@@ -12,7 +12,7 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:usesCleartextTraffic="false"
-        android:theme="@style/Theme.Lantern">
+        android:theme="@style/Theme.Lantern.Splash">
         <activity
             android:name=".MainActivity"
             android:exported="true"

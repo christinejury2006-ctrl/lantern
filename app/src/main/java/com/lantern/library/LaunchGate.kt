@@ -245,7 +245,7 @@ private fun WrittenTagline(progress: Float, modifier: Modifier = Modifier) {
             n.drawPath(reveal, mask)
             n.restoreToCount(checkpoint)
         }
-        val unused = Offset.Zero
+        val unused = androidx.compose.ui.geometry.Offset.Zero
         unused.x
     }
 }

@@ -757,6 +757,10 @@ object Recommendations {
             .put("description", book.description)
             .put("categories", categories)
             .put("coverUrl", book.coverUrl ?: "")
+            .put("coverUrls", JSONArray().also { arr ->
+                val urls = book.coverUrls.ifEmpty { listOfNotNull(book.coverUrl) }
+                urls.forEach { arr.put(it) }
+            })
             .put("publishedDate", book.publishedDate)
             .put("averageRating", book.averageRating.toDouble())
             .put("ratingsCount", book.ratingsCount)
@@ -779,7 +783,13 @@ object Recommendations {
             authors = stringList(o.optJSONArray("authors")),
             description = o.optString("description"),
             categories = stringList(o.optJSONArray("categories")),
-            coverUrl = o.optString("coverUrl").ifBlank { null },
+            coverUrl = o.optString("coverUrl").ifBlank { null }.let { primary ->
+                val extras = stringList(o.optJSONArray("coverUrls"))
+                primary ?: extras.firstOrNull()
+            },
+            coverUrls = stringList(o.optJSONArray("coverUrls")).ifEmpty {
+                listOfNotNull(o.optString("coverUrl").ifBlank { null })
+            },
             publishedDate = o.optString("publishedDate"),
             averageRating = o.optDouble("averageRating", 0.0).toFloat(),
             ratingsCount = o.optInt("ratingsCount", 0),

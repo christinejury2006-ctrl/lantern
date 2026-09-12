@@ -93,14 +93,21 @@ fun ReadingProgressBar(progress: Float, modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun CoverFace(title: String, localRes: Int?, pathOrUrl: String?, modifier: Modifier = Modifier, dark: Boolean = false) {
+fun CoverFace(
+    title: String,
+    localRes: Int?,
+    pathOrUrl: String?,
+    modifier: Modifier = Modifier,
+    dark: Boolean = false,
+    fallbacks: List<String> = emptyList()
+) {
     val shape = RoundedCornerShape(10.dp)
     Box(modifier.shadow(8.dp, shape).clip(shape).background(if (dark) SlateHi else Color(0xFFD8C8E8))) {
         when {
             localRes != null -> Image(painterResource(localRes), title, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-            !pathOrUrl.isNullOrBlank() -> {
-                var bmp by remember(pathOrUrl) { mutableStateOf<Bitmap?>(null) }
-                LaunchedEffect(pathOrUrl) { bmp = CoverCache.load(pathOrUrl) }
+            !pathOrUrl.isNullOrBlank() || fallbacks.isNotEmpty() -> {
+                var bmp by remember(pathOrUrl, fallbacks) { mutableStateOf<Bitmap?>(null) }
+                LaunchedEffect(pathOrUrl, fallbacks) { bmp = CoverCache.load(pathOrUrl, fallbacks) }
                 if (bmp != null) Image(bmp!!.asImageBitmap(), title, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                 else Text("Lore", Modifier.align(Alignment.Center).padding(8.dp), color = if (dark) NightText else Ink, fontFamily = Playfair, fontSize = 16.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center, maxLines = 1)
             }

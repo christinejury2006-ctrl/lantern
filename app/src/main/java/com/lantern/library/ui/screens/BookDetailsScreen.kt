@@ -83,7 +83,8 @@ fun BookDetailsOverlay(
             ) {
                 CoverFace(
                     book.title, null, book.coverUrl,
-                    Modifier.width(168.dp).aspectRatio(0.68f), dark
+                    Modifier.width(168.dp).aspectRatio(0.68f), dark,
+                    book.coverUrls
                 )
                 Spacer(Modifier.height(16.dp))
                 Text(book.title, color = ink, fontFamily = Playfair, fontSize = 24.sp, textAlign = TextAlign.Center)

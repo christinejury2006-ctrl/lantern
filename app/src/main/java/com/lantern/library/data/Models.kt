@@ -90,6 +90,7 @@ data class DiscoveryBook(
     val description: String = "",
     val categories: List<String> = emptyList(),
     val coverUrl: String? = null,
+    val coverUrls: List<String> = emptyList(),
     val publishedDate: String = "",
     val averageRating: Float = 0f,
     val ratingsCount: Int = 0,

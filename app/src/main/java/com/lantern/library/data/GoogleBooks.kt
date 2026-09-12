@@ -128,7 +128,8 @@ object GoogleBooks {
             authors = authors,
             description = info.optString("description").trim(),
             categories = categories,
-            coverUrl = cover,
+            coverUrl = covers.firstOrNull(),
+            coverUrls = covers,
             publishedDate = info.optString("publishedDate").trim(),
             averageRating = info.optDouble("averageRating", 0.0).toFloat(),
             ratingsCount = info.optInt("ratingsCount", 0),
@@ -151,15 +152,18 @@ object GoogleBooks {
         return out
     }
 
-    private fun pickCover(images: JSONObject?): String? {
-        if (images == null) return null
+    private fun pickCover(images: JSONObject?): List<String> {
+        if (images == null) return emptyList()
         val fields = listOf("extraLarge", "large", "medium", "small", "thumbnail", "smallThumbnail")
+        val out = ArrayList<String>(fields.size)
+        val seen = HashSet<String>()
         for (field in fields) {
             val raw = images.optString(field).trim()
             if (!raw.startsWith("http")) continue
-            return https(raw)
+            val url = https(raw)
+            if (seen.add(url)) out += url
         }
-        return null
+        return out
     }
 
     private fun https(url: String): String =

@@ -187,7 +187,8 @@ fun LibraryScreen(
                                         onClick = { onOpenDiscovery(book) },
                                         onLongClick = { onSaveWant(book) }
                                     ),
-                                    dark
+                                    dark,
+                                    book.coverUrls
                                 )
                                 SavedBadge(Modifier.align(Alignment.TopEnd).padding(6.dp))
                             }
@@ -308,7 +309,8 @@ private fun ForYouShelf(
                                     onClick = { onOpen(book) },
                                     onLongClick = { onSave(book) }
                                 ),
-                            dark
+                            dark,
+                            book.coverUrls
                         )
                         if (wantToRead.any { Recommendations.sameWork(it, book) }) {
                             SavedBadge(Modifier.align(Alignment.TopEnd).padding(end = 8.dp, top = 8.dp))

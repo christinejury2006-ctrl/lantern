@@ -244,7 +244,5 @@ private fun WrittenTagline(progress: Float, modifier: Modifier = Modifier) {
             n.drawPath(reveal, mask)
             n.restoreToCount(checkpoint)
         }
-        val unused = Offset.Zero
-        unused.x
     }
 }

@@ -30,9 +30,14 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace
 
+      - name: Rename APK
+        run: |
+          src="$(ls app/build/outputs/apk/debug/*.apk | head -n 1)"
+          mv "$src" app/build/outputs/apk/debug/lore-debug.apk
+
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: Lantern-debug
-          path: app/build/outputs/apk/debug/*.apk
+          name: Lore-debug
+          path: app/build/outputs/apk/debug/lore-debug.apk
           if-no-files-found: error

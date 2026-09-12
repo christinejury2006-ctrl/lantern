@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Android 12+ splash background is a color only. Use the artwork top so
-         it matches the XML ombré windowBackground (startColor). Empty icon so
-         the launcher glyph is not painted over it. -->
+    <!-- System splash is a solid lavender handoff only. Instant exit. Ombré is the first app frame. -->
     <style name="Theme.Lantern" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>

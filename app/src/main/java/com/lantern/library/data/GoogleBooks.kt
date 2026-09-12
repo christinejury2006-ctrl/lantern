@@ -5,7 +5,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
@@ -158,32 +157,9 @@ object GoogleBooks {
         for (field in fields) {
             val raw = images.optString(field).trim()
             if (!raw.startsWith("http")) continue
-            return normalizeCoverUrl(raw, field)
+            return https(raw)
         }
         return null
-    }
-
-    /** Prefer a Google-hosted larger zoom when the API only handed us a tiny thumbnail URL. Does not interpolate pixels. */
-    private fun normalizeCoverUrl(raw: String, field: String): String {
-        val httpsUrl = https(raw)
-        val tiny = field == "thumbnail" || field == "smallThumbnail"
-        return if (tiny) preferLargerGoogleCover(httpsUrl) else httpsUrl
-    }
-
-    private fun preferLargerGoogleCover(url: String): String {
-        val parsed = url.toHttpUrlOrNull() ?: return url
-        val host = parsed.host.lowercase()
-        val googleHost = host == "books.google.com" ||
-            host.endsWith(".books.google.com") ||
-            host.contains("googleusercontent.com")
-        if (!googleHost) return url
-        val zoom = parsed.queryParameter("zoom")
-        if (zoom != "1" && zoom != "5") return url
-        return parsed.newBuilder()
-            .removeAllQueryParameters("zoom")
-            .addQueryParameter("zoom", "0")
-            .build()
-            .toString()
     }
 
     private fun https(url: String): String =

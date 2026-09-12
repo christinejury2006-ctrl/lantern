@@ -243,35 +243,137 @@ object Recommendations {
     ): List<DiscoveryBook> {
         if (books.isEmpty()) return emptyList()
         val yearNow = Calendar.getInstance().get(Calendar.YEAR)
-        val needles = interests.mapNotNull { InterestCatalog.byId(it)?.label?.lowercase(Locale.US) }
-        val ranked = books.sortedWith(
-            compareBy<DiscoveryBook> { if (it.volumeId in avoidIds) 1 else 0 }
-                .thenByDescending { interestHit(it, needles) }
-                .thenByDescending { quality(it, yearNow) }
+        val phrases = interestPhrases(interests)
+        data class Scored(
+            val book: DiscoveryBook,
+            val genre: Int,
+            val quality: Double,
+            val year: Int,
+            val popular: Double
         )
+        val scored = books.map { book ->
+            val year = book.publishedDate.take(4).toIntOrNull() ?: 0
+            val popular = book.averageRating.coerceIn(0f, 5f) * ln(1.0 + book.ratingsCount.coerceAtLeast(0))
+            Scored(book, genreStrength(book, phrases), quality(book, yearNow), year, popular)
+        }
+        val byGenre = compareByDescending<Scored> { it.genre }
+            .thenByDescending { it.quality }
+            .thenBy { it.book.volumeId }
+        val eligible = scored.filter { it.genre > 0 }
+        val corePool = eligible.filter { it.genre >= 2 }.sortedWith(byGenre)
+        val popularPool = eligible.filter { row ->
+            row.genre >= 2 && (
+                (row.book.ratingsCount >= 80 && row.book.averageRating >= 3.7f) ||
+                    row.popular >= 8.0
+                )
+        }.sortedWith(
+            compareByDescending<Scored> { it.popular }
+                .thenByDescending { it.genre }
+                .thenBy { it.book.volumeId }
+        )
+        val newPool = eligible.filter { it.genre >= 2 && it.year >= yearNow - 3 }
+            .sortedWith(
+                compareByDescending<Scored> { it.year }
+                    .thenByDescending { it.genre }
+                    .thenByDescending { it.quality }
+                    .thenBy { it.book.volumeId }
+            )
+        val popularTop = popularPool.take(8).map { it.book.volumeId }.toSet()
+        val newTop = newPool.take(8).map { it.book.volumeId }.toSet()
+        val discoveryPool = eligible.filter {
+            it.book.volumeId !in popularTop && it.book.volumeId !in newTop
+        }.sortedWith(
+            compareByDescending<Scored> { it.genre }
+                .thenBy { it.popular }
+                .thenBy { it.book.volumeId }
+        )
+        val overflow = eligible.sortedWith(byGenre)
         val usedIds = HashSet<String>()
         val authorCount = HashMap<String, Int>()
         val picked = ArrayList<DiscoveryBook>(LIMIT)
-        fun tryPick(book: DiscoveryBook, skipAvoid: Boolean) {
-            if (picked.size >= LIMIT) return
-            if (skipAvoid && book.volumeId in avoidIds) return
-            if (book.volumeId in usedIds) return
-            if (picked.any { sameWork(it, book) }) return
+        fun tryAdd(row: Scored, skipAvoid: Boolean): Boolean {
+            if (picked.size >= LIMIT) return false
+            val book = row.book
+            if (skipAvoid && book.volumeId in avoidIds) return false
+            if (book.volumeId in usedIds) return false
+            if (picked.any { sameWork(it, book) }) return false
             val key = authorKey(book)
-            if (key.isNotEmpty() && (authorCount[key] ?: 0) >= 2) return
+            if (key.isNotEmpty() && (authorCount[key] ?: 0) >= 2) return false
             picked += book
             usedIds += book.volumeId
             if (key.isNotEmpty()) authorCount[key] = (authorCount[key] ?: 0) + 1
+            return true
         }
-        ranked.forEach { tryPick(it, skipAvoid = true) }
-        if (picked.size < LIMIT) ranked.forEach { tryPick(it, skipAvoid = false) }
+        fun takeFrom(list: List<Scored>, quota: Int, skipAvoid: Boolean): Int {
+            var n = 0
+            for (row in list) {
+                if (n >= quota || picked.size >= LIMIT) break
+                if (tryAdd(row, skipAvoid)) n++
+            }
+            return n
+        }
+        val coreN = takeFrom(corePool, 4, true)
+        val popN = takeFrom(popularPool, 3, true)
+        val newN = takeFrom(newPool, 3, true)
+        val discN = takeFrom(discoveryPool, 2, true)
+        val overN = takeFrom(overflow, LIMIT - picked.size, true)
+        if (picked.size < LIMIT) takeFrom(overflow, LIMIT - picked.size, false)
+        if (picked.size < LIMIT) takeFrom(scored.sortedWith(byGenre), LIMIT - picked.size, false)
+        RecDiag.log("buckets core=$coreN pop=$popN new=$newN disc=$discN overflow=$overN")
         return picked
     }
 
-    private fun interestHit(book: DiscoveryBook, needles: List<String>): Int {
-        if (needles.isEmpty()) return 0
-        val blob = (book.categories + book.title).joinToString(" ").lowercase(Locale.US)
-        return needles.count { it.isNotEmpty() && blob.contains(it) }
+    private data class InterestPhrase(val phrase: String, val romantasy: Boolean)
+
+    private fun interestPhrases(interests: List<String>): List<InterestPhrase> {
+        val out = ArrayList<InterestPhrase>()
+        interests.forEach { id ->
+            val spec = InterestCatalog.byId(id) ?: return@forEach
+            val romantasy = id == "romantasy"
+            fun add(raw: String) {
+                val n = normalize(raw)
+                if (n.length < 3 || n in SUBJECT_STOP) return
+                if (out.none { it.phrase == n && it.romantasy == romantasy }) {
+                    out += InterestPhrase(n, romantasy)
+                }
+            }
+            add(spec.label)
+            if (romantasy) return@forEach
+            spec.queries.forEach { q ->
+                Regex("\"([^\"]+)\"").findAll(q).forEach { add(it.groupValues[1]) }
+                Regex("(?i)subject:\"([^\"]+)\"").findAll(q).forEach { add(it.groupValues[1]) }
+                Regex("(?i)subject:([^\\s\"]+)").findAll(q).forEach { add(it.groupValues[1]) }
+                val bare = q.replace("\"", " ").replace(Regex("(?i)subject:"), " ")
+                add(bare)
+            }
+        }
+        return out
+    }
+
+    private fun hasPhrase(haystack: String, phrase: String): Boolean {
+        if (phrase.isEmpty() || haystack.isEmpty()) return false
+        return " $haystack ".contains(" $phrase ")
+    }
+
+    private fun genreStrength(book: DiscoveryBook, phrases: List<InterestPhrase>): Int {
+        if (phrases.isEmpty()) return 0
+        val cat = normalize(book.categories.joinToString(" "))
+        val title = normalize(book.title)
+        val desc = normalize(book.description.take(1200))
+        var best = 0
+        phrases.forEach { item ->
+            var s = 0
+            if (hasPhrase(cat, item.phrase)) s = 3
+            else if (hasPhrase(title, item.phrase)) s = 2
+            else if (hasPhrase(desc, item.phrase)) s = 1
+            if (item.romantasy) {
+                val fan = hasPhrase(cat, "fantasy") || hasPhrase(title, "fantasy")
+                val rom = hasPhrase(cat, "romance") || hasPhrase(title, "romance")
+                if (fan && rom) s = maxOf(s, 3)
+            }
+            if (s > best) best = s
+        }
+        return best
     }
 
     private data class TasteAuthor(val name: String, val weight: Int, val recency: Long)

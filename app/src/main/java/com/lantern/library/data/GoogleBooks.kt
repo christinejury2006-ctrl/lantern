@@ -104,7 +104,7 @@ object GoogleBooks {
         if (title.isEmpty()) return null
         val authors = stringList(info.optJSONArray("authors"))
         val categories = stringList(info.optJSONArray("categories"))
-        val cover = pickCover(info.optJSONObject("imageLinks"))
+        val covers = pickCover(info.optJSONObject("imageLinks"))
         val identifiers = info.optJSONArray("industryIdentifiers")
         var isbn: String? = null
         if (identifiers != null) {

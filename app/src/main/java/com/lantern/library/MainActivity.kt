@@ -4,14 +4,21 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import com.lantern.library.data.StartupTrace
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
-        com.lantern.library.data.StartupTrace.mark("MainActivity.onCreate")
+        StartupTrace.mark("MainActivity.onCreate")
         val splash = installSplashScreen()
-        splash.setOnExitAnimationListener { it.remove() }
+        StartupTrace.mark("installSplashScreen")
+        splash.setOnExitAnimationListener {
+            StartupTrace.mark("splash exit remove")
+            it.remove()
+        }
         super.onCreate(savedInstanceState)
-        com.lantern.library.data.StartupTrace.mark("setContent")
+        StartupTrace.mark("super.onCreate")
+        StartupTrace.mark("setContent")
         setContent { LaunchGate() }
+        StartupTrace.mark("setContent returned")
     }
 }

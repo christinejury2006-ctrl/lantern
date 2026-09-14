@@ -1,28 +1,21 @@
 package com.lantern.library
 
-import android.graphics.BitmapFactory
+import android.graphics.LinearGradient
+import android.graphics.RadialGradient
 import android.graphics.Paint as AndroidPaint
 import android.graphics.Path as AndroidPath
 import android.graphics.PathMeasure
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
+import android.graphics.Rect
+import android.graphics.RectF
+import android.graphics.Shader
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -30,163 +23,81 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asAndroidPath
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.graphics.Path
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.lantern.library.data.LanternStore
 import com.lantern.library.data.StartupTrace
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlin.math.min
 
-private val LoreOmbre = Brush.verticalGradient(
+private val PosterOmbre = Brush.verticalGradient(
     listOf(
-        Color(0xFFC8A1F3),
-        Color(0xFFC9B8F8),
-        Color(0xFF7EC8E8),
-        Color(0xFF6ED4C8)
+        Color(0xFFC29BFB),
+        Color(0xFFBE9EFB),
+        Color(0xFFB5A5FB),
+        Color(0xFFA8AAFA),
+        Color(0xFF99BEF5),
+        Color(0xFF82C9EF),
+        Color(0xFF76D7E8),
+        Color(0xFF71DCE6)
     )
 )
+
+private const val TOTAL_MS = 3450f
+private val DST_IN = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
+private val DST_OUT = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
 
 @Composable
 internal fun LoreAfterSplash() {
     var introDone by remember { mutableStateOf(false) }
     var storeAllowed by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        withFrameNanos { }
-        StartupTrace.mark("first Lore custom frame")
-        storeAllowed = true
-    }
-    Box(Modifier.fillMaxSize().background(LoreOmbre)) {
-        LoreIntro(onFinished = { introDone = true })
+    val fade = remember { Animatable(0f) }
+    Box(Modifier.fillMaxSize()) {
         if (storeAllowed) {
             val store: LanternStore = viewModel()
-            if (introDone && store.hydrated) {
-                LanternRoot(store)
+            LaunchedEffect(introDone, store.hydrated) {
+                if (introDone && store.hydrated && fade.value == 0f) {
+                    fade.animateTo(1f, tween(280))
+                }
             }
+            if (fade.value > 0f) {
+                Box(Modifier.fillMaxSize().graphicsLayer { alpha = fade.value }) {
+                    LanternRoot(store)
+                }
+            }
+        }
+        if (fade.value < 1f) {
+            LorePosterScene(
+                onFirstFrame = { storeAllowed = true },
+                onFinished = { introDone = true },
+                modifier = Modifier.fillMaxSize().graphicsLayer { alpha = 1f - fade.value }
+            )
         }
     }
 }
 
 @Composable
-private fun LoreIntro(onFinished: () -> Unit) {
+private fun LorePosterScene(
+    onFirstFrame: () -> Unit,
+    onFinished: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     remember {
         StartupTrace.mark("LoreIntro initialization")
         true
     }
-    var layers by remember { mutableStateOf(false) }
-    val sky = remember { Animatable(0f) }
-    val ground = remember { Animatable(0f) }
-    val icon = remember { Animatable(0f) }
-    val word = remember { Animatable(0f) }
-    val tag = remember { Animatable(0f) }
-    LaunchedEffect(Unit) {
-        withFrameNanos { }
-        layers = true
-        launch { sky.animateTo(1f, tween(700, easing = FastOutSlowInEasing)) }
-        launch { ground.animateTo(1f, tween(700, delayMillis = 220, easing = FastOutSlowInEasing)) }
-        launch { icon.animateTo(1f, tween(500, delayMillis = 780, easing = FastOutSlowInEasing)) }
-        launch { word.animateTo(1f, tween(480, delayMillis = 1180, easing = FastOutSlowInEasing)) }
-        launch { tag.animateTo(1f, tween(1700, delayMillis = 1580, easing = LinearEasing)) }
-        kotlinx.coroutines.delay(1580L + 1700L)
-        StartupTrace.mark("lore intro finished")
-        onFinished()
-    }
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        val artAspect = 704f / 1520f
-        val screen = maxWidth / maxHeight
-        val aw = if (screen > artAspect) maxHeight * artAspect else maxWidth
-        val ah = if (screen > artAspect) maxHeight else maxWidth / artAspect
-        Box(
-            Modifier
-                .align(Alignment.Center)
-                .size(aw, ah)
-        ) {
-            if (layers) {
-                Image(
-                    painterResource(R.drawable.lore_splash_lines_sky),
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize().graphicsLayer { alpha = sky.value },
-                    contentScale = ContentScale.Fit
-                )
-                Image(
-                    painterResource(R.drawable.lore_splash_lines_ground),
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize().graphicsLayer { alpha = ground.value },
-                    contentScale = ContentScale.Fit
-                )
-                Column(
-                    Modifier.fillMaxSize(),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Spacer(Modifier.weight(0.38f))
-                    Box(contentAlignment = Alignment.Center) {
-                        Box(
-                            Modifier
-                                .size(148.dp)
-                                .graphicsLayer { alpha = icon.value * 0.85f }
-                                .background(
-                                    Brush.radialGradient(
-                                        listOf(Color.White.copy(0.5f), Color.Transparent)
-                                    ),
-                                    CircleShape
-                                )
-                        )
-                        Image(
-                            painterResource(R.drawable.lore_splash_icon),
-                            contentDescription = null,
-                            modifier = Modifier
-                                .size(112.dp)
-                                .graphicsLayer { alpha = icon.value },
-                            contentScale = ContentScale.Fit
-                        )
-                    }
-                    Spacer(Modifier.height(18.dp))
-                    val lift = with(LocalDensity.current) { 8.dp.toPx() }
-                    Image(
-                        painterResource(R.drawable.lore_splash_wordmark),
-                        contentDescription = "Lore",
-                        modifier = Modifier
-                            .fillMaxWidth(0.78f)
-                            .graphicsLayer {
-                                alpha = word.value
-                                translationY = (1f - word.value) * lift
-                            },
-                        contentScale = ContentScale.Fit
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    WrittenTagline(
-                        progress = tag.value,
-                        modifier = Modifier
-                            .fillMaxWidth(0.72f)
-                            .aspectRatio(TaglineGlyph.W / TaglineGlyph.H)
-                    )
-                    Spacer(Modifier.weight(0.42f))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun WrittenTagline(progress: Float, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    val bitmap = remember {
-        BitmapFactory.decodeResource(context.resources, R.drawable.lore_splash_tagline)
-    }
+    val clock = remember { Animatable(0f) }
     val strokes = remember {
         TaglineGlyph.strokes.map { coords ->
-            val p = Path()
+            val p = AndroidPath()
             var i = 0
             var first = true
             while (i + 1 < coords.size) {
@@ -204,52 +115,178 @@ private fun WrittenTagline(progress: Float, modifier: Modifier = Modifier) {
         }
     }
     val measures = remember(strokes) {
-        strokes.map { PathMeasure(it.asAndroidPath(), false) }
+        strokes.map { PathMeasure(it, false) }
     }
-    val totalLen = remember(measures) { measures.sumOf { it.length.toDouble() }.toFloat().coerceAtLeast(1f) }
-    Canvas(
-        modifier.height(28.dp)
-    ) {
-        if (bitmap == null) return@Canvas
-        val dstW = size.width
-        val dstH = size.width * (TaglineGlyph.H / TaglineGlyph.W)
-        val top = (size.height - dstH) / 2f
-        val sx = dstW / TaglineGlyph.W
-        val sy = dstH / TaglineGlyph.H
-        val reveal = AndroidPath()
-        var remain = (progress.coerceIn(0f, 1f) * totalLen)
-        measures.forEach { pm ->
-            if (remain <= 0f) return@forEach
-            val take = minOf(remain, pm.length)
-            val piece = AndroidPath()
-            pm.getSegment(0f, take, piece, true)
-            reveal.addPath(piece)
-            remain -= take
-        }
-        val matrix = android.graphics.Matrix().apply { setScale(sx, sy) }
-        reveal.transform(matrix)
+    val totalLen = remember(measures) {
+        measures.sumOf { it.length.toDouble() }.toFloat().coerceAtLeast(1f)
+    }
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) { LorePoster.decode(context) }
+        withFrameNanos { }
+        StartupTrace.mark("first Lore custom frame")
+        onFirstFrame()
+        clock.animateTo(1f, tween(TOTAL_MS.toInt(), easing = LinearEasing))
+        StartupTrace.mark("lore intro finished")
+        onFinished()
+    }
+    val body = LorePoster.body
+    val sparkles = LorePoster.sparkles
+    val ms = clock.value * TOTAL_MS
+    Canvas(modifier) {
+        val dst = fitRect(size.width, size.height, LorePoster.W.toFloat(), LorePoster.H.toFloat())
+        val ombreT = smooth(((ms - 0f) / 400f).coerceIn(0f, 1f))
+        val sceneT = smooth(((ms - 250f) / 1150f).coerceIn(0f, 1f))
+        val iconT = smooth(((ms - 950f) / 600f).coerceIn(0f, 1f))
+        val wordT = smooth(((ms - 1350f) / 600f).coerceIn(0f, 1f))
+        val writeT = ((ms - 1850f) / 1400f).coerceIn(0f, 1f)
+        val sparkT = smooth(((ms - 3150f) / 300f).coerceIn(0f, 1f))
+
+        drawRect(Color(0xFFC8A1F3))
+        drawRect(PosterOmbre, alpha = ombreT)
+
+        if (body == null) return@Canvas
+        val src = Rect(0, 0, body.width, body.height)
+        val scale = dst.width() / LorePoster.W
         drawIntoCanvas { canvas ->
             val n = canvas.nativeCanvas
-            val checkpoint = n.saveLayer(0f, top, dstW, top + dstH, null)
-            n.drawBitmap(
-                bitmap,
-                android.graphics.Rect(0, 0, bitmap.width, bitmap.height),
-                android.graphics.RectF(0f, top, dstW, top + dstH),
-                null
-            )
-            val mask = AndroidPaint().apply {
-                isAntiAlias = true
-                style = AndroidPaint.Style.STROKE
-                strokeCap = AndroidPaint.Cap.ROUND
-                strokeJoin = AndroidPaint.Join.ROUND
-                strokeWidth = dstH * 0.62f
-                color = android.graphics.Color.WHITE
-                xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
+            val bmpPaint = AndroidPaint().apply { isFilterBitmap = true; isAntiAlias = true }
+
+            if (sceneT > 0f) {
+                val layer = n.saveLayer(dst, null)
+                n.drawBitmap(body, src, dst, bmpPaint)
+                val gp = AndroidPaint().apply {
+                    isAntiAlias = true
+                    shader = LinearGradient(
+                        dst.right, dst.top, dst.left, dst.bottom,
+                        intArrayOf(
+                            android.graphics.Color.WHITE,
+                            android.graphics.Color.WHITE,
+                            android.graphics.Color.TRANSPARENT
+                        ),
+                        floatArrayOf(0f, (sceneT * 0.82f).coerceIn(0f, 1f), sceneT.coerceIn(0.001f, 1f)),
+                        Shader.TileMode.CLAMP
+                    )
+                    xfermode = DST_IN
+                }
+                n.drawRect(dst, gp)
+                val hole = AndroidPaint().apply {
+                    isAntiAlias = true
+                    color = android.graphics.Color.BLACK
+                    xfermode = DST_OUT
+                }
+                n.drawRoundRect(mapRect(330f, 655f, 525f, 868f, dst, scale), 48f * scale, 48f * scale, hole)
+                n.drawRect(mapRect(130f, 885f, 720f, 1135f, dst, scale), hole)
+                n.drawRect(mapRect(145f, 1135f, 715f, 1225f, dst, scale), hole)
+                n.restoreToCount(layer)
             }
-            n.drawPath(reveal, mask)
-            n.restoreToCount(checkpoint)
+
+            if (iconT > 0f) {
+                val ir = mapRect(318f, 640f, 538f, 882f, dst, scale)
+                val layer = n.saveLayer(ir, null)
+                n.drawBitmap(body, src, dst, bmpPaint)
+                val radius = (ir.width().coerceAtLeast(ir.height()) * 0.62f) * (0.35f + 0.65f * iconT)
+                val mask = AndroidPaint().apply {
+                    isAntiAlias = true
+                    shader = RadialGradient(
+                        ir.centerX(), ir.centerY(), radius.coerceAtLeast(1f),
+                        intArrayOf(
+                            android.graphics.Color.WHITE,
+                            android.graphics.Color.WHITE,
+                            android.graphics.Color.TRANSPARENT
+                        ),
+                        floatArrayOf(0f, 0.72f, 1f),
+                        Shader.TileMode.CLAMP
+                    )
+                    xfermode = DST_IN
+                }
+                n.drawRect(ir, mask)
+                n.restoreToCount(layer)
+            }
+
+            if (wordT > 0f) {
+                val wr = mapRect(130f, 885f, 720f, 1135f, dst, scale)
+                val layer = n.saveLayer(wr, null)
+                n.drawBitmap(body, src, dst, bmpPaint)
+                val gp = AndroidPaint().apply {
+                    isAntiAlias = true
+                    shader = LinearGradient(
+                        wr.left, wr.centerY(), wr.right, wr.centerY(),
+                        intArrayOf(
+                            android.graphics.Color.WHITE,
+                            android.graphics.Color.WHITE,
+                            android.graphics.Color.TRANSPARENT
+                        ),
+                        floatArrayOf(0f, (wordT * 0.88f).coerceIn(0f, 1f), wordT.coerceIn(0.001f, 1f)),
+                        Shader.TileMode.CLAMP
+                    )
+                    xfermode = DST_IN
+                }
+                n.drawRect(wr, gp)
+                n.restoreToCount(layer)
+            }
+
+            if (writeT > 0f) {
+                val tr = mapRect(145f, 1135f, 715f, 1225f, dst, scale)
+                val layer = n.saveLayer(tr, null)
+                n.drawBitmap(body, src, dst, bmpPaint)
+                val reveal = AndroidPath()
+                var remain = writeT * totalLen
+                measures.forEach { pm ->
+                    if (remain <= 0f) return@forEach
+                    val take = min(remain, pm.length)
+                    val piece = AndroidPath()
+                    pm.getSegment(0f, take, piece, true)
+                    reveal.addPath(piece)
+                    remain -= take
+                }
+                val mx = android.graphics.Matrix()
+                mx.setScale(scale, scale)
+                mx.postTranslate(dst.left, dst.top)
+                reveal.transform(mx)
+                val mask = AndroidPaint().apply {
+                    isAntiAlias = true
+                    style = AndroidPaint.Style.STROKE
+                    strokeCap = AndroidPaint.Cap.ROUND
+                    strokeJoin = AndroidPaint.Join.ROUND
+                    strokeWidth = 14f * scale
+                    color = android.graphics.Color.WHITE
+                    xfermode = DST_IN
+                }
+                n.drawPath(reveal, mask)
+                n.restoreToCount(layer)
+            }
+
+            if (sparkT > 0f && sparkles != null) {
+                val sp = AndroidPaint().apply {
+                    isFilterBitmap = true
+                    isAntiAlias = true
+                    alpha = (sparkT * 255f).toInt().coerceIn(0, 255)
+                }
+                n.drawBitmap(sparkles, src, dst, sp)
+            }
         }
-        val unused = androidx.compose.ui.geometry.Offset.Zero
-        unused.x
     }
+}
+
+private fun fitRect(dw: Float, dh: Float, aw: Float, ah: Float): RectF {
+    val s = min(dw / aw, dh / ah)
+    val w = aw * s
+    val h = ah * s
+    val l = (dw - w) / 2f
+    val t = (dh - h) / 2f
+    return RectF(l, t, l + w, t + h)
+}
+
+private fun mapRect(l: Float, t: Float, r: Float, b: Float, dst: RectF, scale: Float): RectF {
+    return RectF(
+        dst.left + l * scale,
+        dst.top + t * scale,
+        dst.left + r * scale,
+        dst.top + b * scale
+    )
+}
+
+private fun smooth(t: Float): Float {
+    val x = t.coerceIn(0f, 1f)
+    return x * x * (3f - 2f * x)
 }

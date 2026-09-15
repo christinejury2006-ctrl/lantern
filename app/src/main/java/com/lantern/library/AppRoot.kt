@@ -173,7 +173,10 @@ internal fun LanternRoot(store: LanternStore) {
                     onAnalyze = { store.analyzeWeb(it) },
                     onWebKeep = { store.webKeep(it) },
                     onWebRemove = { store.webRemove(it) },
-                    onWebCancel = { store.webCancel() }
+                    onWebCancel = { store.webCancel() },
+                    onOpenChapter = { store.webOpenChapter(it) },
+                    onFollowPossible = { store.webFollowPossible(it) },
+                    onIgnorePossible = { store.webIgnorePossible(it) }
                 )
                 Route.Search -> SearchScreen(theme) { remote -> store.download(remote) { book -> store.openForReading(book) { ready -> if (ready != null) tab = Route.Reader(ready.id) } } }
                 Route.Profile -> ProfileScreen(

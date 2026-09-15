@@ -53,7 +53,10 @@ fun StudioScreen(
     onAnalyze: (String) -> Unit,
     onWebKeep: (String) -> Unit,
     onWebRemove: (String) -> Unit,
-    onWebCancel: () -> Unit
+    onWebCancel: () -> Unit,
+    onOpenChapter: (String) -> Unit,
+    onFollowPossible: (String) -> Unit,
+    onIgnorePossible: (String) -> Unit
 ) {
     val dark = theme == ReaderTheme.DARK
     val ink = if (dark) NightText else Ink
@@ -74,7 +77,11 @@ fun StudioScreen(
                 modifier = Modifier.padding(top = 6.dp)
             )
             when {
-                web != null -> WebPane(web, dark, ink, mute, onWebKeep, onWebRemove, onWebCancel)
+                web != null -> WebPane(
+                    web, dark, ink, mute,
+                    onWebKeep, onWebRemove, onWebCancel,
+                    onOpenChapter, onFollowPossible, onIgnorePossible
+                )
                 filePhase == StudioPhase.Extracting -> Text(
                     "Reading this book…",
                     color = mute,
@@ -143,11 +150,14 @@ private fun WebPane(
     mute: Color,
     onKeep: (String) -> Unit,
     onRemove: (String) -> Unit,
-    onCancel: () -> Unit
+    onCancel: () -> Unit,
+    onOpenChapter: (String) -> Unit,
+    onFollowPossible: (String) -> Unit,
+    onIgnorePossible: (String) -> Unit
 ) {
     when (web.phase) {
         WebPhase.Fetching -> Text(
-            "Analyzing page…",
+            web.progress.ifBlank { "Analyzing page…" },
             color = mute,
             fontSize = 15.sp,
             modifier = Modifier.padding(top = 24.dp)
@@ -158,8 +168,39 @@ private fun WebPane(
         }
         WebPhase.Ready -> {
             val kind = if (web.kind == PageKind.Images) "Images" else "Text"
-            Text(web.title.ifBlank { "Untitled page" }, color = ink, fontFamily = Playfair, fontSize = 22.sp, modifier = Modifier.padding(top = 18.dp))
-            Text(kind, color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+            Text(web.title.ifBlank { "Untitled book" }, color = ink, fontFamily = Playfair, fontSize = 22.sp, modifier = Modifier.padding(top = 18.dp))
+            Text("$kind  ·  ${web.chapters.size} chapter${if (web.chapters.size == 1) "" else "s"}", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+            FieldLabel("Book", mute)
+            web.chapters.forEach { ch ->
+                val mark = if (ch.hasUnsure) "⚠" else "✓"
+                val on = ch.id == web.open?.id
+                Text(
+                    "$mark  ${ch.title}",
+                    color = if (on) Coral else ink,
+                    fontSize = 15.sp,
+                    modifier = Modifier.fillMaxWidth().clickable { onOpenChapter(ch.id) }.padding(vertical = 6.dp)
+                )
+            }
+            if (web.possible.isNotEmpty()) {
+                FieldLabel("Possible next chapter found", mute)
+                web.possible.forEach { g ->
+                    GlassCard(Modifier.fillMaxWidth().padding(bottom = 8.dp), dark, 16) {
+                        Column(Modifier.padding(14.dp)) {
+                            Text(g.label, color = ink, fontSize = 14.sp)
+                            Text(g.reason, color = mute, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                            Row(Modifier.padding(top = 8.dp)) {
+                                Text("Keep", color = Coral, fontSize = 14.sp, modifier = Modifier.clickable { onFollowPossible(g.id) }.padding(end = 18.dp, top = 4.dp, bottom = 4.dp))
+                                Text("Ignore", color = ink, fontSize = 14.sp, modifier = Modifier.clickable { onIgnorePossible(g.id) }.padding(top = 4.dp, bottom = 4.dp))
+                            }
+                        }
+                    }
+                }
+            }
+            val open = web.open
+            if (open != null) {
+                FieldLabel("Chapter", mute)
+                Text(open.title, color = ink, fontFamily = Playfair, fontSize = 18.sp)
+            }
             val keptText = web.kept.filter { it.type == WebBlockType.Text }
             val keptImg = web.kept.filter { it.type == WebBlockType.Image }
             val unsure = web.unsure

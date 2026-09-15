@@ -487,29 +487,17 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             web = com.lantern.library.studio.WebDraft(
                 phase = com.lantern.library.studio.WebPhase.Fetching,
-                url = url.trim()
+                url = url.trim(),
+                progress = "Reading first page…"
             )
             val cache = getApplication<Application>().cacheDir
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    com.lantern.library.studio.WebFetch.clearWebDir(cache)
-                    val page = com.lantern.library.studio.WebFetch.page(url)
-                    val draft = com.lantern.library.studio.PageAnalyzer.analyze(page.html, page.url)
-                    val dir = com.lantern.library.studio.WebFetch.webDir(cache)
-                    val preview = draft.candidates.filter {
-                        it.type == com.lantern.library.studio.WebBlockType.Image &&
-                            it.verdict != com.lantern.library.studio.WebVerdict.Drop &&
-                            !it.imageUrl.isNullOrBlank()
-                    }.take(12)
-                    val updated = draft.candidates.map { c ->
-                        val hit = preview.indexOfFirst { it.id == c.id }
-                        if (hit < 0) c else {
-                            val dest = File(dir, "img_$hit.jpg")
-                            val ok = com.lantern.library.studio.WebFetch.image(c.imageUrl!!, dest)
-                            if (ok) c.copy(localPath = dest.absolutePath) else c
+                    com.lantern.library.studio.BookCrawler.crawl(url, cache) { msg ->
+                        viewModelScope.launch {
+                            if (gen == webGen) web = web?.copy(progress = msg)
                         }
                     }
-                    draft.copy(candidates = updated)
                 }
             }
             if (gen != webGen) return@launch
@@ -527,9 +515,51 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
 
     fun webRemove(id: String) = webOverride(id, com.lantern.library.studio.WebVerdict.Drop)
 
+    fun webOpenChapter(id: String) {
+        val cur = web ?: return
+        if (cur.chapters.any { it.id == id }) web = cur.copy(openChapterId = id)
+    }
+
+    fun webIgnorePossible(id: String) {
+        val cur = web ?: return
+        web = cur.copy(possible = cur.possible.filterNot { it.id == id })
+    }
+
+    fun webFollowPossible(id: String) {
+        val cur = web ?: return
+        val guess = cur.possible.firstOrNull { it.id == id } ?: return
+        val gen = webGen
+        viewModelScope.launch {
+            web = cur.copy(progress = "Reading possible chapter…", possible = cur.possible.filterNot { it.id == id })
+            val chapter = withContext(Dispatchers.IO) {
+                runCatching {
+                    com.lantern.library.studio.BookCrawler.fetchOne(
+                        guess.url,
+                        getApplication<Application>().cacheDir,
+                        cur.chapters.size
+                    )
+                }.getOrNull()
+            }
+            if (gen != webGen) return@launch
+            val now = web ?: return@launch
+            web = if (chapter == null) now.copy(progress = "")
+            else now.copy(
+                progress = "",
+                chapters = now.chapters + chapter,
+                openChapterId = chapter.id
+            )
+        }
+    }
+
     private fun webOverride(id: String, verdict: com.lantern.library.studio.WebVerdict) {
         val cur = web ?: return
-        web = cur.copy(candidates = cur.candidates.map { if (it.id == id) it.copy(verdict = verdict) else it })
+        val openId = cur.openChapterId ?: cur.chapters.firstOrNull()?.id
+        web = cur.copy(
+            chapters = cur.chapters.map { ch ->
+                if (ch.id != openId) ch
+                else ch.copy(candidates = ch.candidates.map { if (it.id == id) it.copy(verdict = verdict) else it })
+            }
+        )
     }
 
     fun webCancel() {

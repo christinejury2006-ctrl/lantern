@@ -24,22 +24,15 @@ internal object PageAnalyzer {
     private val NOTE_HINT = Regex("note|afterword|author|foreword|disclaimer|announcement", RegexOption.IGNORE_CASE)
     private val NAV_IMG = Regex("prev|next|arrow|button|icon|sprite|logo|avatar|emoji|smilie|pixel", RegexOption.IGNORE_CASE)
 
-    fun analyze(html: String, baseUri: String): WebDraft {
+    fun analyze(html: String, baseUri: String): PageParse {
         val doc = Jsoup.parse(html, baseUri)
         val title = doc.selectFirst("meta[property=og:title]")?.attr("content")?.trim().orEmpty()
             .ifBlank { doc.title().trim() }
         doc.select("script, style, noscript, iframe, form, button, svg, canvas").remove()
         doc.select(JUNK).remove()
-        val body = doc.body() ?: return WebDraft(WebPhase.Ready, baseUri, title)
+        val body = doc.body() ?: return PageParse(baseUri, title, PageKind.Text, emptyList())
         val raw = collect(body)
-        val kind = detectKind(raw)
-        return WebDraft(
-            phase = WebPhase.Ready,
-            url = baseUri,
-            title = title,
-            kind = kind,
-            candidates = raw
-        )
+        return PageParse(baseUri, title, detectKind(raw), raw)
     }
 
     private fun collect(root: Element): List<WebCandidate> {

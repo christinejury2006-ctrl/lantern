@@ -570,6 +570,139 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun webBeginMeta() {
+        val cur = web ?: return
+        if (cur.phase != com.lantern.library.studio.WebPhase.Ready) return
+        if (cur.chapters.isEmpty()) return
+        web = cur.copy(phase = com.lantern.library.studio.WebPhase.Meta)
+    }
+
+    fun webSaveMeta(title: String, author: String, series: String, images: Boolean) {
+        val cur = web ?: return
+        val kind = if (images) com.lantern.library.studio.PageKind.Images else com.lantern.library.studio.PageKind.Text
+        val choices = ArrayList<com.lantern.library.studio.CoverChoice>()
+        cur.chapters.forEach { ch ->
+            ch.kept.filter { it.type == com.lantern.library.studio.WebBlockType.Image }.forEach { c ->
+                val path = c.localPath ?: c.imageUrl ?: return@forEach
+                if (choices.none { it.path == path }) {
+                    choices += com.lantern.library.studio.CoverChoice("cv${choices.size}", path, ch.title)
+                }
+            }
+        }
+        web = cur.copy(
+            phase = com.lantern.library.studio.WebPhase.Cover,
+            title = title.trim().ifBlank { cur.title.ifBlank { "Untitled" } },
+            author = author.trim(),
+            series = series.trim(),
+            kind = kind,
+            coverChoices = choices.take(8),
+            coverPath = choices.firstOrNull()?.path
+        )
+    }
+
+    fun webSelectCover(id: String?) {
+        val cur = web ?: return
+        val path = cur.coverChoices.firstOrNull { it.id == id }?.path
+        web = cur.copy(coverPath = path)
+    }
+
+    fun webCompile() {
+        val cur = web ?: return
+        val gen = webGen
+        viewModelScope.launch {
+            web = cur.copy(phase = com.lantern.library.studio.WebPhase.Compiling, progress = "Compiling book…")
+            val cache = getApplication<Application>().cacheDir
+            val out = File(com.lantern.library.studio.WebFetch.webDir(cache), "book.epub")
+            val compiled = withContext(Dispatchers.IO) {
+                runCatching {
+                    val model = com.lantern.library.studio.EpubWriter.buildModel(cur)
+                    com.lantern.library.studio.EpubWriter.write(model, out, cache)
+                }.getOrNull()
+            }
+            if (gen != webGen) return@launch
+            web = if (compiled != null && com.lantern.library.studio.EpubWriter.validate(compiled)) {
+                cur.copy(
+                    phase = com.lantern.library.studio.WebPhase.Preview,
+                    compiledPath = compiled.absolutePath,
+                    progress = ""
+                )
+            } else {
+                cur.copy(
+                    phase = com.lantern.library.studio.WebPhase.Failed,
+                    error = "Could not compile a readable EPUB.",
+                    compiledPath = null
+                )
+            }
+        }
+    }
+
+    fun webAddToLibrary() {
+        val cur = web ?: return
+        val compiled = cur.compiledPath?.let { File(it) } ?: return
+        if (!compiled.exists() || !com.lantern.library.studio.EpubWriter.validate(compiled)) {
+            web = cur.copy(phase = com.lantern.library.studio.WebPhase.Failed, error = "Could not compile a readable EPUB.")
+            return
+        }
+        viewModelScope.launch {
+            if (libraryFull()) {
+                toast("Library is full (200 books)")
+                return@launch
+            }
+            val app = getApplication<Application>()
+            val id = "web_${System.currentTimeMillis()}"
+            val dest = File(com.lantern.library.data.BookIo.booksDir(app), "$id.epub")
+            val coverDest = File(com.lantern.library.data.BookIo.coversDir(app), "$id.jpg")
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    compiled.copyTo(dest, overwrite = true)
+                    val srcCover = cur.coverPath?.let { File(it) }
+                    if (srcCover != null && srcCover.exists()) {
+                        srcCover.copyTo(coverDest, overwrite = true)
+                    }
+                    dest.exists() && dest.length() > 200L
+                }.getOrDefault(false)
+            }
+            if (!ok) {
+                withContext(Dispatchers.IO) { runCatching { dest.delete() }; runCatching { coverDest.delete() } }
+                toast("Could not add that file")
+                return@launch
+            }
+            val pages = withContext(Dispatchers.IO) {
+                runCatching { com.lantern.library.data.BookIo.readEpubDocument(dest).chapters.size }.getOrDefault(1)
+            }.coerceAtLeast(1)
+            val incoming = LibraryBook(
+                id = id,
+                title = cur.title.trim().ifBlank { "Untitled" },
+                author = cur.author.trim(),
+                remoteCover = if (coverDest.exists() && coverDest.length() > 0L) coverDest.absolutePath else null,
+                format = BookFormat.EPUB,
+                origin = BookOrigin.IMPORT,
+                filePath = dest.absolutePath,
+                pageCount = pages,
+                pendingUpload = true
+            )
+            when (commitNewUserBook(incoming)) {
+                CommitUserBookResult.ACCEPTED -> {
+                    toast("Added to Library")
+                    webGen++
+                    web = null
+                    withContext(Dispatchers.IO) {
+                        com.lantern.library.studio.WebFetch.clearWebDir(app.cacheDir)
+                    }
+                    uploadIfPossible(id)
+                }
+                CommitUserBookResult.LIBRARY_FULL -> {
+                    withContext(Dispatchers.IO) { discardOrphan(incoming) }
+                    toast("Library is full (200 books)")
+                }
+                CommitUserBookResult.PERSIST_FAILED -> {
+                    withContext(Dispatchers.IO) { discardOrphan(incoming) }
+                    toast("Could not add that file")
+                }
+            }
+        }
+    }
+
     private fun wipeStudioSession(session: StudioSession?) {
         session?.workingPath?.let { runCatching { File(it).delete() } }
         session?.coverPath?.let { path ->

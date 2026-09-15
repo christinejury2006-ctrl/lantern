@@ -56,7 +56,12 @@ fun StudioScreen(
     onWebCancel: () -> Unit,
     onOpenChapter: (String) -> Unit,
     onFollowPossible: (String) -> Unit,
-    onIgnorePossible: (String) -> Unit
+    onIgnorePossible: (String) -> Unit,
+    onBeginMeta: () -> Unit,
+    onSaveMeta: (String, String, String, Boolean) -> Unit,
+    onSelectCover: (String?) -> Unit,
+    onCompile: () -> Unit,
+    onAddLibrary: () -> Unit
 ) {
     val dark = theme == ReaderTheme.DARK
     val ink = if (dark) NightText else Ink
@@ -70,36 +75,22 @@ fun StudioScreen(
                 .padding(18.dp, 18.dp, 18.dp, 96.dp)
         ) {
             Text("Studio", color = ink, fontFamily = Playfair, fontSize = 30.sp)
-            Text(
-                "Turn webpages into books.",
-                color = mute,
-                fontSize = 13.sp,
-                modifier = Modifier.padding(top = 6.dp)
-            )
+            Text("Turn webpages into books.", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
             when {
                 web != null -> WebPane(
                     web, dark, ink, mute,
                     onWebKeep, onWebRemove, onWebCancel,
-                    onOpenChapter, onFollowPossible, onIgnorePossible
+                    onOpenChapter, onFollowPossible, onIgnorePossible,
+                    onBeginMeta, onSaveMeta, onSelectCover, onCompile, onAddLibrary
                 )
-                filePhase == StudioPhase.Extracting -> Text(
-                    "Reading this book…",
-                    color = mute,
-                    fontSize = 15.sp,
-                    modifier = Modifier.padding(top = 24.dp)
-                )
+                filePhase == StudioPhase.Extracting -> Text("Reading this book…", color = mute, fontSize = 15.sp, modifier = Modifier.padding(top = 24.dp))
                 filePhase == StudioPhase.Review || filePhase == StudioPhase.Failed || filePhase == StudioPhase.Committing -> {
                     FileReviewCard(session!!, dark, ink, mute, filePhase == StudioPhase.Committing, onSend, onCancel)
                 }
                 else -> {
                     WebEntry(dark, ink, mute, onAnalyze)
                     GlassCard(Modifier.fillMaxWidth().padding(top = 14.dp).clickable(onClick = onAddFile), dark, 18) {
-                        Text(
-                            "Add EPUB or PDF",
-                            color = ink,
-                            fontSize = 15.sp,
-                            modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp)
-                        )
+                        Text("Add EPUB or PDF", color = ink, fontSize = 15.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp))
                     }
                 }
             }
@@ -128,17 +119,8 @@ private fun WebEntry(dark: Boolean, ink: Color, mute: Color, onAnalyze: (String)
             )
         }
     }
-    GlassCard(
-        Modifier.fillMaxWidth().padding(top = 10.dp).clickable(enabled = url.isNotBlank()) { onAnalyze(url) },
-        dark,
-        18
-    ) {
-        Text(
-            "Analyze page",
-            color = if (url.isNotBlank()) Coral else mute,
-            fontSize = 16.sp,
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp)
-        )
+    GlassCard(Modifier.fillMaxWidth().padding(top = 10.dp).clickable(enabled = url.isNotBlank()) { onAnalyze(url) }, dark, 18) {
+        Text("Analyze page", color = if (url.isNotBlank()) Coral else mute, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
     }
 }
 
@@ -153,19 +135,25 @@ private fun WebPane(
     onCancel: () -> Unit,
     onOpenChapter: (String) -> Unit,
     onFollowPossible: (String) -> Unit,
-    onIgnorePossible: (String) -> Unit
+    onIgnorePossible: (String) -> Unit,
+    onBeginMeta: () -> Unit,
+    onSaveMeta: (String, String, String, Boolean) -> Unit,
+    onSelectCover: (String?) -> Unit,
+    onCompile: () -> Unit,
+    onAddLibrary: () -> Unit
 ) {
     when (web.phase) {
-        WebPhase.Fetching -> Text(
-            web.progress.ifBlank { "Analyzing page…" },
-            color = mute,
-            fontSize = 15.sp,
-            modifier = Modifier.padding(top = 24.dp)
+        WebPhase.Fetching, WebPhase.Compiling -> Text(
+            web.progress.ifBlank { if (web.phase == WebPhase.Compiling) "Compiling book…" else "Analyzing page…" },
+            color = mute, fontSize = 15.sp, modifier = Modifier.padding(top = 24.dp)
         )
         WebPhase.Failed -> {
             Text(web.error ?: "Could not analyze that page.", color = Coral, fontSize = 14.sp, modifier = Modifier.padding(top = 20.dp))
             CancelRow(dark, ink, mute, false, onCancel)
         }
+        WebPhase.Meta -> MetaPane(web, dark, ink, mute, onSaveMeta, onCancel)
+        WebPhase.Cover -> CoverPane(web, dark, ink, mute, onSelectCover, onCompile, onCancel)
+        WebPhase.Preview -> PreviewPane(web, dark, ink, mute, onAddLibrary, onCancel)
         WebPhase.Ready -> {
             val kind = if (web.kind == PageKind.Images) "Images" else "Text"
             Text(web.title.ifBlank { "Untitled book" }, color = ink, fontFamily = Playfair, fontSize = 22.sp, modifier = Modifier.padding(top = 18.dp))
@@ -212,50 +200,135 @@ private fun WebPane(
             }
             if (web.kind == PageKind.Images || keptImg.isNotEmpty()) {
                 FieldLabel("Likely pages", mute)
-                if (keptImg.isEmpty()) {
-                    Text("No clear content images yet. Check Unsure below.", color = mute, fontSize = 13.sp)
-                } else {
-                    keptImg.forEach { c ->
-                        CoverFace(
-                            "Page",
-                            null,
-                            c.localPath ?: c.imageUrl,
-                            Modifier.fillMaxWidth().padding(bottom = 10.dp).aspectRatio(0.7f),
-                            dark
-                        )
-                    }
+                if (keptImg.isEmpty()) Text("No clear content images yet. Check Unsure below.", color = mute, fontSize = 13.sp)
+                else keptImg.forEach { c ->
+                    CoverFace("Page", null, c.localPath ?: c.imageUrl, Modifier.fillMaxWidth().padding(bottom = 10.dp).aspectRatio(0.7f), dark)
                 }
             }
             FieldLabel("Unsure — you decide", mute)
-            if (unsure.isEmpty()) {
-                Text("Nothing uncertain on this page.", color = mute, fontSize = 13.sp)
-            } else {
-                unsure.forEach { c ->
-                    GlassCard(Modifier.fillMaxWidth().padding(bottom = 10.dp), dark, 16) {
-                        Column(Modifier.padding(14.dp)) {
-                            Text(c.reason, color = mute, fontSize = 12.sp)
-                            if (c.type == WebBlockType.Text) {
-                                Text(c.text.take(400), color = ink, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
-                            } else {
-                                CoverFace(
-                                    "Maybe content",
-                                    null,
-                                    c.localPath ?: c.imageUrl,
-                                    Modifier.fillMaxWidth().padding(top = 8.dp).aspectRatio(0.75f),
-                                    dark
-                                )
-                            }
-                            Row(Modifier.padding(top = 10.dp)) {
-                                Text("Keep", color = Coral, fontSize = 14.sp, modifier = Modifier.clickable { onKeep(c.id) }.padding(end = 18.dp, top = 4.dp, bottom = 4.dp))
-                                Text("Remove", color = ink, fontSize = 14.sp, modifier = Modifier.clickable { onRemove(c.id) }.padding(top = 4.dp, bottom = 4.dp))
-                            }
+            if (unsure.isEmpty()) Text("Nothing uncertain on this page.", color = mute, fontSize = 13.sp)
+            else unsure.forEach { c ->
+                GlassCard(Modifier.fillMaxWidth().padding(bottom = 10.dp), dark, 16) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text(c.reason, color = mute, fontSize = 12.sp)
+                        if (c.type == WebBlockType.Text) Text(c.text.take(400), color = ink, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
+                        else CoverFace("Maybe content", null, c.localPath ?: c.imageUrl, Modifier.fillMaxWidth().padding(top = 8.dp).aspectRatio(0.75f), dark)
+                        Row(Modifier.padding(top = 10.dp)) {
+                            Text("Keep", color = Coral, fontSize = 14.sp, modifier = Modifier.clickable { onKeep(c.id) }.padding(end = 18.dp, top = 4.dp, bottom = 4.dp))
+                            Text("Remove", color = ink, fontSize = 14.sp, modifier = Modifier.clickable { onRemove(c.id) }.padding(top = 4.dp, bottom = 4.dp))
                         }
                     }
                 }
             }
+            GlassCard(Modifier.fillMaxWidth().padding(top = 18.dp).clickable(onClick = onBeginMeta), dark, 18) {
+                Text("Continue", color = Coral, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
+            }
             CancelRow(dark, ink, mute, false, onCancel)
         }
     }
+}
+
+@Composable
+private fun MetaPane(
+    web: WebDraft,
+    dark: Boolean,
+    ink: Color,
+    mute: Color,
+    onSaveMeta: (String, String, String, Boolean) -> Unit,
+    onCancel: () -> Unit
+) {
+    var title by remember { mutableStateOf(web.title) }
+    var author by remember { mutableStateOf(web.author) }
+    var series by remember { mutableStateOf(web.series) }
+    var images by remember { mutableStateOf(web.kind == PageKind.Images) }
+    FieldLabel("Title", mute)
+    GlassCard(Modifier.fillMaxWidth(), dark, 16) {
+        BasicTextField(title, { title = it }, singleLine = true, textStyle = TextStyle(color = ink, fontSize = 16.sp), cursorBrush = SolidColor(ink), modifier = Modifier.padding(14.dp).fillMaxWidth())
+    }
+    FieldLabel("Author", mute)
+    GlassCard(Modifier.fillMaxWidth(), dark, 16) {
+        BasicTextField(
+            author, { author = it }, singleLine = true, textStyle = TextStyle(color = ink, fontSize = 16.sp),
+            cursorBrush = SolidColor(ink), modifier = Modifier.padding(14.dp).fillMaxWidth(),
+            decorationBox = { inner ->
+                if (author.isEmpty()) Text("Author", color = mute, fontSize = 16.sp)
+                inner()
+            }
+        )
+    }
+    FieldLabel("Series", mute)
+    GlassCard(Modifier.fillMaxWidth(), dark, 16) {
+        BasicTextField(
+            series, { series = it }, singleLine = true, textStyle = TextStyle(color = ink, fontSize = 16.sp),
+            cursorBrush = SolidColor(ink), modifier = Modifier.padding(14.dp).fillMaxWidth(),
+            decorationBox = { inner ->
+                if (series.isEmpty()) Text("Optional", color = mute, fontSize = 16.sp)
+                inner()
+            }
+        )
+    }
+    Text("${web.chapters.size} chapters", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 14.dp))
+    Text(
+        if (images) "Images" else "Text",
+        color = Coral,
+        fontSize = 14.sp,
+        modifier = Modifier.padding(top = 8.dp).clickable { images = !images }
+    )
+    GlassCard(Modifier.fillMaxWidth().padding(top = 18.dp).clickable { onSaveMeta(title, author, series, images) }, dark, 18) {
+        Text("Continue", color = Coral, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
+    }
+    CancelRow(dark, ink, mute, false, onCancel)
+}
+
+@Composable
+private fun CoverPane(
+    web: WebDraft,
+    dark: Boolean,
+    ink: Color,
+    mute: Color,
+    onSelectCover: (String?) -> Unit,
+    onCompile: () -> Unit,
+    onCancel: () -> Unit
+) {
+    FieldLabel("Cover", mute)
+    if (web.coverChoices.isEmpty()) {
+        Text("No cover found. You can continue without one.", color = mute, fontSize = 13.sp)
+    } else {
+        web.coverChoices.forEach { c ->
+            val on = web.coverPath == c.path
+            CoverFace(
+                c.label, null, c.path,
+                Modifier.width(120.dp).aspectRatio(0.68f).padding(bottom = 10.dp).clickable { onSelectCover(c.id) },
+                dark
+            )
+            Text(if (on) "Selected · ${c.label}" else c.label, color = if (on) Coral else mute, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
+        }
+        Text("Continue without cover", color = mute, fontSize = 13.sp, modifier = Modifier.clickable { onSelectCover(null) }.padding(vertical = 8.dp))
+    }
+    GlassCard(Modifier.fillMaxWidth().padding(top = 12.dp).clickable(onClick = onCompile), dark, 18) {
+        Text("Compile book", color = Coral, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
+    }
+    CancelRow(dark, ink, mute, false, onCancel)
+}
+
+@Composable
+private fun PreviewPane(
+    web: WebDraft,
+    dark: Boolean,
+    ink: Color,
+    mute: Color,
+    onAddLibrary: () -> Unit,
+    onCancel: () -> Unit
+) {
+    Spacer(Modifier.height(16.dp))
+    CoverFace(web.title, null, web.coverPath, Modifier.width(140.dp).aspectRatio(0.68f), dark)
+    Text(web.title.ifBlank { "Untitled" }, color = ink, fontFamily = Playfair, fontSize = 22.sp, modifier = Modifier.padding(top = 12.dp))
+    Text(web.author.ifBlank { "Unknown author" }, color = mute, fontSize = 14.sp)
+    Text("${web.chapters.size} chapters", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+    GlassCard(Modifier.fillMaxWidth().padding(top = 20.dp).clickable(onClick = onAddLibrary), dark, 18) {
+        Text("Add to Library", color = Coral, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
+    }
+    CancelRow(dark, ink, mute, false, onCancel)
 }
 
 @Composable
@@ -277,56 +350,15 @@ private fun FileReviewCard(
     }
     Spacer(Modifier.height(20.dp))
     CoverFace(title.ifBlank { "Cover" }, null, session.coverPath, Modifier.width(120.dp).aspectRatio(0.68f), dark)
-    if (session.coverPath.isNullOrBlank()) {
-        Text("No cover found.", color = mute, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
-    }
     FieldLabel("Title", mute)
     GlassCard(Modifier.fillMaxWidth(), dark, 16) {
-        BasicTextField(
-            value = title,
-            onValueChange = { title = it },
-            singleLine = true,
-            enabled = !busy,
-            textStyle = TextStyle(color = ink, fontSize = 16.sp),
-            cursorBrush = SolidColor(ink),
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp).fillMaxWidth()
-        )
+        BasicTextField(title, { title = it }, singleLine = true, enabled = !busy, textStyle = TextStyle(color = ink, fontSize = 16.sp), cursorBrush = SolidColor(ink), modifier = Modifier.padding(14.dp).fillMaxWidth())
     }
     FieldLabel("Author", mute)
     GlassCard(Modifier.fillMaxWidth(), dark, 16) {
-        BasicTextField(
-            value = author,
-            onValueChange = { author = it },
-            singleLine = true,
-            enabled = !busy,
-            textStyle = TextStyle(color = ink, fontSize = 16.sp),
-            cursorBrush = SolidColor(ink),
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp).fillMaxWidth(),
-            decorationBox = { inner ->
-                if (author.isEmpty()) Text("Author", color = mute, fontSize = 16.sp)
-                inner()
-            }
-        )
+        BasicTextField(author, { author = it }, singleLine = true, enabled = !busy, textStyle = TextStyle(color = ink, fontSize = 16.sp), cursorBrush = SolidColor(ink), modifier = Modifier.padding(14.dp).fillMaxWidth())
     }
-    Text(
-        "$formatLabel  ·  ${session.pageCount} page${if (session.pageCount == 1) "" else "s"}",
-        color = mute,
-        fontSize = 13.sp,
-        modifier = Modifier.padding(top = 14.dp)
-    )
-    if (!session.warning.isNullOrBlank()) {
-        Text(session.warning, color = Coral, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
-    }
-    FieldLabel("Contents", mute)
-    when {
-        session.toc.isNotEmpty() -> session.toc.forEach { entry ->
-            Text(entry.title, color = ink, fontSize = 13.sp, modifier = Modifier.padding(start = (entry.level * 12).dp, top = 4.dp, bottom = 2.dp))
-        }
-        session.chapterTitles.isNotEmpty() -> session.chapterTitles.forEach { name ->
-            Text(name, color = ink, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp, bottom = 2.dp))
-        }
-        !session.tocNote.isNullOrBlank() -> Text(session.tocNote, color = mute, fontSize = 13.sp)
-    }
+    Text("$formatLabel  ·  ${session.pageCount} pages", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 14.dp))
     val canSend = session.workingPath != null && !busy
     GlassCard(Modifier.fillMaxWidth().padding(top = 22.dp).clickable(enabled = canSend) { onSend(title, author) }, dark, 18) {
         Text(if (busy) "Adding…" else "Send to Library", color = if (canSend) Coral else mute, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))

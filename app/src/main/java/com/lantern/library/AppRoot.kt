@@ -176,7 +176,12 @@ internal fun LanternRoot(store: LanternStore) {
                     onWebCancel = { store.webCancel() },
                     onOpenChapter = { store.webOpenChapter(it) },
                     onFollowPossible = { store.webFollowPossible(it) },
-                    onIgnorePossible = { store.webIgnorePossible(it) }
+                    onIgnorePossible = { store.webIgnorePossible(it) },
+                    onBeginMeta = { store.webBeginMeta() },
+                    onSaveMeta = { t, a, s, img -> store.webSaveMeta(t, a, s, img) },
+                    onSelectCover = { store.webSelectCover(it) },
+                    onCompile = { store.webCompile() },
+                    onAddLibrary = { store.webAddToLibrary() }
                 )
                 Route.Search -> SearchScreen(theme) { remote -> store.download(remote) { book -> store.openForReading(book) { ready -> if (ready != null) tab = Route.Reader(ready.id) } } }
                 Route.Profile -> ProfileScreen(

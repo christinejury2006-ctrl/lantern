@@ -6,7 +6,28 @@ enum class WebBlockType { Text, Image }
 
 enum class WebVerdict { Keep, Drop, Unsure }
 
-enum class WebPhase { Fetching, Ready, Failed }
+enum class WebPhase { Fetching, Ready, Meta, Cover, Compiling, Preview, Failed }
+
+data class CoverChoice(
+    val id: String,
+    val path: String,
+    val label: String
+)
+
+data class CompiledChapter(
+    val title: String,
+    val paragraphs: List<String>,
+    val imageFiles: List<String>
+)
+
+data class CompiledBook(
+    val title: String,
+    val author: String,
+    val series: String,
+    val kind: PageKind,
+    val coverPath: String?,
+    val chapters: List<CompiledChapter>
+)
 
 data class WebCandidate(
     val id: String,
@@ -55,7 +76,12 @@ data class WebDraft(
     val possible: List<WebLinkGuess> = emptyList(),
     val openChapterId: String? = null,
     val progress: String = "",
-    val error: String? = null
+    val error: String? = null,
+    val author: String = "",
+    val series: String = "",
+    val coverChoices: List<CoverChoice> = emptyList(),
+    val coverPath: String? = null,
+    val compiledPath: String? = null
 ) {
     val open: WebChapter?
         get() = chapters.firstOrNull { it.id == openChapterId } ?: chapters.firstOrNull()

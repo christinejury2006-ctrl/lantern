@@ -18,10 +18,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Create
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -48,12 +48,12 @@ import com.lantern.library.data.ReaderTheme
 import com.lantern.library.data.Recommendations
 import com.lantern.library.ui.components.FadeToast
 import com.lantern.library.ui.screens.BookDetailsOverlay
-import com.lantern.library.ui.screens.ExploreScreen
 import com.lantern.library.ui.screens.InterestOnboardingScreen
 import com.lantern.library.ui.screens.LibraryScreen
 import com.lantern.library.ui.screens.ProfileScreen
 import com.lantern.library.ui.screens.ReaderScreen
 import com.lantern.library.ui.screens.SearchScreen
+import com.lantern.library.ui.screens.StudioScreen
 import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.LanternTheme
 import com.lantern.library.ui.theme.NightText
@@ -72,8 +72,8 @@ internal fun strongGutendexMatch(book: DiscoveryBook, hits: List<CatalogBook>): 
 
 private sealed class Route {
     object Library : Route()
+    object Studio : Route()
     object Search : Route()
-    object Explore : Route()
     object Profile : Route()
     data class Reader(val id: String) : Route()
 }
@@ -161,8 +161,8 @@ internal fun LanternRoot(store: LanternStore) {
                     onSaveWant = { store.addWantToRead(it) },
                     onRefreshForYou = { store.refreshForYou() }
                 )
+                Route.Studio -> StudioScreen(theme)
                 Route.Search -> SearchScreen(theme) { remote -> store.download(remote) { book -> store.openForReading(book) { ready -> if (ready != null) tab = Route.Reader(ready.id) } } }
-                Route.Explore -> ExploreScreen(theme) { remote -> store.download(remote) { book -> store.openForReading(book) { ready -> if (ready != null) tab = Route.Reader(ready.id) } } }
                 Route.Profile -> ProfileScreen(
                     store.books, store.account, store.readingPrefs,
                     { store.setPrefs(it) },
@@ -215,8 +215,8 @@ private fun BottomBar(theme: ReaderTheme, current: Route, onTab: (Route) -> Unit
         horizontalArrangement = Arrangement.SpaceEvenly
     ) {
         TabIcon(Icons.Filled.Home, "Library", current is Route.Library, ink) { onTab(Route.Library) }
-        TabIcon(Icons.Filled.Search, "Search", current is Route.Search, ink) { onTab(Route.Search) }
-        TabIcon(Icons.Filled.Star, "Explore", current is Route.Explore, ink) { onTab(Route.Explore) }
+        TabIcon(Icons.Filled.Create, "Studio", current is Route.Studio, ink) { onTab(Route.Studio) }
+        TabIcon(Icons.Filled.Search, "Explore", current is Route.Search, ink) { onTab(Route.Search) }
         TabIcon(Icons.Filled.Person, "You", current is Route.Profile, ink) { onTab(Route.Profile) }
     }
 }

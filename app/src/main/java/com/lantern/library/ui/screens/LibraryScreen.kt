@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -75,7 +74,6 @@ fun LibraryScreen(
     forYouFailed: Boolean = false,
     onOpen: (LibraryBook) -> Unit,
     onRemove: (String) -> Unit,
-    onImport: () -> Unit,
     onOpenDiscovery: (DiscoveryBook) -> Unit,
     onSaveWant: (DiscoveryBook) -> Unit,
     onRefreshForYou: () -> Unit = {}
@@ -101,21 +99,12 @@ fun LibraryScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             item(span = { GridItemSpan(3) }) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("My Library", color = ink, fontFamily = Playfair, fontSize = 30.sp)
-                        Text(
-                            "${books.size} books  ·  Reading ${books.count { it.shelf == Shelf.CURRENT }}  ·  To read ${books.count { it.shelf == Shelf.TO_READ }}  ·  Want ${wantToRead.size}",
-                            color = mute, fontSize = 13.sp
-                        )
-                    }
-                    Box(
-                        Modifier.size(42.dp).clip(CircleShape).background(Color(0x99FFFFFF))
-                            .combinedClickable(onClick = onImport),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(Icons.Filled.Add, "Import", tint = ink)
-                    }
+                Column {
+                    Text("My Library", color = ink, fontFamily = Playfair, fontSize = 30.sp)
+                    Text(
+                        "${books.size} books  ·  Reading ${books.count { it.shelf == Shelf.CURRENT }}  ·  To read ${books.count { it.shelf == Shelf.TO_READ }}  ·  Want ${wantToRead.size}",
+                        color = mute, fontSize = 13.sp
+                    )
                 }
             }
             item(span = { GridItemSpan(3) }) {

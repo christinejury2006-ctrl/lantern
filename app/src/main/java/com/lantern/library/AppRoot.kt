@@ -100,7 +100,7 @@ internal fun LanternRoot(store: LanternStore) {
         val intent = store.takeDriveConsentIntent() ?: return@LaunchedEffect
         driveConsent.launch(intent)
     }
-    fun import() {
+    fun addFile() {
         picker.launch(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "*/*"
@@ -156,12 +156,11 @@ internal fun LanternRoot(store: LanternStore) {
                     store.forYouBusy,
                     onOpen = { book -> store.openForReading(book) { ready -> if (ready != null) tab = Route.Reader(ready.id) } },
                     onRemove = { store.remove(it) },
-                    onImport = { import() },
                     onOpenDiscovery = { details = it },
                     onSaveWant = { store.addWantToRead(it) },
                     onRefreshForYou = { store.refreshForYou() }
                 )
-                Route.Studio -> StudioScreen(theme)
+                Route.Studio -> StudioScreen(theme, onAddFile = { addFile() })
                 Route.Search -> SearchScreen(theme) { remote -> store.download(remote) { book -> store.openForReading(book) { ready -> if (ready != null) tab = Route.Reader(ready.id) } } }
                 Route.Profile -> ProfileScreen(
                     store.books, store.account, store.readingPrefs,

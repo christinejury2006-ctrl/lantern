@@ -323,20 +323,20 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val book = withContext(Dispatchers.IO) { runCatching { BookIo.importUri(getApplication(), uri) }.getOrNull() }
             if (book == null) {
-                toast("Could not import that file")
+                toast("Could not add that file")
                 return@launch
             }
             val incoming = book.copy(pendingUpload = true)
             when (commitNewUserBook(incoming)) {
                 CommitUserBookResult.ACCEPTED -> {
-                    toast("Added ${book.title}")
+                    toast("Added to Library")
                     uploadIfPossible(book.id)
                 }
                 CommitUserBookResult.LIBRARY_FULL -> {
                     withContext(Dispatchers.IO) { discardOrphan(incoming) }
                     toast("Library is full (200 books)")
                 }
-                CommitUserBookResult.PERSIST_FAILED -> toast("Could not import that file")
+                CommitUserBookResult.PERSIST_FAILED -> toast("Could not add that file")
             }
         }
     }

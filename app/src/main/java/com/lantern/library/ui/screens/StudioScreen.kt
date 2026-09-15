@@ -1,7 +1,9 @@
 package com.lantern.library.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -11,13 +13,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lantern.library.data.ReaderTheme
 import com.lantern.library.ui.components.AuroraBackdrop
+import com.lantern.library.ui.components.GlassCard
 import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.InkSoft
 import com.lantern.library.ui.theme.NightText
 import com.lantern.library.ui.theme.Playfair
 
 @Composable
-fun StudioScreen(theme: ReaderTheme) {
+fun StudioScreen(theme: ReaderTheme, onAddFile: () -> Unit) {
     val dark = theme == ReaderTheme.DARK
     val ink = if (dark) NightText else Ink
     val mute = if (dark) Color(0xFFD0D6DE) else InkSoft
@@ -30,6 +33,14 @@ fun StudioScreen(theme: ReaderTheme) {
                 fontSize = 13.sp,
                 modifier = Modifier.padding(top = 6.dp)
             )
+            GlassCard(Modifier.fillMaxWidth().padding(top = 20.dp).clickable(onClick = onAddFile), dark, 18) {
+                Text(
+                    "Add EPUB or PDF",
+                    color = ink,
+                    fontSize = 16.sp,
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp)
+                )
+            }
         }
     }
 }

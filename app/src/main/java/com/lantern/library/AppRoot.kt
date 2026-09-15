@@ -87,7 +87,9 @@ internal fun LanternRoot(store: LanternStore) {
     val scope = rememberCoroutineScope()
     val activity = context as Activity
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
-        if (res.resultCode == Activity.RESULT_OK) res.data?.data?.let { store.importUri(it) }
+        val uri = res.data?.data
+        if (res.resultCode == Activity.RESULT_OK && uri != null) store.studioOpen(uri)
+        else store.studioCancelPick()
     }
     val googleSignIn = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         val acc = GoogleAuth.parseResult(res.data)
@@ -101,6 +103,7 @@ internal fun LanternRoot(store: LanternStore) {
         driveConsent.launch(intent)
     }
     fun addFile() {
+        store.studioBeginPick()
         picker.launch(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "*/*"
@@ -160,7 +163,13 @@ internal fun LanternRoot(store: LanternStore) {
                     onSaveWant = { store.addWantToRead(it) },
                     onRefreshForYou = { store.refreshForYou() }
                 )
-                Route.Studio -> StudioScreen(theme, onAddFile = { addFile() })
+                Route.Studio -> StudioScreen(
+                    theme = theme,
+                    session = store.studio,
+                    onAddFile = { addFile() },
+                    onSend = { title, author -> store.studioSend(title, author) },
+                    onCancel = { store.studioCancel() }
+                )
                 Route.Search -> SearchScreen(theme) { remote -> store.download(remote) { book -> store.openForReading(book) { ready -> if (ready != null) tab = Route.Reader(ready.id) } } }
                 Route.Profile -> ProfileScreen(
                     store.books, store.account, store.readingPrefs,

@@ -53,6 +53,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     var editingInterests by mutableStateOf(false)
     var hydrated by mutableStateOf(false)
         private set
+    var studio by mutableStateOf<StudioSession?>(null)
+        private set
+    private var studioGen = 0
     private var driveConsentPrompted = false
     private var googleAccountKey: String? = null
 
@@ -340,6 +343,151 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+
+    fun studioBeginPick() {
+        studio = StudioSession(phase = StudioPhase.Picking)
+    }
+
+    fun studioCancelPick() {
+        if (studio?.phase == StudioPhase.Picking) studio = null
+    }
+
+    fun studioOpen(uri: Uri) {
+        val gen = ++studioGen
+        viewModelScope.launch {
+            val previous = studio
+            studio = StudioSession(phase = StudioPhase.Extracting)
+            withContext(Dispatchers.IO) {
+                wipeStudioSession(previous)
+                BookIo.clearStudioDir(getApplication())
+            }
+            val copy = withContext(Dispatchers.IO) {
+                runCatching { BookIo.copyToStudio(getApplication(), uri) }.getOrNull()
+            }
+            if (gen != studioGen) {
+                copy?.file?.let { runCatching { it.delete() } }
+                return@launch
+            }
+            if (copy == null) {
+                studio = StudioSession(phase = StudioPhase.Failed, warning = "Could not add that file.")
+                return@launch
+            }
+            val inspected = withContext(Dispatchers.IO) {
+                runCatching {
+                    BookIo.inspectStudio(getApplication(), copy.file, copy.format, copy.displayName)
+                }.getOrNull()
+            }
+            if (gen != studioGen) {
+                runCatching { copy.file.delete() }
+                return@launch
+            }
+            studio = inspected ?: StudioSession(
+                phase = StudioPhase.Failed,
+                format = copy.format,
+                workingPath = copy.file.absolutePath,
+                title = BookIo.cleanImportTitle(copy.displayName).let { t ->
+                    if (t.equals("Imported book", true) || t.isBlank()) "Untitled" else t
+                },
+                author = "",
+                pageCount = 1,
+                tocNote = if (copy.format == BookFormat.PDF) {
+                    "This PDF has no table of contents."
+                } else {
+                    "No table of contents found."
+                },
+                warning = "Some details could not be read."
+            )
+        }
+    }
+
+    fun studioCancel() {
+        studioGen++
+        val current = studio
+        studio = null
+        viewModelScope.launch(Dispatchers.IO) { wipeStudioSession(current) }
+    }
+
+    fun studioSend(title: String, author: String) {
+        val current = studio ?: return
+        val working = current.workingPath?.let { File(it) } ?: return
+        if (!working.exists()) {
+            studio = current.copy(phase = StudioPhase.Failed, warning = "The working file is gone.")
+            return
+        }
+        val format = current.format ?: return
+        viewModelScope.launch {
+            studio = current.copy(phase = StudioPhase.Committing)
+            if (libraryFull()) {
+                toast("Library is full (200 books)")
+                studio = current.copy(phase = StudioPhase.Review)
+                return@launch
+            }
+            val app = getApplication<Application>()
+            val id = "imp_${System.currentTimeMillis()}_${working.name.hashCode().toUInt()}"
+            val ext = if (format == BookFormat.EPUB) "epub" else "pdf"
+            val dest = File(BookIo.booksDir(app), "$id.$ext")
+            val coverDest = File(BookIo.coversDir(app), "$id.jpg")
+            val copied = withContext(Dispatchers.IO) {
+                runCatching {
+                    working.copyTo(dest, overwrite = true)
+                    val srcCover = current.coverPath?.let { File(it) }
+                    val coverOk = srcCover != null && srcCover.exists() && srcCover.length() > 0L &&
+                        runCatching {
+                            srcCover.copyTo(coverDest, overwrite = true)
+                            true
+                        }.getOrDefault(false)
+                    dest.exists() && dest.length() > 0L to coverOk
+                }.getOrDefault(false to false)
+            }
+            if (!copied.first) {
+                withContext(Dispatchers.IO) {
+                    runCatching { dest.delete() }
+                    runCatching { coverDest.delete() }
+                }
+                studio = current.copy(phase = StudioPhase.Failed, warning = "Could not add that file.")
+                return@launch
+            }
+            val incoming = LibraryBook(
+                id = id,
+                title = title.trim().ifBlank { "Untitled" },
+                author = author.trim(),
+                remoteCover = if (copied.second) coverDest.absolutePath else null,
+                format = format,
+                origin = BookOrigin.IMPORT,
+                filePath = dest.absolutePath,
+                pageCount = current.pageCount.coerceAtLeast(1),
+                pendingUpload = true
+            )
+            when (commitNewUserBook(incoming)) {
+                CommitUserBookResult.ACCEPTED -> {
+                    toast("Added to Library")
+                    studioGen++
+                    studio = null
+                    withContext(Dispatchers.IO) { wipeStudioSession(current) }
+                    uploadIfPossible(id)
+                }
+                CommitUserBookResult.LIBRARY_FULL -> {
+                    withContext(Dispatchers.IO) { discardOrphan(incoming) }
+                    toast("Library is full (200 books)")
+                    studio = current.copy(phase = StudioPhase.Review)
+                }
+                CommitUserBookResult.PERSIST_FAILED -> {
+                    withContext(Dispatchers.IO) { discardOrphan(incoming) }
+                    studio = current.copy(phase = StudioPhase.Failed, warning = "Could not add that file.")
+                }
+            }
+        }
+    }
+
+    private fun wipeStudioSession(session: StudioSession?) {
+        session?.workingPath?.let { runCatching { File(it).delete() } }
+        session?.coverPath?.let { path ->
+            val f = File(path)
+            if (f.parentFile?.name == "studio") runCatching { f.delete() }
+        }
+        BookIo.clearStudioDir(getApplication())
+    }
+
     fun download(remote: CatalogBook, then: ((LibraryBook) -> Unit)? = null) {
         viewModelScope.launch {
             val existing = synchronized(libraryLock) { books.firstOrNull { it.id == "pg_${remote.remoteId}" } }

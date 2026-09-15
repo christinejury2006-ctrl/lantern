@@ -28,6 +28,84 @@ object BookIo {
     fun cloudDir(context: Context): File =
         File(context.getExternalFilesDir(null), "cloud").apply { mkdirs() }
 
+    fun studioDir(context: Context): File =
+        File(context.cacheDir, "studio").apply { mkdirs() }
+
+    fun clearStudioDir(context: Context) {
+        studioDir(context).listFiles()?.forEach { runCatching { it.delete() } }
+    }
+
+    data class StudioCopy(val file: File, val format: BookFormat, val displayName: String)
+
+    fun copyToStudio(context: Context, uri: Uri): StudioCopy? {
+        val name = displayName(context, uri) ?: return null
+        val lower = name.lowercase()
+        val format = when {
+            lower.endsWith(".epub") -> BookFormat.EPUB
+            lower.endsWith(".pdf") -> BookFormat.PDF
+            else -> return null
+        }
+        val ext = if (format == BookFormat.EPUB) "epub" else "pdf"
+        val dest = File(studioDir(context), "work_${System.currentTimeMillis()}.$ext")
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            FileOutputStream(dest).use { input.copyTo(it) }
+        } ?: return null
+        if (!dest.exists() || dest.length() <= 0L) {
+            runCatching { dest.delete() }
+            return null
+        }
+        return StudioCopy(dest, format, name)
+    }
+
+    fun inspectStudio(context: Context, file: File, format: BookFormat, displayName: String): StudioSession {
+        val fallbackTitle = cleanImportTitle(displayName).let { t ->
+            if (t.equals("Imported book", ignoreCase = true) || t.isBlank()) "Untitled" else t
+        }
+        val coverFile = File(studioDir(context), "${file.nameWithoutExtension}.jpg")
+        return if (format == BookFormat.EPUB) {
+            val title = epubDcTitle(file)?.takeIf { it.isNotBlank() } ?: fallbackTitle
+            val author = epubDcCreators(file).joinToString(", ")
+            val coverOk = extractEpubCover(file, coverFile)
+            val doc = runCatching { readEpubDocument(file) }.getOrDefault(EpubDocument(emptyList(), emptyList()))
+            val pages = (doc.chapters.sumOf { it.body.length } / 900).coerceAtLeast(1)
+            val toc = doc.toc
+            val chapters = doc.chapters.map { it.title }.filter { it.isNotBlank() }
+            val tocNote = when {
+                toc.isNotEmpty() -> null
+                chapters.isNotEmpty() -> null
+                else -> "No table of contents found."
+            }
+            StudioSession(
+                phase = StudioPhase.Review,
+                format = format,
+                workingPath = file.absolutePath,
+                coverPath = if (coverOk) coverFile.absolutePath else null,
+                title = title,
+                author = author,
+                pageCount = pages,
+                toc = toc,
+                chapterTitles = if (toc.isEmpty()) chapters else emptyList(),
+                tocNote = tocNote
+            )
+        } else {
+            val coverOk = extractPdfCover(file, coverFile)
+            val pages = pdfPageCount(file).coerceAtLeast(1)
+            val toc = runCatching { readPdfOutline(context, file) }.getOrDefault(emptyList())
+            StudioSession(
+                phase = StudioPhase.Review,
+                format = format,
+                workingPath = file.absolutePath,
+                coverPath = if (coverOk) coverFile.absolutePath else null,
+                title = fallbackTitle,
+                author = "",
+                pageCount = pages,
+                toc = toc,
+                chapterTitles = emptyList(),
+                tocNote = if (toc.isEmpty()) "This PDF has no table of contents." else null
+            )
+        }
+    }
+
     fun importUri(context: Context, uri: Uri): LibraryBook? {
         val name = displayName(context, uri) ?: return null
         val lower = name.lowercase()
@@ -280,6 +358,18 @@ object BookIo {
             val xml = runCatching { z.getInputStream(opf).bufferedReader().use { it.readText() } }.getOrNull() ?: return null
             val raw = Regex("(?is)<dc:title[^>]*>(.*?)</dc:title>").find(xml)?.groupValues?.getOrNull(1) ?: return null
             return stripHtml(raw).trim().takeIf { it.isNotBlank() }
+        }
+    }
+
+    private fun epubDcCreators(file: File): List<String> {
+        val zip = try { ZipFile(file) } catch (_: Exception) { return emptyList() }
+        return zip.use { z ->
+            val opf = findOpf(z) ?: return@use emptyList()
+            val xml = runCatching { z.getInputStream(opf).bufferedReader().use { it.readText() } }.getOrNull()
+                ?: return@use emptyList()
+            Regex("(?is)<dc:creator[^>]*>(.*?)</dc:creator>").findAll(xml).mapNotNull { m ->
+                stripHtml(m.groupValues[1]).trim().takeIf { it.isNotBlank() }
+            }.distinct().toList()
         }
     }
 

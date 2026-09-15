@@ -35,6 +35,22 @@ data class EpubDocument(
     val toc: List<TocEntry>
 )
 
+enum class StudioPhase { Idle, Picking, Extracting, Review, Committing, Failed }
+
+data class StudioSession(
+    val phase: StudioPhase = StudioPhase.Idle,
+    val format: BookFormat? = null,
+    val workingPath: String? = null,
+    val coverPath: String? = null,
+    val title: String = "",
+    val author: String = "",
+    val pageCount: Int = 0,
+    val toc: List<TocEntry> = emptyList(),
+    val chapterTitles: List<String> = emptyList(),
+    val tocNote: String? = null,
+    val warning: String? = null
+)
+
 data class LibraryBook(
     val id: String,
     val title: String,

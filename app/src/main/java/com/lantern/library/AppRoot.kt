@@ -166,9 +166,14 @@ internal fun LanternRoot(store: LanternStore) {
                 Route.Studio -> StudioScreen(
                     theme = theme,
                     session = store.studio,
+                    web = store.web,
                     onAddFile = { addFile() },
                     onSend = { title, author -> store.studioSend(title, author) },
-                    onCancel = { store.studioCancel() }
+                    onCancel = { store.studioCancel() },
+                    onAnalyze = { store.analyzeWeb(it) },
+                    onWebKeep = { store.webKeep(it) },
+                    onWebRemove = { store.webRemove(it) },
+                    onWebCancel = { store.webCancel() }
                 )
                 Route.Search -> SearchScreen(theme) { remote -> store.download(remote) { book -> store.openForReading(book) { ready -> if (ready != null) tab = Route.Reader(ready.id) } } }
                 Route.Profile -> ProfileScreen(

@@ -56,6 +56,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     var studio by mutableStateOf<StudioSession?>(null)
         private set
     private var studioGen = 0
+    var web by mutableStateOf<com.lantern.library.studio.WebDraft?>(null)
+        private set
+    private var webGen = 0
     private var driveConsentPrompted = false
     private var googleAccountKey: String? = null
 
@@ -476,6 +479,64 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     studio = current.copy(phase = StudioPhase.Failed, warning = "Could not add that file.")
                 }
             }
+        }
+    }
+
+    fun analyzeWeb(url: String) {
+        val gen = ++webGen
+        viewModelScope.launch {
+            web = com.lantern.library.studio.WebDraft(
+                phase = com.lantern.library.studio.WebPhase.Fetching,
+                url = url.trim()
+            )
+            val cache = getApplication<Application>().cacheDir
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    com.lantern.library.studio.WebFetch.clearWebDir(cache)
+                    val page = com.lantern.library.studio.WebFetch.page(url)
+                    val draft = com.lantern.library.studio.PageAnalyzer.analyze(page.html, page.url)
+                    val dir = com.lantern.library.studio.WebFetch.webDir(cache)
+                    val preview = draft.candidates.filter {
+                        it.type == com.lantern.library.studio.WebBlockType.Image &&
+                            it.verdict != com.lantern.library.studio.WebVerdict.Drop &&
+                            !it.imageUrl.isNullOrBlank()
+                    }.take(12)
+                    val updated = draft.candidates.map { c ->
+                        val hit = preview.indexOfFirst { it.id == c.id }
+                        if (hit < 0) c else {
+                            val dest = File(dir, "img_$hit.jpg")
+                            val ok = com.lantern.library.studio.WebFetch.image(c.imageUrl!!, dest)
+                            if (ok) c.copy(localPath = dest.absolutePath) else c
+                        }
+                    }
+                    draft.copy(candidates = updated)
+                }
+            }
+            if (gen != webGen) return@launch
+            web = result.getOrElse { e ->
+                com.lantern.library.studio.WebDraft(
+                    phase = com.lantern.library.studio.WebPhase.Failed,
+                    url = url.trim(),
+                    error = e.message?.takeIf { it.isNotBlank() } ?: "Could not analyze that page."
+                )
+            }
+        }
+    }
+
+    fun webKeep(id: String) = webOverride(id, com.lantern.library.studio.WebVerdict.Keep)
+
+    fun webRemove(id: String) = webOverride(id, com.lantern.library.studio.WebVerdict.Drop)
+
+    private fun webOverride(id: String, verdict: com.lantern.library.studio.WebVerdict) {
+        val cur = web ?: return
+        web = cur.copy(candidates = cur.candidates.map { if (it.id == id) it.copy(verdict = verdict) else it })
+    }
+
+    fun webCancel() {
+        webGen++
+        web = null
+        viewModelScope.launch(Dispatchers.IO) {
+            com.lantern.library.studio.WebFetch.clearWebDir(getApplication<Application>().cacheDir)
         }
     }
 

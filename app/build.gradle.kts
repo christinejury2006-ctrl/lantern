@@ -67,6 +67,7 @@ dependencies {
     implementation("androidx.core:core-splashscreen:1.0.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.jsoup:jsoup:1.17.2")
     implementation("com.google.android.gms:play-services-auth:20.7.0")
     implementation("io.github.oothp:pdfium-android:1.9.5-beta01")
     debugImplementation("androidx.compose.ui:ui-tooling")

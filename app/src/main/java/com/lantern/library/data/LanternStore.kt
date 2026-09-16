@@ -560,7 +560,11 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             val cache = getApplication<Application>().cacheDir
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    com.lantern.library.studio.BookCrawler.crawl(url, cache) { msg ->
+                    com.lantern.library.studio.BookCrawler.crawl(
+                        url,
+                        cache,
+                        cancelled = { gen != webGen }
+                    ) { msg ->
                         viewModelScope.launch {
                             if (gen == webGen) web = web?.copy(progress = msg)
                         }

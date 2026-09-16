@@ -1,5 +1,7 @@
 package com.lantern.library.ui.screens
 
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -9,13 +11,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,25 +24,37 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lantern.library.data.AppearFill
 import com.lantern.library.data.AppearLook
 import com.lantern.library.data.ReaderTheme
 import com.lantern.library.data.WallpaperCatalog
+import com.lantern.library.data.WallpaperStore
 import com.lantern.library.data.appearSwatches
 import com.lantern.library.ui.components.AppearanceLayer
-import com.lantern.library.ui.components.CoverFace
 import com.lantern.library.ui.components.GlassCard
+import com.lantern.library.ui.components.argbColor
 import com.lantern.library.ui.theme.Coral
 import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.InkSoft
 import com.lantern.library.ui.theme.NightText
 import com.lantern.library.ui.theme.Playfair
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 fun AppearanceEditor(
@@ -56,10 +68,12 @@ fun AppearanceEditor(
     val ink = if (dark) NightText else Ink
     val mute = if (dark) Color(0xFFD0D6DE) else InkSoft
     val gold = Color(0xFFE8D9A8)
+    val opacity = if (look.wallpaperOpacity.isFinite()) look.wallpaperOpacity.coerceIn(0f, 1f) else 0.32f
+    val overlay = if (look.overlay.isFinite()) look.overlay.coerceIn(0f, 1f) else 0.28f
     AppearanceLayer(look) {
         Column(
             Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
                 .padding(18.dp, 18.dp, 18.dp, 96.dp)
         ) {
@@ -67,12 +81,18 @@ fun AppearanceEditor(
             Text("Live preview is this screen.", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
             Spacer(Modifier.height(14.dp))
             GlassCard(Modifier.fillMaxWidth().height(132.dp), dark, 18) {
-                Box(Modifier.fillMaxSize().clip(RoundedCornerShape(18.dp))) {
-                    AppearanceLayer(look) {
-                        Column(Modifier.padding(16.dp)) {
-                            Text("My Library", color = ink, fontFamily = Playfair, fontSize = 18.sp)
-                            Text("Wallpaper under a soft wash.", color = mute, fontSize = 12.sp)
-                        }
+                val previewMod = Modifier.fillMaxSize().clip(RoundedCornerShape(18.dp)).then(
+                    if (look.fill == AppearFill.Solid) Modifier.background(argbColor(look.solidArgb))
+                    else Modifier.background(
+                        Brush.verticalGradient(
+                            listOf(argbColor(look.ombreStartArgb), argbColor(look.ombreEndArgb))
+                        )
+                    )
+                )
+                Box(previewMod) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("My Library", color = ink, fontFamily = Playfair, fontSize = 18.sp)
+                        Text("Wallpaper under a soft wash.", color = mute, fontSize = 12.sp)
                     }
                 }
             }
@@ -118,16 +138,11 @@ fun AppearanceEditor(
                 WallpaperCatalog.items.forEach { item ->
                     val on = look.wallpaperId == item.id
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CoverFace(
-                            item.label, null, item.url,
-                            Modifier
-                                .width(64.dp)
-                                .aspectRatio(0.72f)
-                                .border(2.dp, if (on) Coral else Color.Transparent, RoundedCornerShape(10.dp))
-                                .clickable {
-                                    onChange(look.copy(wallpaperId = item.id, wallpaperUrl = item.url))
-                                },
-                            dark
+                        SafeWallpaperThumb(
+                            id = item.id,
+                            url = item.url,
+                            selected = on,
+                            onClick = { onChange(look.copy(wallpaperId = item.id, wallpaperUrl = item.url)) }
                         )
                         Text(item.label, color = if (on) Coral else mute, fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
                     }
@@ -135,20 +150,47 @@ fun AppearanceEditor(
             }
             Field("Wallpaper opacity", mute)
             Slider(
-                value = look.wallpaperOpacity,
+                value = opacity,
                 onValueChange = { onChange(look.copy(wallpaperOpacity = it)) },
                 enabled = look.hasWallpaper,
                 colors = SliderDefaults.colors(thumbColor = gold, activeTrackColor = gold)
             )
             Field("Translucent overlay", mute)
             Slider(
-                value = look.overlay,
+                value = overlay,
                 onValueChange = { onChange(look.copy(overlay = it)) },
                 colors = SliderDefaults.colors(thumbColor = gold, activeTrackColor = gold)
             )
             GlassCard(Modifier.fillMaxWidth().padding(top = 8.dp).clickable(onClick = onDone), dark, 18) {
                 Text("Done", color = Coral, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
             }
+        }
+    }
+}
+
+@Composable
+private fun SafeWallpaperThumb(id: String, url: String, selected: Boolean, onClick: () -> Unit) {
+    val context = LocalContext.current
+    var bmp by remember(id, url) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(id, url) {
+        bmp = withContext(Dispatchers.IO) {
+            runCatching {
+                val thumb = url.replace("/1080/1920", "/160/240")
+                WallpaperStore.load(context, "$id-thumb", thumb)
+            }.getOrNull()
+        }
+    }
+    val paper = bmp
+    Box(
+        Modifier
+            .size(64.dp, 88.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(0x55FFFFFF))
+            .border(2.dp, if (selected) Coral else Color.Transparent, RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+    ) {
+        if (paper != null && !paper.isRecycled) {
+            Image(paper.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         }
     }
 }
@@ -185,7 +227,7 @@ private fun SwatchRow(selected: Long, ink: Color, onPick: (Long) -> Unit) {
                 Modifier
                     .size(32.dp)
                     .clip(CircleShape)
-                    .background(Color(argb))
+                    .background(argbColor(argb))
                     .border(if (on) 2.dp else 1.dp, if (on) Coral else ink.copy(0.25f), CircleShape)
                     .clickable { onPick(argb) }
             )

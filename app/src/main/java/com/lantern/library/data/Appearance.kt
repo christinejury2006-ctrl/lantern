@@ -94,9 +94,17 @@ fun appearLookFromJson(raw: String?, fallback: AppearLook): AppearLook {
             ombreEndArgb = o.optLong("ombreEnd", fallback.ombreEndArgb),
             wallpaperId = id,
             wallpaperUrl = url,
-            wallpaperOpacity = o.optDouble("wallpaperOpacity", fallback.wallpaperOpacity.toDouble())
-                .toFloat().coerceIn(0f, 1f),
-            overlay = o.optDouble("overlay", fallback.overlay.toDouble()).toFloat().coerceIn(0f, 1f)
+            wallpaperOpacity = unit01(
+                o.optDouble("wallpaperOpacity", fallback.wallpaperOpacity.toDouble()).toFloat(),
+                fallback.wallpaperOpacity
+            ),
+            overlay = unit01(
+                o.optDouble("overlay", fallback.overlay.toDouble()).toFloat(),
+                fallback.overlay
+            )
         )
     }.getOrDefault(fallback)
 }
+
+private fun unit01(value: Float, fallback: Float): Float =
+    if (value.isFinite()) value.coerceIn(0f, 1f) else fallback

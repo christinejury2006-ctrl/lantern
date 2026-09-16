@@ -13,14 +13,16 @@ object WallpaperStore {
 
     fun load(context: Context, id: String?, url: String?): Bitmap? {
         if (id.isNullOrBlank() || url.isNullOrBlank()) return null
-        val dest = file(context, id)
-        if (!dest.exists() || dest.length() < 80L) {
-            val bytes = runCatching { Gutendex.downloadBytes(url) }.getOrNull() ?: return null
-            if (bytes.size < 80 || bytes.size > MAX_BYTES) return null
-            runCatching { dest.writeBytes(bytes) }
-        }
-        if (!dest.exists() || dest.length() < 80L) return null
-        return decode(dest)
+        return runCatching {
+            val dest = file(context, id)
+            if (!dest.exists() || dest.length() < 80L) {
+                val bytes = Gutendex.downloadBytes(url) ?: return@runCatching null
+                if (bytes.size < 80 || bytes.size > MAX_BYTES) return@runCatching null
+                dest.writeBytes(bytes)
+            }
+            if (!dest.exists() || dest.length() < 80L) return@runCatching null
+            decode(dest)
+        }.getOrNull()
     }
 
     private fun decode(file: File): Bitmap? {

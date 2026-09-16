@@ -24,6 +24,8 @@ import com.lantern.library.data.WallpaperStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+fun argbColor(argb: Long): Color = Color((argb and 0xFFFFFFFFL).toInt())
+
 @Composable
 fun AppearanceLayer(
     look: AppearLook,
@@ -34,21 +36,23 @@ fun AppearanceLayer(
     var bmp by remember(look.wallpaperId, look.wallpaperUrl) { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(look.wallpaperId, look.wallpaperUrl) {
         bmp = withContext(Dispatchers.IO) {
-            WallpaperStore.load(context, look.wallpaperId, look.wallpaperUrl)
+            runCatching { WallpaperStore.load(context, look.wallpaperId, look.wallpaperUrl) }.getOrNull()
         }
     }
     val paper = bmp
-    val hasWp = look.hasWallpaper && look.wallpaperOpacity > 0.02f && paper != null
-    val wash = if (hasWp) (0.22f + look.overlay * 0.55f).coerceIn(0.18f, 0.82f) else 1f
-    val start = Color(look.ombreStartArgb)
-    val end = Color(look.ombreEndArgb)
-    val solid = Color(look.solidArgb)
+    val opacity = if (look.wallpaperOpacity.isFinite()) look.wallpaperOpacity.coerceIn(0f, 1f) else 0.32f
+    val overlay = if (look.overlay.isFinite()) look.overlay.coerceIn(0f, 1f) else 0.28f
+    val hasWp = look.hasWallpaper && opacity > 0.02f && paper != null
+    val wash = if (hasWp) (0.22f + overlay * 0.55f).coerceIn(0.18f, 0.82f) else 1f
+    val start = argbColor(look.ombreStartArgb)
+    val end = argbColor(look.ombreEndArgb)
+    val solid = argbColor(look.solidArgb)
     Box(modifier.fillMaxSize()) {
-        if (hasWp && paper != null) {
+        if (hasWp && paper != null && !paper.isRecycled) {
             Image(
                 paper.asImageBitmap(),
                 contentDescription = null,
-                modifier = Modifier.fillMaxSize().graphicsLayer { alpha = look.wallpaperOpacity.coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxSize().graphicsLayer { alpha = opacity },
                 contentScale = ContentScale.Crop
             )
         }
@@ -68,7 +72,7 @@ fun AppearanceLayer(
             Box(
                 Modifier
                     .fillMaxSize()
-                    .background(veil.copy(alpha = (look.overlay * 0.18f).coerceIn(0f, 0.28f)))
+                    .background(veil.copy(alpha = (overlay * 0.18f).coerceIn(0f, 0.28f)))
             )
         }
         content()

@@ -145,10 +145,14 @@ private fun WebPane(
     onAddLibrary: () -> Unit
 ) {
     when (web.phase) {
-        WebPhase.Fetching, WebPhase.Compiling -> Text(
-            web.progress.ifBlank { if (web.phase == WebPhase.Compiling) "Compiling book…" else "Analyzing page…" },
-            color = mute, fontSize = 15.sp, modifier = Modifier.padding(top = 24.dp)
-        )
+        WebPhase.Fetching, WebPhase.Compiling -> {
+            Text(
+                web.progress.ifBlank { if (web.phase == WebPhase.Compiling) "Preparing book" else "Fetching page" },
+                color = ink, fontSize = 16.sp, modifier = Modifier.padding(top = 24.dp)
+            )
+            Text("This can take a while on a long book.", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+            CancelRow(dark, ink, mute, false, onCancel)
+        }
         WebPhase.Failed -> {
             Text(web.error ?: "Could not analyze that page.", color = Coral, fontSize = 14.sp, modifier = Modifier.padding(top = 20.dp))
             CancelRow(dark, ink, mute, false, onCancel)

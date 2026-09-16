@@ -216,7 +216,7 @@ internal fun LanternRoot(store: LanternStore) {
                     else ReaderScreen(
                         book, store.readingPrefs, { store.setPrefs(it) }, back,
                         { p, n -> store.markRead(book.id, p, n) }, { store.addBookmark(book.id, it) },
-                        store.readerAppearance, { store.setReaderAppearance(it) }
+                        store.readerAppearance, { store.saveReaderAppearance(it) }
                     )
                 }
             }

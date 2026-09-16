@@ -29,24 +29,26 @@ fun argbColor(argb: Long): Color = Color((argb and 0xFFFFFFFFL).toInt())
 @Composable
 fun AppearanceLayer(
     look: AppearLook,
+    dark: Boolean = false,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit
 ) {
+    val shown = look.resolvedFor(dark)
     val context = LocalContext.current
-    var bmp by remember(look.wallpaperId, look.wallpaperUrl) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(look.wallpaperId, look.wallpaperUrl) {
+    var bmp by remember(shown.wallpaperId, shown.wallpaperUrl) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(shown.wallpaperId, shown.wallpaperUrl) {
         bmp = withContext(Dispatchers.IO) {
-            runCatching { WallpaperStore.load(context, look.wallpaperId, look.wallpaperUrl) }.getOrNull()
+            runCatching { WallpaperStore.load(context, shown.wallpaperId, shown.wallpaperUrl) }.getOrNull()
         }
     }
     val paper = bmp
-    val opacity = if (look.wallpaperOpacity.isFinite()) look.wallpaperOpacity.coerceIn(0f, 1f) else 0.32f
-    val overlay = if (look.overlay.isFinite()) look.overlay.coerceIn(0f, 1f) else 0.28f
-    val hasWp = look.hasWallpaper && opacity > 0.02f && paper != null
+    val opacity = if (shown.wallpaperOpacity.isFinite()) shown.wallpaperOpacity.coerceIn(0f, 1f) else 0.32f
+    val overlay = if (shown.overlay.isFinite()) shown.overlay.coerceIn(0f, 1f) else 0.28f
+    val hasWp = shown.hasWallpaper && opacity > 0.02f && paper != null
     val wash = if (hasWp) (0.22f + overlay * 0.55f).coerceIn(0.18f, 0.82f) else 1f
-    val start = argbColor(look.ombreStartArgb)
-    val end = argbColor(look.ombreEndArgb)
-    val solid = argbColor(look.solidArgb)
+    val start = argbColor(shown.ombreStartArgb)
+    val end = argbColor(shown.ombreEndArgb)
+    val solid = argbColor(shown.solidArgb)
     Box(modifier.fillMaxSize()) {
         if (hasWp && paper != null && !paper.isRecycled) {
             Image(
@@ -56,7 +58,7 @@ fun AppearanceLayer(
                 contentScale = ContentScale.Crop
             )
         }
-        val fillMod = if (look.fill == AppearFill.Solid) {
+        val fillMod = if (shown.fill == AppearFill.Solid) {
             Modifier.background(solid)
         } else {
             Modifier.background(Brush.verticalGradient(listOf(start, end)))
@@ -68,7 +70,7 @@ fun AppearanceLayer(
                 .then(fillMod)
         )
         if (hasWp) {
-            val veil = if (look.fill == AppearFill.Solid) solid else Color.White
+            val veil = if (dark) Color.Black else Color.White
             Box(
                 Modifier
                     .fillMaxSize()

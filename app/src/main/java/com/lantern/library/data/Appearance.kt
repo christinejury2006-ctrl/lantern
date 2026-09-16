@@ -34,7 +34,39 @@ data class AppearLook(
             wallpaperOpacity = 0.28f,
             overlay = 0.42f
         )
+        val darkDefault = AppearLook(
+            fill = AppearFill.Ombre,
+            solidArgb = 0xFF3A4454,
+            ombreStartArgb = 0xFF3E4A5C,
+            ombreEndArgb = 0xFF2B2430,
+            wallpaperOpacity = 0.28f,
+            overlay = 0.42f
+        )
     }
+
+    fun resolvedFor(dark: Boolean): AppearLook {
+        val factoryLight = sameFills(libraryDefault) || sameFills(readerDefault)
+        val factoryDark = sameFills(darkDefault)
+        return when {
+            dark && factoryLight -> copy(
+                solidArgb = darkDefault.solidArgb,
+                ombreStartArgb = darkDefault.ombreStartArgb,
+                ombreEndArgb = darkDefault.ombreEndArgb
+            )
+            !dark && factoryDark -> copy(
+                solidArgb = libraryDefault.solidArgb,
+                ombreStartArgb = libraryDefault.ombreStartArgb,
+                ombreEndArgb = libraryDefault.ombreEndArgb
+            )
+            else -> this
+        }
+    }
+
+    private fun sameFills(other: AppearLook): Boolean =
+        fill == other.fill &&
+            solidArgb == other.solidArgb &&
+            ombreStartArgb == other.ombreStartArgb &&
+            ombreEndArgb == other.ombreEndArgb
 }
 
 data class LibraryAppearance(val look: AppearLook = AppearLook.libraryDefault)

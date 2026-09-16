@@ -385,7 +385,7 @@ fun ReaderScreen(
     val gold = Color(0xFFE8D9A8)
     val pageTap = Modifier.chromeTap(enabled = !menuOpen, onTap = { toggleChrome() })
 
-    AppearanceLayer(appearance.look) {
+    AppearanceLayer(appearance.look, dark) {
     Box(Modifier.fillMaxSize()) {
         when {
             !ready -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

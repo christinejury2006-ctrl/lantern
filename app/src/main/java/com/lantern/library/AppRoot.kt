@@ -85,14 +85,16 @@ internal fun LanternRoot(store: LanternStore) {
     var tab by remember { mutableStateOf<Route>(Route.Library) }
     var details by remember { mutableStateOf<DiscoveryBook?>(null) }
     var libraryAppearOpen by remember { mutableStateOf(false) }
+    var pickerForStudio by remember { mutableStateOf(true) }
     val theme = store.readingPrefs.theme
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val activity = context as Activity
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         val uri = res.data?.data
-        if (res.resultCode == Activity.RESULT_OK && uri != null) store.studioOpen(uri)
-        else store.studioCancelPick()
+        if (res.resultCode == Activity.RESULT_OK && uri != null) {
+            if (pickerForStudio) store.studioOpen(uri) else store.importUri(uri)
+        } else if (pickerForStudio) store.studioCancelPick()
     }
     val googleSignIn = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         val acc = GoogleAuth.parseResult(res.data)
@@ -105,14 +107,17 @@ internal fun LanternRoot(store: LanternStore) {
         val intent = store.takeDriveConsentIntent() ?: return@LaunchedEffect
         driveConsent.launch(intent)
     }
-    fun addFile() {
-        store.studioBeginPick()
+    fun openBookFile(studio: Boolean) {
+        pickerForStudio = studio
+        if (studio) store.studioBeginPick()
         picker.launch(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "*/*"
             putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/epub+zip", "application/pdf", "application/octet-stream"))
         })
     }
+    fun addFile() { openBookFile(true) }
+    fun importFile() { openBookFile(false) }
     fun openDiscoveryLink(book: DiscoveryBook): Boolean {
         val url = book.infoLink ?: book.buyLink ?: book.previewLink ?: book.canonicalLink
         if (url.isNullOrBlank()) return false
@@ -166,6 +171,7 @@ internal fun LanternRoot(store: LanternStore) {
                     store.forYouBusy,
                     onOpen = { book -> store.openForReading(book) { ready -> if (ready != null) tab = Route.Reader(ready.id) } },
                     onRemove = { store.remove(it) },
+                    onImport = { importFile() },
                     onOpenDiscovery = { details = it },
                     onSaveWant = { store.addWantToRead(it) },
                     onRefreshForYou = { store.refreshForYou() }

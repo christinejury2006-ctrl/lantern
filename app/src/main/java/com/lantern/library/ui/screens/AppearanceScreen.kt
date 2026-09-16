@@ -70,7 +70,7 @@ fun AppearanceEditor(
     val gold = Color(0xFFE8D9A8)
     val opacity = if (look.wallpaperOpacity.isFinite()) look.wallpaperOpacity.coerceIn(0f, 1f) else 0.32f
     val overlay = if (look.overlay.isFinite()) look.overlay.coerceIn(0f, 1f) else 0.28f
-    AppearanceLayer(look) {
+    AppearanceLayer(look, dark) {
         Column(
             Modifier
                 .fillMaxWidth()

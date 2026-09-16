@@ -3,6 +3,8 @@ package com.lantern.library.data
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
@@ -175,7 +177,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         val loadedBooks = ArrayList<LibraryBook>()
         synchronized(libraryLock) {
             loadBooksInto(loadedBooks)
-            mergeSeedInto(loadedBooks)
+            maybeSeedStartersUnlocked(loadedBooks)
             persistBooksList(loadedBooks)
         }
         val want = readWantFile()

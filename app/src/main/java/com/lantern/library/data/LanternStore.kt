@@ -202,13 +202,13 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             .putBoolean("mobile", clean.useMobileData).apply()
     }
 
-    fun setLibraryAppearance(next: LibraryAppearance) {
+    fun saveLibraryAppearance(next: LibraryAppearance) {
         libraryAppearance = next
         persistLook(libraryAppearFile, next.look)
         prefetchWallpaper(next.look)
     }
 
-    fun setReaderAppearance(next: ReaderAppearance) {
+    fun saveReaderAppearance(next: ReaderAppearance) {
         readerAppearance = next
         persistLook(readerAppearFile, next.look)
         prefetchWallpaper(next.look)

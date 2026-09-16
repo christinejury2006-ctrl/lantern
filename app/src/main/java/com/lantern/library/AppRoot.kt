@@ -197,7 +197,7 @@ internal fun LanternRoot(store: LanternStore) {
                         title = "Library Appearance",
                         theme = theme,
                         look = store.libraryAppearance.look,
-                        onChange = { store.setLibraryAppearance(LibraryAppearance(it)) },
+                        onChange = { store.saveLibraryAppearance(LibraryAppearance(it)) },
                         onDone = { libraryAppearOpen = false }
                     )
                 } else ProfileScreen(

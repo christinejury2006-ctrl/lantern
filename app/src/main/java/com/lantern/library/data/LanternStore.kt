@@ -178,6 +178,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         synchronized(libraryLock) {
             loadBooksInto(loadedBooks)
             maybeSeedStartersUnlocked(loadedBooks)
+            maybeRefreshStarterCoversUnlocked(loadedBooks)
             persistBooksList(loadedBooks)
         }
         val want = readWantFile()
@@ -1369,19 +1370,71 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         return "${book.id}.$ext"
     }
 
-    private fun mergeSeedInto(target: MutableList<LibraryBook>) {
-        BundledBooks.seed().forEach { s ->
-            val i = target.indexOfFirst { it.id == s.id }
-            if (i < 0) target.add(s) else target[i] = s.copy(
-                currentPage = target[i].currentPage,
-                lastReadAt = target[i].lastReadAt,
-                finished = target[i].finished,
-                addedAt = target[i].addedAt,
-                driveFileId = target[i].driveFileId,
-                pendingUpload = target[i].pendingUpload,
-                filePath = target[i].filePath
+    private fun maybeSeedStartersUnlocked(target: MutableList<LibraryBook>) {
+        if (prefs.getBoolean("starter_seeded", false)) return
+        val hasUser = target.any { it.origin == BookOrigin.IMPORT || it.origin == BookOrigin.DOWNLOAD }
+        prefs.edit().putBoolean("starter_seeded", true).apply()
+        if (hasUser) return
+        val app = getApplication<Application>()
+        BundledBooks.starter.asReversed().forEach { spec ->
+            val dest = File(BookIo.booksDir(app), "${spec.id}.epub")
+            val coverDest = File(BookIo.coversDir(app), "${spec.id}.jpg")
+            val copied = runCatching {
+                app.assets.open(spec.asset).use { inp ->
+                    dest.parentFile?.mkdirs()
+                    dest.outputStream().use { inp.copyTo(it) }
+                }
+                dest.exists() && dest.length() > 200L
+            }.getOrDefault(false)
+            if (!copied) {
+                runCatching { dest.delete() }
+                return@forEach
+            }
+            val coverOk = writeStarterCover(app, spec.coverRes, coverDest)
+            target.add(
+                0,
+                LibraryBook(
+                    id = spec.id,
+                    title = spec.title,
+                    author = spec.author,
+                    remoteCover = if (coverOk) coverDest.absolutePath else null,
+                    format = BookFormat.EPUB,
+                    origin = BookOrigin.IMPORT,
+                    filePath = dest.absolutePath,
+                    pageCount = 1,
+                    currentPage = 0,
+                    lastReadAt = 0L,
+                    category = spec.category,
+                    synopsis = spec.synopsis,
+                    pendingUpload = false
+                )
             )
         }
+    }
+
+    private fun maybeRefreshStarterCoversUnlocked(target: MutableList<LibraryBook>) {
+        if (prefs.getBoolean("starter_covers_pd", false)) return
+        prefs.edit().putBoolean("starter_covers_pd", true).apply()
+        val app = getApplication<Application>()
+        BundledBooks.starter.forEach { spec ->
+            val i = target.indexOfFirst { it.id == spec.id }
+            if (i < 0) return@forEach
+            val coverDest = File(BookIo.coversDir(app), "${spec.id}.jpg")
+            if (!writeStarterCover(app, spec.coverRes, coverDest)) return@forEach
+            target[i] = target[i].copy(remoteCover = coverDest.absolutePath)
+        }
+    }
+
+    private fun writeStarterCover(app: Application, resId: Int, dest: File): Boolean {
+        return runCatching {
+            val bmp = BitmapFactory.decodeResource(app.resources, resId) ?: return@runCatching false
+            dest.parentFile?.mkdirs()
+            dest.outputStream().use { out ->
+                bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
+            }
+            if (!bmp.isRecycled) bmp.recycle()
+            dest.exists() && dest.length() > 40L
+        }.getOrDefault(false)
     }
 
     private fun loadBooksInto(target: MutableList<LibraryBook>) {

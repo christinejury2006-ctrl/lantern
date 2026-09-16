@@ -62,7 +62,11 @@ fun StudioScreen(
     onSelectCover: (String?) -> Unit,
     onCompile: () -> Unit,
     onPreview: () -> Unit,
-    onAddLibrary: () -> Unit
+    onAddLibrary: () -> Unit,
+    onToggleCollect: (String) -> Unit,
+    onSelectCollectAll: (Boolean) -> Unit,
+    onMoveCollect: (String, Int) -> Unit,
+    onFetchCollection: () -> Unit
 ) {
     val dark = theme == ReaderTheme.DARK
     val ink = if (dark) NightText else Ink
@@ -82,7 +86,8 @@ fun StudioScreen(
                     web, dark, ink, mute,
                     onWebKeep, onWebRemove, onWebCancel,
                     onOpenChapter, onFollowPossible, onIgnorePossible,
-                    onBeginMeta, onSaveMeta, onSelectCover, onCompile, onPreview, onAddLibrary
+                    onBeginMeta, onSaveMeta, onSelectCover, onCompile, onPreview, onAddLibrary,
+                    onToggleCollect, onSelectCollectAll, onMoveCollect, onFetchCollection
                 )
                 filePhase == StudioPhase.Extracting -> Text("Reading this book…", color = mute, fontSize = 15.sp, modifier = Modifier.padding(top = 24.dp))
                 filePhase == StudioPhase.Review || filePhase == StudioPhase.Failed || filePhase == StudioPhase.Committing -> {
@@ -142,7 +147,11 @@ private fun WebPane(
     onSelectCover: (String?) -> Unit,
     onCompile: () -> Unit,
     onPreview: () -> Unit,
-    onAddLibrary: () -> Unit
+    onAddLibrary: () -> Unit,
+    onToggleCollect: (String) -> Unit,
+    onSelectCollectAll: (Boolean) -> Unit,
+    onMoveCollect: (String, Int) -> Unit,
+    onFetchCollection: () -> Unit
 ) {
     when (web.phase) {
         WebPhase.Fetching, WebPhase.Compiling -> {
@@ -160,6 +169,10 @@ private fun WebPane(
         WebPhase.Meta -> MetaPane(web, dark, ink, mute, onSaveMeta, onCancel)
         WebPhase.Cover -> CoverPane(web, dark, ink, mute, onSelectCover, onCompile, onCancel)
         WebPhase.Preview -> PreviewPane(web, dark, ink, mute, onPreview, onAddLibrary, onCancel)
+        WebPhase.Collect -> CollectPane(
+            web, dark, ink, mute,
+            onToggleCollect, onSelectCollectAll, onMoveCollect, onFetchCollection, onCancel
+        )
         WebPhase.Ready -> {
             val kind = if (web.kind == PageKind.Images) "Images" else "Text"
             Text(web.title.ifBlank { "Untitled book" }, color = ink, fontFamily = Playfair, fontSize = 22.sp, modifier = Modifier.padding(top = 18.dp))
@@ -238,6 +251,56 @@ private fun WebPane(
             CancelRow(dark, ink, mute, false, onCancel)
         }
     }
+}
+
+
+@Composable
+private fun CollectPane(
+    web: WebDraft,
+    dark: Boolean,
+    ink: Color,
+    mute: Color,
+    onToggle: (String) -> Unit,
+    onSelectAll: (Boolean) -> Unit,
+    onMove: (String, Int) -> Unit,
+    onFetch: () -> Unit,
+    onCancel: () -> Unit
+) {
+    val n = web.collection.count { it.selected }
+    Text(web.title.ifBlank { "Untitled book" }, color = ink, fontFamily = Playfair, fontSize = 22.sp, modifier = Modifier.padding(top = 18.dp))
+    Text("Choose which pages to include, then continue.", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+    Text("$n of ${web.collection.size} selected", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+    Row(Modifier.padding(top = 12.dp)) {
+        Text("Select all", color = Coral, fontSize = 14.sp, modifier = Modifier.clickable { onSelectAll(true) }.padding(end = 18.dp, top = 4.dp, bottom = 4.dp))
+        Text("Deselect all", color = ink, fontSize = 14.sp, modifier = Modifier.clickable { onSelectAll(false) }.padding(top = 4.dp, bottom = 4.dp))
+    }
+    FieldLabel("Pages", mute)
+    web.collection.forEach { pick ->
+        GlassCard(Modifier.fillMaxWidth().padding(bottom = 8.dp), dark, 16) {
+            Column(Modifier.padding(14.dp)) {
+                Row(Modifier.fillMaxWidth()) {
+                    Text(
+                        if (pick.selected) "✓" else "○",
+                        color = if (pick.selected) Coral else mute,
+                        fontSize = 18.sp,
+                        modifier = Modifier.clickable { onToggle(pick.id) }.padding(end = 10.dp)
+                    )
+                    Column(Modifier.weight(1f).clickable { onToggle(pick.id) }) {
+                        Text(pick.title.ifBlank { "Untitled page" }, color = ink, fontSize = 15.sp)
+                        Text(pick.url, color = mute, fontSize = 11.sp, modifier = Modifier.padding(top = 2.dp), maxLines = 2)
+                    }
+                }
+                Row(Modifier.padding(top = 8.dp)) {
+                    Text("Up", color = ink, fontSize = 13.sp, modifier = Modifier.clickable { onMove(pick.id, -1) }.padding(end = 16.dp, top = 4.dp, bottom = 4.dp))
+                    Text("Down", color = ink, fontSize = 13.sp, modifier = Modifier.clickable { onMove(pick.id, 1) }.padding(top = 4.dp, bottom = 4.dp))
+                }
+            }
+        }
+    }
+    GlassCard(Modifier.fillMaxWidth().padding(top = 10.dp).clickable(enabled = n > 0, onClick = onFetch), dark, 18) {
+        Text("Continue", color = if (n > 0) Coral else mute, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
+    }
+    CancelRow(dark, ink, mute, false, onCancel)
 }
 
 @Composable

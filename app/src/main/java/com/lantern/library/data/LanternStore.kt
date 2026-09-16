@@ -702,6 +702,73 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    fun webToggleCollect(id: String) {
+        val cur = web ?: return
+        if (cur.phase != com.lantern.library.studio.WebPhase.Collect) return
+        web = cur.copy(collection = cur.collection.map {
+            if (it.id == id) it.copy(selected = !it.selected) else it
+        })
+    }
+
+    fun webSelectCollectAll(on: Boolean) {
+        val cur = web ?: return
+        if (cur.phase != com.lantern.library.studio.WebPhase.Collect) return
+        web = cur.copy(collection = cur.collection.map { it.copy(selected = on) })
+    }
+
+    fun webMoveCollect(id: String, delta: Int) {
+        val cur = web ?: return
+        if (cur.phase != com.lantern.library.studio.WebPhase.Collect) return
+        val list = cur.collection.toMutableList()
+        val i = list.indexOfFirst { it.id == id }
+        if (i < 0) return
+        val j = (i + delta).coerceIn(0, list.lastIndex)
+        if (i == j) return
+        val item = list.removeAt(i)
+        list.add(j, item)
+        web = cur.copy(collection = list)
+    }
+
+    fun webFetchCollection() {
+        val cur = web ?: return
+        if (cur.phase != com.lantern.library.studio.WebPhase.Collect) return
+        val chosen = cur.collection.filter { it.selected }
+        if (chosen.isEmpty()) {
+            toast("Select at least one page.")
+            return
+        }
+        val gen = webGen
+        viewModelScope.launch {
+            web = cur.copy(phase = com.lantern.library.studio.WebPhase.Fetching, progress = "Fetching page")
+            val cache = getApplication<Application>().cacheDir
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    com.lantern.library.studio.BookCrawler.fetchMany(
+                        cur.collection,
+                        cache,
+                        cancelled = { gen != webGen }
+                    ) { msg ->
+                        viewModelScope.launch {
+                            if (gen == webGen) web = web?.copy(progress = msg)
+                        }
+                    }
+                }
+            }
+            if (gen != webGen) return@launch
+            val err = result.exceptionOrNull()
+            web = if (result.isSuccess) {
+                result.getOrNull()
+            } else if (err?.message == "cancelled") {
+                return@launch
+            } else {
+                cur.copy(
+                    phase = com.lantern.library.studio.WebPhase.Failed,
+                    error = err?.message?.takeIf { it.isNotBlank() } ?: "Could not read those pages."
+                )
+            }
+        }
+    }
+
     fun webCancel() {
         webGen++
         web = null

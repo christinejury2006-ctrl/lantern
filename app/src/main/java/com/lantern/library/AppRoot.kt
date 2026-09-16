@@ -202,7 +202,11 @@ internal fun LanternRoot(store: LanternStore) {
                     onSelectCover = { store.webSelectCover(it) },
                     onCompile = { store.webCompile() },
                     onPreview = { store.webOpenPreview { ready -> if (ready != null) tab = Route.Reader(ready.id, fromStudio = true) } },
-                    onAddLibrary = { store.webAddToLibrary() }
+                    onAddLibrary = { store.webAddToLibrary() },
+                    onToggleCollect = { store.webToggleCollect(it) },
+                    onSelectCollectAll = { store.webSelectCollectAll(it) },
+                    onMoveCollect = { id, d -> store.webMoveCollect(id, d) },
+                    onFetchCollection = { store.webFetchCollection() }
                 )
                 Route.Search -> SearchScreen(theme) { remote -> store.download(remote) { book -> store.openForReading(book) { ready -> if (ready != null) tab = Route.Reader(ready.id) } } }
                 Route.Profile -> if (libraryAppearOpen) {

@@ -25,6 +25,16 @@ internal object BookCrawler {
         alive()
         onProgress("Analysing content")
         val firstParse = PageAnalyzer.analyze(first.html, first.url)
+        val picks = ChapterDiscovery.collection(first.html, first.url, firstParse.title)
+        if (picks.size >= 2) {
+            return WebDraft(
+                phase = WebPhase.Collect,
+                url = first.url,
+                title = stripChapter(firstParse.title).ifBlank { firstParse.title },
+                kind = firstParse.kind,
+                collection = picks
+            )
+        }
         val chapters = ArrayList<WebChapter>()
         val visited = HashSet<String>()
 
@@ -87,14 +97,60 @@ internal object BookCrawler {
         )
     }
 
-    fun fetchOne(url: String, cacheDir: File, index: Int): WebChapter? {
+    fun fetchOne(url: String, cacheDir: File, index: Int, label: String? = null): WebChapter? {
         val page = runCatching { WebFetch.page(url) }.getOrNull() ?: return null
         val parse = PageAnalyzer.analyze(page.html, page.url)
+        val title = label?.takeIf { it.isNotBlank() } ?: parse.title
         return toChapter(
-            parse, WebFetch.webDir(cacheDir), index, parse.title,
-            ChapterDiscovery.chapterNumber(parse.title, parse.url),
+            parse, WebFetch.webDir(cacheDir), index, title,
+            ChapterDiscovery.chapterNumber(title, parse.url),
             { false },
             {}
+        )
+    }
+
+    fun fetchMany(
+        items: List<WebPagePick>,
+        cacheDir: File,
+        cancelled: () -> Boolean = { false },
+        onProgress: (String) -> Unit
+    ): WebDraft {
+        fun alive() {
+            if (cancelled()) error("cancelled")
+        }
+        val dir = WebFetch.webDir(cacheDir)
+        val chosen = items.filter { it.selected }.take(MAX_PAGES)
+        if (chosen.isEmpty()) error("No pages selected")
+        val chapters = ArrayList<WebChapter>()
+        chosen.forEachIndexed { i, pick ->
+            alive()
+            onProgress("Fetching page\n${i + 1} / ${chosen.size}")
+            val page = runCatching { WebFetch.page(pick.url) }.getOrNull()
+            if (page == null) return@forEachIndexed
+            alive()
+            onProgress("Analysing page ${i + 1} / ${chosen.size}")
+            val parse = PageAnalyzer.analyze(page.html, page.url)
+            val label = pick.title.ifBlank { parse.title }
+            chapters += toChapter(
+                parse, dir, chapters.size, label,
+                ChapterDiscovery.chapterNumber(label, parse.url),
+                cancelled, onProgress
+            )
+            if (i < chosen.lastIndex) Thread.sleep(150)
+        }
+        if (chapters.isEmpty()) error("Could not read those pages.")
+        val bookKind = if (chapters.count { it.kind == PageKind.Images } * 2 > chapters.size) {
+            PageKind.Images
+        } else PageKind.Text
+        val title = stripChapter(chapters.first().title).ifBlank { chapters.first().title }
+        return WebDraft(
+            phase = WebPhase.Ready,
+            url = chosen.first().url,
+            title = title,
+            kind = bookKind,
+            chapters = chapters,
+            openChapterId = chapters.firstOrNull()?.id,
+            collection = items
         )
     }
 

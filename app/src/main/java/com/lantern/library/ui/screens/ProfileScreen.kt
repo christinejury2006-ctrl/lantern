@@ -85,15 +85,15 @@ fun ProfileScreen(
                         Text(account.email, color = mute)
                         if (account.provider == "google") {
                             if (account.driveConnected) {
-                                Text("Google Drive backs up your books", color = mute, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+                                Text("Library, progress, bookmarks, and settings sync to your account. EPUB and PDF files stay on this phone.", color = mute, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
                             } else {
-                                Text("Drive backup is not connected. Books stay on this phone.", color = mute, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
-                                Text("Connect Drive", color = Coral, modifier = Modifier.padding(top = 10.dp).clickable(onClick = onConnectDrive))
+                                Text("Account sync is not connected. Everything stays on this phone.", color = mute, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+                                Text("Connect account sync", color = Coral, modifier = Modifier.padding(top = 10.dp).clickable(onClick = onConnectDrive))
                             }
                         }
                         Text("Sign out", color = Coral, modifier = Modifier.padding(top = 10.dp).clickable(onClick = onSignOut))
                     } else {
-                        Text("Sign in with Google to keep up to 200 books in Drive.", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+                        Text("Sign in with Google to keep library, progress, and settings in your account. Book files stay on this phone.", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
                         Text("Sign in with Google", color = Coral, modifier = Modifier.padding(top = 12.dp).clickable(onClick = onGoogleSignIn))
                     }
                 }

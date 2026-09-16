@@ -3,6 +3,8 @@ package com.lantern.library.data
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -31,8 +33,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     private val pendingDeleteFile = File(app.filesDir, "pending_deletes.json")
     private val libraryAppearFile = File(app.filesDir, "library_appearance.json")
     private val readerAppearFile = File(app.filesDir, "reader_appearance.json")
+    private val bookmarksFile = File(app.filesDir, "bookmarks.json")
     private val libraryLock = Any()
     private val pendingDeleteLock = Any()
+    private val bookmarksLock = Any()
     val books = mutableStateListOf<LibraryBook>()
     val wantToRead = mutableStateListOf<DiscoveryBook>()
     var forYou by mutableStateOf<List<DiscoveryBook>>(emptyList())
@@ -69,6 +73,13 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     private var previewBook: LibraryBook? = null
     private var driveConsentPrompted = false
     private var googleAccountKey: String? = null
+    private val bookmarkRecords = mutableStateListOf<SavedBookmark>()
+    private var libraryAppearAt = 0L
+    private var readerAppearAt = 0L
+    private var prefsAt = 0L
+    private var snapshotAt = 0L
+    private var syncGen = 0
+    private var applyingRemote = false
 
     private data class DiskHydrate(
         val readingPrefs: ReadingPrefs,
@@ -80,7 +91,12 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         val interests: List<String>,
         val forYouCached: List<DiscoveryBook>,
         val libraryAppearance: LibraryAppearance,
-        val readerAppearance: ReaderAppearance
+        val readerAppearance: ReaderAppearance,
+        val bookmarks: List<SavedBookmark>,
+        val libraryAppearAt: Long,
+        val readerAppearAt: Long,
+        val prefsAt: Long,
+        val snapshotAt: Long
     )
 
     init {
@@ -109,6 +125,14 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             interests = disk.interests
             libraryAppearance = disk.libraryAppearance
             readerAppearance = disk.readerAppearance
+            libraryAppearAt = disk.libraryAppearAt
+            readerAppearAt = disk.readerAppearAt
+            prefsAt = disk.prefsAt
+            snapshotAt = disk.snapshotAt
+            synchronized(bookmarksLock) {
+                bookmarkRecords.clear()
+                bookmarkRecords.addAll(disk.bookmarks)
+            }
             StartupTrace.mark("LanternStore prefs interestsChosen=$interestsChosen n=${interests.size}")
             if (interestsChosen) {
                 forYou = disk.forYouCached
@@ -117,8 +141,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             hydrated = true
             StartupTrace.mark("LanternStore hydrated")
             if (interestsChosen) ensureRecommendations()
-            if (account.signedIn && account.provider == "google") {
-                viewModelScope.launch(Dispatchers.IO) { connectDrive(migrate = true, quiet = true) }
+            if (account.signedIn && account.provider == "google" && GoogleAuth.accountId(acc) != null) {
+                viewModelScope.launch(Dispatchers.IO) { connectDrive(quiet = true, pullAccount = true) }
             }
         }
     }
@@ -140,11 +164,13 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             landscape = prefs.getBoolean("landscape", false),
             useMobileData = prefs.getBoolean("mobile", true)
         )
+        val storedId = prefs.getString("uid", "").orEmpty()
         val accountFromPrefs = CloudAccount(
-            prefs.getBoolean("in", false),
-            prefs.getString("name", "") ?: "",
-            prefs.getString("email", "") ?: "",
-            prefs.getString("prov", "") ?: ""
+            signedIn = prefs.getBoolean("in", false),
+            displayName = prefs.getString("name", "") ?: "",
+            email = prefs.getString("email", "") ?: "",
+            provider = prefs.getString("prov", "") ?: "",
+            userId = if (storedId.isNotBlank() && '@' !in storedId) storedId else ""
         )
         val loadedBooks = ArrayList<LibraryBook>()
         synchronized(libraryLock) {
@@ -161,21 +187,18 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             .map { it.trim() }
             .filter { it.isNotEmpty() }
         val cached = if (chosen) Recommendations.cached(app, chosenInterests).orEmpty() else emptyList()
-        val libAppear = LibraryAppearance(
-            appearLookFromJson(
-                runCatching { if (libraryAppearFile.exists()) libraryAppearFile.readText() else null }.getOrNull(),
-                AppearLook.libraryDefault
-            )
-        )
-        val readAppear = ReaderAppearance(
-            appearLookFromJson(
-                runCatching { if (readerAppearFile.exists()) readerAppearFile.readText() else null }.getOrNull(),
-                AppearLook.readerDefault
-            )
-        )
+        val libRaw = runCatching { if (libraryAppearFile.exists()) libraryAppearFile.readText() else null }.getOrNull()
+        val readRaw = runCatching { if (readerAppearFile.exists()) readerAppearFile.readText() else null }.getOrNull()
+        val libAppear = LibraryAppearance(appearLookFromJson(libRaw, AppearLook.libraryDefault))
+        val readAppear = ReaderAppearance(appearLookFromJson(readRaw, AppearLook.readerDefault))
+        val marks = readBookmarksFile()
         return DiskHydrate(
             loadedPrefs, accountFromPrefs, googleAcc, loadedBooks, want,
-            chosen, chosenInterests, cached, libAppear, readAppear
+            chosen, chosenInterests, cached, libAppear, readAppear, marks,
+            appearUpdatedAt(libRaw, prefs.getLong("libraryAppearAt", 0L)),
+            appearUpdatedAt(readRaw, prefs.getLong("readerAppearAt", 0L)),
+            prefs.getLong("prefsAt", 0L),
+            prefs.getLong("snapshotAt", 0L)
         )
     }
 
@@ -195,35 +218,49 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             readerTheme = if (next.readerTheme == ReaderTheme.DARK) ReaderTheme.DARK else ReaderTheme.LIGHT
         )
         readingPrefs = clean
+        prefsAt = System.currentTimeMillis()
         prefs.edit().putString("theme", clean.theme.name).putString("readerTheme", clean.readerTheme.name)
             .putString("fontId", clean.fontId)
             .putFloat("fontSize", clean.fontSizeSp).putFloat("brightness", clean.brightness)
             .putBoolean("swipe", clean.swipeMode).putBoolean("landscape", clean.landscape)
-            .putBoolean("mobile", clean.useMobileData).apply()
+            .putBoolean("mobile", clean.useMobileData)
+            .putLong("prefsAt", prefsAt)
+            .apply()
+        markLocalChanged()
     }
 
     fun saveLibraryAppearance(next: LibraryAppearance) {
-        libraryAppearance = next
-        persistLook(libraryAppearFile, next.look)
-        prefetchWallpaper(next.look)
+        val look = next.look.forCloud().copy(
+            wallpaperOpacity = next.look.wallpaperOpacity,
+            overlay = next.look.overlay,
+            fill = next.look.fill,
+            solidArgb = next.look.solidArgb,
+            ombreStartArgb = next.look.ombreStartArgb,
+            ombreEndArgb = next.look.ombreEndArgb
+        )
+        libraryAppearance = LibraryAppearance(look)
+        libraryAppearAt = System.currentTimeMillis()
+        persistLook(libraryAppearFile, look, libraryAppearAt)
+        markLocalChanged()
     }
 
     fun saveReaderAppearance(next: ReaderAppearance) {
-        readerAppearance = next
-        persistLook(readerAppearFile, next.look)
-        prefetchWallpaper(next.look)
+        val look = next.look.forCloud().copy(
+            wallpaperOpacity = next.look.wallpaperOpacity,
+            overlay = next.look.overlay,
+            fill = next.look.fill,
+            solidArgb = next.look.solidArgb,
+            ombreStartArgb = next.look.ombreStartArgb,
+            ombreEndArgb = next.look.ombreEndArgb
+        )
+        readerAppearance = ReaderAppearance(look)
+        readerAppearAt = System.currentTimeMillis()
+        persistLook(readerAppearFile, look, readerAppearAt)
+        markLocalChanged()
     }
 
-    private fun persistLook(file: File, look: AppearLook) {
-        runCatching { atomicWrite(file, look.toJson().toString()) }
-    }
-
-    private fun prefetchWallpaper(look: AppearLook) {
-        if (!look.hasWallpaper) return
-        val app = getApplication<Application>()
-        viewModelScope.launch(Dispatchers.IO) {
-            WallpaperStore.load(app, look.wallpaperId, look.wallpaperUrl)
-        }
+    private fun persistLook(file: File, look: AppearLook, updatedAt: Long = 0L) {
+        runCatching { atomicWrite(file, look.forCloud().toJson().put("updatedAt", updatedAt).toString()) }
     }
 
     fun toast(msg: String) { viewModelScope.launch { toast = msg; delay(5000); if (toast == msg) toast = null } }
@@ -249,6 +286,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             persistBooksUnlocked()
         }
         dropFromRecommendations { Recommendations.inLibrary(it, listOf(book)) }
+        markLocalChanged()
     }
 
     private enum class CommitUserBookResult { ACCEPTED, LIBRARY_FULL, PERSIST_FAILED }
@@ -281,6 +319,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         if (discardCopiedFile) discardOrphan(book)
         if (result == CommitUserBookResult.ACCEPTED) {
             dropFromRecommendations { Recommendations.inLibrary(it, listOf(book)) }
+            markLocalChanged()
         }
         return result
     }
@@ -300,8 +339,17 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             persistBooksUnlocked()
             found
         }
+        synchronized(bookmarksLock) {
+            val next = bookmarkRecords.filterNot { it.bookId == id }
+            if (next.size != bookmarkRecords.size) {
+                bookmarkRecords.clear()
+                bookmarkRecords.addAll(next)
+                persistBookmarksUnlocked()
+            }
+        }
         b.filePath?.let { runCatching { File(it).delete() } }
         toast("Removed from library")
+        markLocalChanged()
         val driveId = b.driveFileId
         if (!driveId.isNullOrBlank()) {
             viewModelScope.launch(Dispatchers.IO) {
@@ -324,7 +372,27 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         val b = book(id) ?: return
         upsert(b.copy(currentPage = page.coerceAtLeast(0), pageCount = pages.coerceAtLeast(1), lastReadAt = System.currentTimeMillis(), finished = pages > 0 && page >= pages - 1))
     }
-    fun addBookmark(bookId: String, page: Int) { toast("Bookmark saved · page ${page + 1}") }
+    fun addBookmark(bookId: String, page: Int) {
+        if (bookId == STUDIO_PREVIEW_ID) {
+            toast("Bookmark saved · page ${page + 1}")
+            return
+        }
+        val at = System.currentTimeMillis()
+        synchronized(bookmarksLock) {
+            if (bookmarkRecords.none { it.bookId == bookId && it.pageIndex == page }) {
+                bookmarkRecords.add(0, SavedBookmark(bookId, page, at))
+                persistBookmarksUnlocked()
+            }
+        }
+        toast("Bookmark saved · page ${page + 1}")
+        markLocalChanged()
+    }
+
+    fun bookmarksFor(bookId: String): List<Int> =
+        synchronized(bookmarksLock) {
+            bookmarkRecords.filter { it.bookId == bookId }.map { it.pageIndex }.distinct().sorted()
+        }
+
     fun isWantToRead(book: DiscoveryBook) = wantToRead.any { Recommendations.sameWork(it, book) }
     fun addWantToRead(book: DiscoveryBook) {
         if (wantToRead.any { Recommendations.sameWork(it, book) }) return
@@ -398,11 +466,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 toast("Could not add that file")
                 return@launch
             }
-            val incoming = book.copy(pendingUpload = true)
+            val incoming = book.copy(pendingUpload = false)
             when (commitNewUserBook(incoming)) {
                 CommitUserBookResult.ACCEPTED -> {
                     toast("Added to Library")
-                    uploadIfPossible(book.id)
                 }
                 CommitUserBookResult.LIBRARY_FULL -> {
                     withContext(Dispatchers.IO) { discardOrphan(incoming) }
@@ -526,7 +593,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 origin = BookOrigin.IMPORT,
                 filePath = dest.absolutePath,
                 pageCount = current.pageCount.coerceAtLeast(1),
-                pendingUpload = true
+                pendingUpload = false
             )
             when (commitNewUserBook(incoming)) {
                 CommitUserBookResult.ACCEPTED -> {
@@ -534,7 +601,6 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     studioGen++
                     studio = null
                     withContext(Dispatchers.IO) { wipeStudioSession(current) }
-                    uploadIfPossible(id)
                 }
                 CommitUserBookResult.LIBRARY_FULL -> {
                     withContext(Dispatchers.IO) { discardOrphan(incoming) }
@@ -791,7 +857,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 origin = BookOrigin.IMPORT,
                 filePath = dest.absolutePath,
                 pageCount = pages,
-                pendingUpload = true
+                pendingUpload = false
             )
             when (commitNewUserBook(incoming)) {
                 CommitUserBookResult.ACCEPTED -> {
@@ -802,7 +868,6 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     withContext(Dispatchers.IO) {
                         com.lantern.library.studio.WebFetch.clearWebDir(app.cacheDir)
                     }
-                    uploadIfPossible(id)
                 }
                 CommitUserBookResult.LIBRARY_FULL -> {
                     withContext(Dispatchers.IO) { discardOrphan(incoming) }
@@ -835,12 +900,11 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 toast("Download failed")
                 return@launch
             }
-            val incoming = book.copy(pendingUpload = true)
+            val incoming = book.copy(pendingUpload = false)
             when (commitNewUserBook(incoming)) {
                 CommitUserBookResult.ACCEPTED -> {
                     toast("Saved ${book.title}")
                     then?.invoke(incoming)
-                    uploadIfPossible(book.id)
                 }
                 CommitUserBookResult.LIBRARY_FULL -> {
                     withContext(Dispatchers.IO) { discardOrphan(incoming) }
@@ -853,38 +917,34 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
 
     fun openForReading(book: LibraryBook, then: (LibraryBook?) -> Unit) {
         viewModelScope.launch {
-            val ready = withContext(Dispatchers.IO) { ensureCached(book) }
-            if (ready == null) {
-                val signedIn = account.signedIn && account.provider == "google"
-                toast(
-                    when {
-                        !book.filePath.isNullOrBlank() && !File(book.filePath).exists() && book.driveFileId.isNullOrBlank() ->
-                            "File is missing. Import it again."
-                        !signedIn && !book.driveFileId.isNullOrBlank() ->
-                            "Sign in to download this book"
-                        signedIn && !account.driveConnected && !book.driveFileId.isNullOrBlank() ->
-                            "Connect Drive to download this book"
-                        else -> "Could not open this book"
-                    }
-                )
+            if (!book.localFileAvailable) {
+                toast("Import this book on this phone to read it.")
+                then(null)
+                return@launch
             }
+            val ready = withContext(Dispatchers.IO) { ensureCached(book) }
+            if (ready == null) toast("Could not open this book")
             then(ready)
         }
     }
 
     fun onGoogleSignedIn(acc: GoogleSignInAccount) {
-        val incoming = GoogleAuth.accountKey(acc)
+        val incoming = GoogleAuth.accountId(acc)
         if (googleAccountKey != null && incoming != null && googleAccountKey != incoming) {
             DriveLibrary.clearCachedFolder()
         }
         googleAccountKey = incoming
-        applyAccount(acc, announce = true)
-        viewModelScope.launch(Dispatchers.IO) { connectDrive(migrate = true, quiet = false) }
+        applyAccount(acc, announce = incoming != null)
+        if (incoming.isNullOrBlank()) {
+            toast("Signed in, but Google did not return a stable account ID. Library stays on this phone.")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) { connectDrive(quiet = false, pullAccount = true) }
     }
 
     fun requestDriveConnect() {
         driveConsentPrompted = false
-        viewModelScope.launch(Dispatchers.IO) { connectDrive(migrate = true, quiet = false) }
+        viewModelScope.launch(Dispatchers.IO) { connectDrive(quiet = false, pullAccount = true) }
     }
 
     fun takeDriveConsentIntent(): Intent? {
@@ -894,10 +954,11 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     }
 
     fun onDriveConsentFinished() {
-        viewModelScope.launch(Dispatchers.IO) { connectDrive(migrate = true, quiet = false) }
+        viewModelScope.launch(Dispatchers.IO) { connectDrive(quiet = false, pullAccount = true) }
     }
 
     fun signOut(activity: android.app.Activity) {
+        syncGen++
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 DriveLibrary.clearCachedFolder()
@@ -908,7 +969,11 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     driveConsentPrompted = false
                     driveConsentIntent = null
                     account = CloudAccount()
-                    prefs.edit().putBoolean("in", false).putString("prov", "").apply()
+                    prefs.edit()
+                        .putBoolean("in", false)
+                        .putString("prov", "")
+                        .putString("uid", "")
+                        .apply()
                     toast("Signed out")
                 }
             }
@@ -918,8 +983,15 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     private fun applyAccount(acc: GoogleSignInAccount, announce: Boolean) {
         val name = acc.displayName.orEmpty().ifBlank { acc.email.orEmpty() }
         val email = acc.email.orEmpty()
-        account = CloudAccount(true, name, email, "google", driveConnected = false)
-        prefs.edit().putBoolean("in", true).putString("name", name).putString("email", email).putString("prov", "google").apply()
+        val uid = GoogleAuth.accountId(acc).orEmpty()
+        account = CloudAccount(true, name, email, "google", driveConnected = false, userId = uid)
+        prefs.edit()
+            .putBoolean("in", true)
+            .putString("name", name)
+            .putString("email", email)
+            .putString("prov", "google")
+            .putString("uid", uid)
+            .apply()
         if (announce) toast("Signed in as $name")
     }
 
@@ -935,18 +1007,18 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         driveConsentIntent = intent
     }
 
-    private suspend fun connectDrive(migrate: Boolean, quiet: Boolean) {
+    private suspend fun connectDrive(quiet: Boolean, pullAccount: Boolean) {
         when (val result = GoogleAuth.driveToken(getApplication())) {
             is DriveTokenResult.Ok -> {
                 withContext(Dispatchers.Main) { setDriveConnected(true) }
                 retryPendingDeletes()
-                if (migrate) migrateLocalToDrive()
+                if (pullAccount) runAccountSync(announce = !quiet)
             }
             is DriveTokenResult.Recoverable -> {
                 withContext(Dispatchers.Main) {
                     setDriveConnected(false)
                     if (driveConsentPrompted) {
-                        if (!quiet) toast("Drive backup is not connected")
+                        if (!quiet) toast("Account sync is not connected")
                     } else {
                         offerDriveConsent(result.intent)
                     }
@@ -955,7 +1027,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             DriveTokenResult.Unavailable -> {
                 withContext(Dispatchers.Main) {
                     setDriveConnected(false)
-                    if (!quiet && account.signedIn) toast("Drive backup is not connected")
+                    if (!quiet && account.signedIn) toast("Account sync is not connected")
                 }
             }
         }
@@ -1000,6 +1072,42 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private suspend fun <T> withDriveOutcome(op: (String, String) -> DriveOutcome<T>): DriveOutcome<T>? {
+        val ctx = getApplication<Application>()
+        val owner = GoogleAuth.accountKey(ctx) ?: return null
+        suspend fun token(): String? {
+            if (GoogleAuth.accountKey(ctx) != owner) return null
+            return when (val result = GoogleAuth.driveToken(ctx)) {
+                is DriveTokenResult.Ok -> {
+                    withContext(Dispatchers.Main) { setDriveConnected(true) }
+                    result.token
+                }
+                is DriveTokenResult.Recoverable -> {
+                    withContext(Dispatchers.Main) {
+                        setDriveConnected(false)
+                        offerDriveConsent(result.intent)
+                    }
+                    null
+                }
+                DriveTokenResult.Unavailable -> {
+                    withContext(Dispatchers.Main) { setDriveConnected(false) }
+                    null
+                }
+            }
+        }
+        val first = token() ?: return null
+        return when (val out = op(first, owner)) {
+            is DriveOutcome.Ok -> out
+            DriveOutcome.Failed -> DriveOutcome.Failed
+            DriveOutcome.Unauthorized -> {
+                if (GoogleAuth.accountKey(ctx) != owner) return null
+                GoogleAuth.clearToken(ctx, first)
+                val second = token() ?: return null
+                op(second, owner)
+            }
+        }
+    }
+
     private suspend fun ensureCached(book: LibraryBook): LibraryBook? {
         if (book.origin == BookOrigin.BUNDLED || book.format == BookFormat.TEXT) return book
         val local = book.filePath?.let { File(it) }
@@ -1014,44 +1122,170 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         return updated
     }
 
-    private suspend fun uploadIfPossible(bookId: String) {
-        withContext(Dispatchers.IO) {
-            val book = book(bookId) ?: return@withContext
-            val file = book.filePath?.let { File(it) } ?: return@withContext
-            if (!file.exists()) return@withContext
-            val id = withDrive { token, owner ->
-                when (val folder = DriveLibrary.ensureFolder(token, owner)) {
-                    is DriveOutcome.Ok -> DriveLibrary.upload(token, folder.value, book, file)
-                    DriveOutcome.Unauthorized -> DriveOutcome.Unauthorized
-                    DriveOutcome.Failed -> DriveOutcome.Failed
-                }
-            }
-            if (id == null) {
-                if (account.driveConnected) {
-                    withContext(Dispatchers.Main) {
-                        toast("Could not back up ${book.title}. It stays on this phone.")
-                    }
-                }
-                return@withContext
-            }
-            withContext(Dispatchers.Main) {
-                val latest = book(bookId) ?: return@withContext
-                upsert(latest.copy(driveFileId = id, pendingUpload = false))
-            }
+    private fun markLocalChanged() {
+        if (applyingRemote) return
+        snapshotAt = System.currentTimeMillis()
+        prefs.edit().putLong("snapshotAt", snapshotAt).putBoolean("sync_dirty", true).apply()
+        scheduleSync()
+    }
+
+    private fun scheduleSync() {
+        if (!account.signedIn || account.provider != "google") return
+        if (GoogleAuth.accountId(getApplication()) == null) return
+        val gen = ++syncGen
+        viewModelScope.launch(Dispatchers.IO) {
+            delay(8_000)
+            if (gen != syncGen) return@launch
+            runAccountSync(announce = false)
         }
     }
 
-    private suspend fun migrateLocalToDrive() {
-        val pending = synchronized(libraryLock) {
-            books.filter {
-                (it.origin == BookOrigin.IMPORT || it.origin == BookOrigin.DOWNLOAD) &&
-                    it.driveFileId.isNullOrBlank() &&
-                    it.filePath?.let { p -> File(p).exists() } == true
+    private fun networkReady(): Boolean {
+        val cm = getApplication<Application>().getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return false
+        val net = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(net) ?: return false
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+
+    private fun currentSnapshot(): AccountSnapshot {
+        val bookList = synchronized(libraryLock) { books.toList() }
+        val marks = synchronized(bookmarksLock) { bookmarkRecords.toList() }
+        val accountId = GoogleAuth.accountId(getApplication())
+            ?: account.userId.takeIf { it.isNotBlank() && '@' !in it }
+            ?: ""
+        return AccountSnapshot(
+            updatedAt = snapshotAt,
+            userId = accountId,
+            books = bookList,
+            bookmarks = marks,
+            libraryAppearance = libraryAppearance.look,
+            readerAppearance = readerAppearance.look,
+            prefs = readingPrefs,
+            libraryAppearAt = libraryAppearAt,
+            readerAppearAt = readerAppearAt,
+            prefsAt = prefsAt,
+            bookOrder = bookList.map { it.id }
+        )
+    }
+
+    private suspend fun runAccountSync(announce: Boolean) {
+        if (!account.signedIn || account.provider != "google") return
+        if (GoogleAuth.accountId(getApplication()).isNullOrBlank()) return
+        if (!networkReady()) return
+        val local = withContext(Dispatchers.Main) { currentSnapshot() }
+        val cloudOutcome = withDriveOutcome { token, owner ->
+            when (val folder = DriveLibrary.ensureFolder(token, owner)) {
+                is DriveOutcome.Ok -> DriveLibrary.readJsonByLoreId(token, AccountSync.STATE_LORE_ID)
+                DriveOutcome.Unauthorized -> DriveOutcome.Unauthorized
+                DriveOutcome.Failed -> DriveOutcome.Failed
             }
         }
-        if (pending.isEmpty()) return
-        withContext(Dispatchers.Main) { toast("Backing up ${pending.size} book${if (pending.size == 1) "" else "s"}…") }
-        pending.forEach { uploadIfPossible(it.id) }
+        val cloudRaw = when (cloudOutcome) {
+            null, DriveOutcome.Unauthorized -> return
+            DriveOutcome.Failed -> {
+                if (announce) withContext(Dispatchers.Main) { toast("Could not sync account. Library stays on this phone.") }
+                return
+            }
+            is DriveOutcome.Ok -> cloudOutcome.value
+        }
+        val cloud = AccountSync.fromJson(cloudRaw)
+        val merged = AccountSync.merge(local, cloud)
+        withContext(Dispatchers.Main) { applySnapshot(merged) }
+        val written = withDrive { token, owner ->
+            when (val folder = DriveLibrary.ensureFolder(token, owner)) {
+                is DriveOutcome.Ok -> DriveLibrary.writeJsonByLoreId(
+                    token,
+                    folder.value,
+                    AccountSync.STATE_LORE_ID,
+                    AccountSync.STATE_FILE_NAME,
+                    AccountSync.toJson(merged)
+                )
+                DriveOutcome.Unauthorized -> DriveOutcome.Unauthorized
+                DriveOutcome.Failed -> DriveOutcome.Failed
+            }
+        }
+        if (written != null) {
+            withContext(Dispatchers.Main) {
+                val at = System.currentTimeMillis()
+                prefs.edit().putBoolean("sync_dirty", false).putLong("lastSyncAt", at).apply()
+                account = account.copy(lastSyncAt = at)
+                if (announce) toast("Account sync complete")
+            }
+        } else if (announce) {
+            withContext(Dispatchers.Main) { toast("Could not sync account. Library stays on this phone.") }
+        }
+    }
+
+    private fun applySnapshot(snap: AccountSnapshot) {
+        applyingRemote = true
+        try {
+            val incoming = snap.books.filter { it.origin != BookOrigin.BUNDLED && it.id !in BundledBooks.seedIds }
+            synchronized(libraryLock) {
+                val localById = books.associateBy { it.id }
+                val keptBundled = books.filter { it.origin == BookOrigin.BUNDLED }
+                val next = ArrayList<LibraryBook>(keptBundled.size + incoming.size)
+                next.addAll(keptBundled)
+                incoming.forEach { cloudBook ->
+                    val local = localById[cloudBook.id]
+                    val localFile = local?.filePath?.let { File(it) }
+                    val fileOk = localFile != null && localFile.exists() && localFile.length() > 0L
+                    next += if (local != null) {
+                        cloudBook.copy(
+                            filePath = if (fileOk) local.filePath else null,
+                            remoteCover = local.remoteCover?.takeIf { !it.startsWith("http") && File(it).exists() }
+                                ?: cloudBook.remoteCover ?: local.remoteCover,
+                            driveFileId = local.driveFileId ?: cloudBook.driveFileId,
+                            pendingUpload = false
+                        )
+                    } else {
+                        cloudBook.copy(filePath = null, pendingUpload = false)
+                    }
+                }
+                val ordered = ArrayList<LibraryBook>(next.size)
+                val seen = HashSet<String>()
+                snap.bookOrder.forEach { id ->
+                    val b = next.firstOrNull { it.id == id } ?: return@forEach
+                    if (seen.add(b.id)) ordered += b
+                }
+                next.forEach { if (seen.add(it.id)) ordered += it }
+                books.clear()
+                books.addAll(ordered)
+                persistBooksUnlocked()
+            }
+            synchronized(bookmarksLock) {
+                bookmarkRecords.clear()
+                bookmarkRecords.addAll(snap.bookmarks)
+                persistBookmarksUnlocked()
+            }
+            libraryAppearance = LibraryAppearance(snap.libraryAppearance.forCloud())
+            readerAppearance = ReaderAppearance(snap.readerAppearance.forCloud())
+            libraryAppearAt = snap.libraryAppearAt
+            readerAppearAt = snap.readerAppearAt
+            persistLook(libraryAppearFile, libraryAppearance.look, libraryAppearAt)
+            persistLook(readerAppearFile, readerAppearance.look, readerAppearAt)
+            if (snap.prefsAt >= prefsAt) {
+                readingPrefs = snap.prefs
+                prefsAt = snap.prefsAt
+                prefs.edit().putString("theme", snap.prefs.theme.name)
+                    .putString("readerTheme", snap.prefs.readerTheme.name)
+                    .putString("fontId", snap.prefs.fontId)
+                    .putFloat("fontSize", snap.prefs.fontSizeSp)
+                    .putFloat("brightness", snap.prefs.brightness)
+                    .putBoolean("swipe", snap.prefs.swipeMode)
+                    .putBoolean("landscape", snap.prefs.landscape)
+                    .putLong("prefsAt", prefsAt)
+                    .apply()
+            }
+            snapshotAt = snap.updatedAt
+            prefs.edit()
+                .putLong("libraryAppearAt", libraryAppearAt)
+                .putLong("readerAppearAt", readerAppearAt)
+                .putLong("snapshotAt", snapshotAt)
+                .apply()
+        } finally {
+            applyingRemote = false
+        }
     }
 
     private suspend fun retryPendingDeletes() {
@@ -1245,5 +1479,37 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         val arr = JSONArray()
         wantToRead.forEach { arr.put(Recommendations.toJson(it)) }
         runCatching { wantFile.writeText(arr.toString()) }
+    }
+
+    private fun readBookmarksFile(): List<SavedBookmark> {
+        if (!bookmarksFile.exists()) return emptyList()
+        val out = ArrayList<SavedBookmark>()
+        runCatching {
+            val arr = JSONArray(bookmarksFile.readText())
+            for (i in 0 until arr.length()) {
+                val row = arr.optJSONObject(i) ?: continue
+                val bookId = row.optString("bookId")
+                if (bookId.isBlank()) continue
+                out += SavedBookmark(
+                    bookId = bookId,
+                    pageIndex = row.optInt("pageIndex", 0).coerceAtLeast(0),
+                    updatedAt = row.optLong("updatedAt", 0L)
+                )
+            }
+        }
+        return out
+    }
+
+    private fun persistBookmarksUnlocked() {
+        val arr = JSONArray()
+        bookmarkRecords.forEach { m ->
+            arr.put(
+                JSONObject()
+                    .put("bookId", m.bookId)
+                    .put("pageIndex", m.pageIndex)
+                    .put("updatedAt", m.updatedAt)
+            )
+        }
+        runCatching { atomicWrite(bookmarksFile, arr.toString()) }
     }
 }

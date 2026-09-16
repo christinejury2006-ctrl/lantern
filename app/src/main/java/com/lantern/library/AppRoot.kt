@@ -97,8 +97,14 @@ internal fun LanternRoot(store: LanternStore) {
         } else if (pickerForStudio) store.studioCancelPick()
     }
     val googleSignIn = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
-        val acc = GoogleAuth.parseResult(res.data)
-        if (acc != null) store.onGoogleSignedIn(acc) else store.toast("Google sign-in cancelled")
+        when (val out = GoogleAuth.parseOutcome(res.data)) {
+            is com.lantern.library.data.GoogleSignInOutcome.Ok -> store.onGoogleSignedIn(out.account)
+            com.lantern.library.data.GoogleSignInOutcome.Cancelled -> store.toast("Google sign-in cancelled")
+            is com.lantern.library.data.GoogleSignInOutcome.Failed -> store.toast(
+                if (out.code == 10) "Google Sign-In isn't registered for this app yet (error 10)."
+                else "Google sign-in failed (${out.code})"
+            )
+        }
     }
     val driveConsent = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         store.onDriveConsentFinished()
@@ -222,7 +228,8 @@ internal fun LanternRoot(store: LanternStore) {
                     else ReaderScreen(
                         book, store.readingPrefs, { store.setPrefs(it) }, back,
                         { p, n -> store.markRead(book.id, p, n) }, { store.addBookmark(book.id, it) },
-                        store.readerAppearance, { store.saveReaderAppearance(it) }
+                        store.readerAppearance, { store.saveReaderAppearance(it) },
+                        store.bookmarksFor(book.id)
                     )
                 }
             }

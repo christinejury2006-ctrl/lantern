@@ -2,6 +2,7 @@ package com.lantern.library.data
 
 import androidx.annotation.DrawableRes
 import androidx.compose.ui.text.font.FontFamily
+import java.io.File
 import com.lantern.library.ui.theme.Atkinson
 import com.lantern.library.ui.theme.Baskerville
 import com.lantern.library.ui.theme.Garamond
@@ -73,6 +74,14 @@ data class LibraryBook(
     val driveFileId: String? = null,
     val pendingUpload: Boolean = false
 ) {
+    val localFileAvailable: Boolean
+        get() {
+            if (origin == BookOrigin.BUNDLED || format == BookFormat.TEXT) return true
+            val path = filePath ?: return false
+            val file = File(path)
+            return file.exists() && file.length() > 0L
+        }
+
     val progress: Float
         get() = when {
             pageCount <= 0 -> 0f
@@ -146,7 +155,9 @@ data class CloudAccount(
     val displayName: String = "",
     val email: String = "",
     val provider: String = "",
-    val driveConnected: Boolean = false
+    val driveConnected: Boolean = false,
+    val userId: String = "",
+    val lastSyncAt: Long = 0L
 )
 
 data class Notice(

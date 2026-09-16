@@ -141,7 +141,8 @@ fun ReaderScreen(
     onProgress: (Int, Int) -> Unit,
     onBookmark: (Int) -> Unit,
     appearance: ReaderAppearance = ReaderAppearance(),
-    onAppearance: (ReaderAppearance) -> Unit = {}
+    onAppearance: (ReaderAppearance) -> Unit = {},
+    savedBookmarks: List<Int> = emptyList()
 ) {
     val activity = LocalContext.current as Activity
     val family = LanternFonts.family(prefs.fontId)
@@ -149,7 +150,9 @@ fun ReaderScreen(
     val ink = if (dark) NightText else Ink
     var chrome by remember { mutableStateOf(true) }
     var menu by remember { mutableStateOf(ReaderMenu.None) }
-    val bookmarks = remember { mutableStateListOf<Int>() }
+    val bookmarks = remember(book.id) {
+        mutableStateListOf<Int>().also { it.addAll(savedBookmarks) }
+    }
     var chapters by remember { mutableStateOf(book.chapters) }
     var toc by remember { mutableStateOf<List<TocEntry>>(emptyList()) }
     var pdfCount by remember { mutableStateOf(book.pageCount.coerceAtLeast(1)) }

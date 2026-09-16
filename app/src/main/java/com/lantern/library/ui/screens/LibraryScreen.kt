@@ -215,7 +215,12 @@ fun LibraryScreen(
                         ReadingProgressBar(book.progress)
                         Spacer(Modifier.height(4.dp))
                         Text(book.title, color = ink, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        Text(book.author, color = mute, fontSize = 11.sp, maxLines = 1)
+                        Text(
+                            if (book.localFileAvailable) book.author else "Import on this phone",
+                            color = if (book.localFileAvailable) mute else Coral,
+                            fontSize = 11.sp,
+                            maxLines = 1
+                        )
                     }
                 }
             }

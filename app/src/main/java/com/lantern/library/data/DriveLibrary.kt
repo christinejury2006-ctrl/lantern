@@ -172,6 +172,89 @@ object DriveLibrary {
         }.getOrDefault(DriveOutcome.Failed)
     }
 
+    fun readJsonByLoreId(token: String, loreId: String): DriveOutcome<String?> {
+        val q = "appProperties has { key='loreId' and value='${escape(loreId)}' } and trashed=false"
+        return when (val result = query(token, q)) {
+            QueryOutcome.Unauthorized -> DriveOutcome.Unauthorized
+            QueryOutcome.Error -> DriveOutcome.Failed
+            is QueryOutcome.Ok -> {
+                val id = result.ids.firstOrNull()
+                if (id.isNullOrBlank()) DriveOutcome.Ok(null)
+                else downloadString(token, id)
+            }
+        }
+    }
+
+    fun writeJsonByLoreId(
+        token: String,
+        folderId: String,
+        loreId: String,
+        name: String,
+        json: String
+    ): DriveOutcome<String> {
+        val q = "appProperties has { key='loreId' and value='${escape(loreId)}' } and trashed=false"
+        when (val lookup = query(token, q)) {
+            QueryOutcome.Unauthorized -> return DriveOutcome.Unauthorized
+            QueryOutcome.Error -> return DriveOutcome.Failed
+            is QueryOutcome.Ok -> {
+                val existing = lookup.ids.firstOrNull()
+                if (!existing.isNullOrBlank()) return patchJson(token, existing, json)
+            }
+        }
+        val meta = JSONObject()
+            .put("name", name)
+            .put("parents", JSONArray().put(folderId))
+            .put("appProperties", JSONObject().put("loreId", loreId))
+            .put("mimeType", "application/json")
+        val multipart = MultipartBody.Builder()
+            .setType(relatedType)
+            .addPart(
+                Headers.headersOf("Content-Type", "application/json; charset=UTF-8"),
+                meta.toString().toRequestBody(jsonType)
+            )
+            .addPart(
+                Headers.headersOf("Content-Type", "application/json; charset=UTF-8"),
+                json.toRequestBody(jsonType)
+            )
+            .build()
+        val req = Request.Builder()
+            .url("$UPLOAD?uploadType=multipart")
+            .header("Authorization", "Bearer $token")
+            .post(multipart)
+            .build()
+        val raw = executeRaw(req) ?: return DriveOutcome.Failed
+        if (raw.code == 401) return DriveOutcome.Unauthorized
+        if (!raw.ok || raw.body == null) return DriveOutcome.Failed
+        val id = JSONObject(raw.body).optString("id").takeIf { it.isNotBlank() }
+            ?: return DriveOutcome.Failed
+        return DriveOutcome.Ok(id)
+    }
+
+    private fun patchJson(token: String, fileId: String, json: String): DriveOutcome<String> {
+        val req = Request.Builder()
+            .url("$UPLOAD/${enc(fileId)}?uploadType=media")
+            .header("Authorization", "Bearer $token")
+            .patch(json.toRequestBody(jsonType))
+            .build()
+        val raw = executeRaw(req) ?: return DriveOutcome.Failed
+        if (raw.code == 401) return DriveOutcome.Unauthorized
+        if (!raw.ok) return DriveOutcome.Failed
+        return DriveOutcome.Ok(fileId)
+    }
+
+    private fun downloadString(token: String, fileId: String): DriveOutcome<String?> {
+        val req = Request.Builder()
+            .url("$FILES/${enc(fileId)}?alt=media")
+            .header("Authorization", "Bearer $token")
+            .get()
+            .build()
+        val raw = executeRaw(req) ?: return DriveOutcome.Failed
+        if (raw.code == 401) return DriveOutcome.Unauthorized
+        if (raw.code == 404) return DriveOutcome.Ok(null)
+        if (!raw.ok || raw.body == null) return DriveOutcome.Failed
+        return DriveOutcome.Ok(raw.body)
+    }
+
     fun delete(token: String, fileId: String): DriveOutcome<Unit> {
         val req = Request.Builder()
             .url("$FILES/${enc(fileId)}")

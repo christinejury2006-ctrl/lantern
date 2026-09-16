@@ -35,10 +35,10 @@ fun AppearanceLayer(
 ) {
     val shown = look.resolvedFor(dark)
     val context = LocalContext.current
-    var bmp by remember(shown.wallpaperId, shown.wallpaperUrl) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(shown.wallpaperId, shown.wallpaperUrl) {
+    var bmp by remember(shown.wallpaperId) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(shown.wallpaperId) {
         bmp = withContext(Dispatchers.IO) {
-            runCatching { WallpaperStore.load(context, shown.wallpaperId, shown.wallpaperUrl) }.getOrNull()
+            runCatching { WallpaperStore.load(context, shown.wallpaperId) }.getOrNull()
         }
     }
     val paper = bmp

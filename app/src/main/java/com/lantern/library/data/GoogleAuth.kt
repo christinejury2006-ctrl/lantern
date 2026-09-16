@@ -9,6 +9,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.Scope
 import com.google.android.gms.tasks.Tasks
 import kotlinx.coroutines.Dispatchers
@@ -32,17 +33,38 @@ object GoogleAuth {
     fun lastAccount(context: Context): GoogleSignInAccount? =
         GoogleSignIn.getLastSignedInAccount(context)
 
-    fun accountKey(account: GoogleSignInAccount?): String? {
-        if (account == null) return null
-        return account.id?.takeIf { it.isNotBlank() }
-            ?: account.email?.takeIf { it.isNotBlank() }
+    /** Stable Google user id (`GoogleSignInAccount.id`). Never email. */
+    fun accountId(account: GoogleSignInAccount?): String? {
+        val id = account?.id?.trim().orEmpty()
+        if (id.isEmpty() || '@' in id) return null
+        return id
     }
 
-    fun accountKey(context: Context): String? = accountKey(lastAccount(context))
+    fun accountId(context: Context): String? = accountId(lastAccount(context))
 
-    fun parseResult(data: Intent?): GoogleSignInAccount? {
-        val task = GoogleSignIn.getSignedInAccountFromIntent(data)
-        return if (task.isSuccessful) task.result else null
+    fun accountKey(account: GoogleSignInAccount?): String? = accountId(account)
+
+    fun accountKey(context: Context): String? = accountId(context)
+
+    fun parseResult(data: Intent?): GoogleSignInAccount? =
+        when (val out = parseOutcome(data)) {
+            is GoogleSignInOutcome.Ok -> out.account
+            else -> null
+        }
+
+    fun parseOutcome(data: Intent?): GoogleSignInOutcome {
+        if (data == null) return GoogleSignInOutcome.Cancelled
+        return try {
+            val account = GoogleSignIn.getSignedInAccountFromIntent(data)
+                .getResult(ApiException::class.java)
+            if (account == null) GoogleSignInOutcome.Failed(0, "empty")
+            else GoogleSignInOutcome.Ok(account)
+        } catch (e: ApiException) {
+            if (e.statusCode == 12501) GoogleSignInOutcome.Cancelled
+            else GoogleSignInOutcome.Failed(e.statusCode, e.statusMessage.orEmpty())
+        } catch (_: Exception) {
+            GoogleSignInOutcome.Failed(-1, "unknown")
+        }
     }
 
     suspend fun driveToken(context: Context): DriveTokenResult = withContext(Dispatchers.IO) {
@@ -76,6 +98,12 @@ object GoogleAuth {
         }
         runCatching { Tasks.await(client(activity).signOut()) }
     }
+}
+
+sealed class GoogleSignInOutcome {
+    data class Ok(val account: GoogleSignInAccount) : GoogleSignInOutcome()
+    object Cancelled : GoogleSignInOutcome()
+    data class Failed(val code: Int, val message: String) : GoogleSignInOutcome()
 }
 
 sealed class DriveTokenResult {

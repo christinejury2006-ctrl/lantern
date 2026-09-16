@@ -1,5 +1,7 @@
 package com.lantern.library.data
 
+import androidx.annotation.DrawableRes
+import com.lantern.library.R
 import org.json.JSONObject
 
 enum class AppearFill { Solid, Ombre }
@@ -15,7 +17,7 @@ data class AppearLook(
     val overlay: Float = 0.28f
 ) {
     val hasWallpaper: Boolean
-        get() = !wallpaperId.isNullOrBlank() && !wallpaperUrl.isNullOrBlank()
+        get() = WallpaperCatalog.find(wallpaperId) != null
 
     companion object {
         val libraryDefault = AppearLook(
@@ -67,6 +69,11 @@ data class AppearLook(
             solidArgb == other.solidArgb &&
             ombreStartArgb == other.ombreStartArgb &&
             ombreEndArgb == other.ombreEndArgb
+
+    fun forCloud(): AppearLook = copy(
+        wallpaperId = WallpaperCatalog.find(wallpaperId)?.id,
+        wallpaperUrl = null
+    )
 }
 
 data class LibraryAppearance(val look: AppearLook = AppearLook.libraryDefault)
@@ -76,19 +83,19 @@ data class ReaderAppearance(val look: AppearLook = AppearLook.readerDefault)
 data class WallpaperChoice(
     val id: String,
     val label: String,
-    val url: String
+    @DrawableRes val drawable: Int
 )
 
 object WallpaperCatalog {
     val items: List<WallpaperChoice> = listOf(
-        WallpaperChoice("picsum-1015", "Hills", "https://picsum.photos/id/1015/1080/1920"),
-        WallpaperChoice("picsum-1018", "Trail", "https://picsum.photos/id/1018/1080/1920"),
-        WallpaperChoice("picsum-1036", "Sea", "https://picsum.photos/id/1036/1080/1920"),
-        WallpaperChoice("picsum-1044", "Dusk", "https://picsum.photos/id/1044/1080/1920"),
-        WallpaperChoice("picsum-1050", "Fog", "https://picsum.photos/id/1050/1080/1920"),
-        WallpaperChoice("picsum-1067", "City", "https://picsum.photos/id/1067/1080/1920"),
-        WallpaperChoice("picsum-10", "Forest", "https://picsum.photos/id/10/1080/1920"),
-        WallpaperChoice("picsum-29", "Shore", "https://picsum.photos/id/29/1080/1920")
+        WallpaperChoice("aurora_purple", "Aurora Purple", R.drawable.wp_aurora_purple),
+        WallpaperChoice("aurora_teal", "Aurora Teal", R.drawable.wp_aurora_teal),
+        WallpaperChoice("paper_cream", "Paper Cream", R.drawable.wp_paper_cream),
+        WallpaperChoice("dusk_slate", "Dusk Slate", R.drawable.wp_dusk_slate),
+        WallpaperChoice("mist_lilac", "Mist Lilac", R.drawable.wp_mist_lilac),
+        WallpaperChoice("night_ink", "Night Ink", R.drawable.wp_night_ink),
+        WallpaperChoice("forest_haze", "Forest Haze", R.drawable.wp_forest_haze),
+        WallpaperChoice("shore_gold", "Shore Gold", R.drawable.wp_shore_gold)
     )
 
     fun find(id: String?): WallpaperChoice? =
@@ -106,36 +113,43 @@ fun AppearLook.toJson(): JSONObject = JSONObject()
     .put("solid", solidArgb)
     .put("ombreStart", ombreStartArgb)
     .put("ombreEnd", ombreEndArgb)
-    .put("wallpaperId", wallpaperId ?: "")
-    .put("wallpaperUrl", wallpaperUrl ?: "")
+    .put("wallpaperId", WallpaperCatalog.find(wallpaperId)?.id ?: "")
+    .put("wallpaperUrl", "")
     .put("wallpaperOpacity", wallpaperOpacity.toDouble())
     .put("overlay", overlay.toDouble())
 
 fun appearLookFromJson(raw: String?, fallback: AppearLook): AppearLook {
     if (raw.isNullOrBlank()) return fallback
     return runCatching {
-        val o = JSONObject(raw)
-        val fill = runCatching { AppearFill.valueOf(o.optString("fill", fallback.fill.name)) }
-            .getOrDefault(fallback.fill)
-        val id = o.optString("wallpaperId").ifBlank { null }
-        val url = o.optString("wallpaperUrl").ifBlank { null }
-        AppearLook(
-            fill = fill,
-            solidArgb = o.optLong("solid", fallback.solidArgb),
-            ombreStartArgb = o.optLong("ombreStart", fallback.ombreStartArgb),
-            ombreEndArgb = o.optLong("ombreEnd", fallback.ombreEndArgb),
-            wallpaperId = id,
-            wallpaperUrl = url,
-            wallpaperOpacity = unit01(
-                o.optDouble("wallpaperOpacity", fallback.wallpaperOpacity.toDouble()).toFloat(),
-                fallback.wallpaperOpacity
-            ),
-            overlay = unit01(
-                o.optDouble("overlay", fallback.overlay.toDouble()).toFloat(),
-                fallback.overlay
-            )
-        )
+        appearLookFromObj(JSONObject(raw), fallback)
     }.getOrDefault(fallback)
+}
+
+fun appearLookFromObj(o: JSONObject, fallback: AppearLook): AppearLook {
+    val fill = runCatching { AppearFill.valueOf(o.optString("fill", fallback.fill.name)) }
+        .getOrDefault(fallback.fill)
+    val id = WallpaperCatalog.find(o.optString("wallpaperId").ifBlank { null })?.id
+    return AppearLook(
+        fill = fill,
+        solidArgb = o.optLong("solid", fallback.solidArgb),
+        ombreStartArgb = o.optLong("ombreStart", fallback.ombreStartArgb),
+        ombreEndArgb = o.optLong("ombreEnd", fallback.ombreEndArgb),
+        wallpaperId = id,
+        wallpaperUrl = null,
+        wallpaperOpacity = unit01(
+            o.optDouble("wallpaperOpacity", fallback.wallpaperOpacity.toDouble()).toFloat(),
+            fallback.wallpaperOpacity
+        ),
+        overlay = unit01(
+            o.optDouble("overlay", fallback.overlay.toDouble()).toFloat(),
+            fallback.overlay
+        )
+    )
+}
+
+fun appearUpdatedAt(raw: String?, fallback: Long = 0L): Long {
+    if (raw.isNullOrBlank()) return fallback
+    return runCatching { JSONObject(raw).optLong("updatedAt", fallback) }.getOrDefault(fallback)
 }
 
 private fun unit01(value: Float, fallback: Float): Float =

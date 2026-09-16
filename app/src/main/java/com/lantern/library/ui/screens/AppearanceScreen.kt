@@ -140,9 +140,8 @@ fun AppearanceEditor(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         SafeWallpaperThumb(
                             id = item.id,
-                            url = item.url,
                             selected = on,
-                            onClick = { onChange(look.copy(wallpaperId = item.id, wallpaperUrl = item.url)) }
+                            onClick = { onChange(look.copy(wallpaperId = item.id, wallpaperUrl = null)) }
                         )
                         Text(item.label, color = if (on) Coral else mute, fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
                     }
@@ -169,15 +168,12 @@ fun AppearanceEditor(
 }
 
 @Composable
-private fun SafeWallpaperThumb(id: String, url: String, selected: Boolean, onClick: () -> Unit) {
+private fun SafeWallpaperThumb(id: String, selected: Boolean, onClick: () -> Unit) {
     val context = LocalContext.current
-    var bmp by remember(id, url) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(id, url) {
+    var bmp by remember(id) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(id) {
         bmp = withContext(Dispatchers.IO) {
-            runCatching {
-                val thumb = url.replace("/1080/1920", "/160/240")
-                WallpaperStore.load(context, "$id-thumb", thumb)
-            }.getOrNull()
+            runCatching { WallpaperStore.thumb(context, id) }.getOrNull()
         }
     }
     val paper = bmp

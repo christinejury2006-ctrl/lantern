@@ -44,7 +44,7 @@ object GoogleAuth {
 
     fun accountKey(account: GoogleSignInAccount?): String? = accountId(account)
 
-    fun accountKey(context: Context): String? = accountId(context)
+    fun accountKey(context: Context): String? = accountId(lastAccount(context))
 
     fun parseResult(data: Intent?): GoogleSignInAccount? =
         when (val out = parseOutcome(data)) {

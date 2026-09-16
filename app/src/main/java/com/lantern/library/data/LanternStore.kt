@@ -1134,7 +1134,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
 
     private fun scheduleSync() {
         if (!account.signedIn || account.provider != "google") return
-        if (GoogleAuth.accountId(getApplication()) == null) return
+        if (GoogleAuth.accountId(getApplication<Application>()) == null) return
         val gen = ++syncGen
         viewModelScope.launch(Dispatchers.IO) {
             delay(8_000)
@@ -1154,7 +1154,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     private fun currentSnapshot(): AccountSnapshot {
         val bookList = synchronized(libraryLock) { books.toList() }
         val marks = synchronized(bookmarksLock) { bookmarkRecords.toList() }
-        val accountId = GoogleAuth.accountId(getApplication())
+        val accountId = GoogleAuth.accountId(getApplication<Application>())
             ?: account.userId.takeIf { it.isNotBlank() && '@' !in it }
             ?: ""
         return AccountSnapshot(
@@ -1174,7 +1174,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
 
     private suspend fun runAccountSync(announce: Boolean) {
         if (!account.signedIn || account.provider != "google") return
-        if (GoogleAuth.accountId(getApplication()).isNullOrBlank()) return
+        if (GoogleAuth.accountId(getApplication<Application>()).isNullOrBlank()) return
         if (!networkReady()) return
         val local = withContext(Dispatchers.Main) { currentSnapshot() }
         val cloudOutcome = withDriveOutcome { token, owner ->

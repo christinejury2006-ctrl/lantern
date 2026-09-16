@@ -538,7 +538,7 @@ fun ReaderScreen(
         if (chrome) {
             Row(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding()
-                    .padding(horizontal = 10.dp, bottom = 8.dp, top = 18.dp)
+                    .padding(start = 10.dp, end = 10.dp, top = 18.dp, bottom = 8.dp)
                     .clip(RoundedCornerShape(28.dp))
                     .background(chromeBar)
                     .padding(vertical = 8.dp, horizontal = 4.dp),
@@ -835,11 +835,11 @@ private fun Modifier.chromeTap(enabled: Boolean, onTap: () -> Unit): Modifier {
 }
 
 @Composable
-private fun GlassStatus(time: String, percent: Int, charging: Boolean, ink: Color, modifier: Modifier) {
+private fun GlassStatus(time: String, percent: Int, charging: Boolean, ink: Color, chrome: Float, modifier: Modifier) {
     Row(
         modifier
             .clip(RoundedCornerShape(20.dp))
-            .background(Color(0x55FFFFFF))
+            .background(readerChromeBar(chrome))
             .border(1.dp, Color(0x66FFFFFF), RoundedCornerShape(20.dp))
             .padding(horizontal = 12.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,

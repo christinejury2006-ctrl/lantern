@@ -190,6 +190,7 @@ fun readerChromePanel(opacity: Float): Color {
     return Color(0xFF2B2B2B).copy(alpha = 0.40f + 0.55f * t)
 }
 
+@Composable
 fun LoreGhostButton(label: String, selected: Boolean, onClick: () -> Unit) {
     val shape = RoundedCornerShape(22.dp)
     val stroke = if (selected) LoreGhost else LoreGhost.copy(alpha = 0.55f)

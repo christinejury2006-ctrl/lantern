@@ -67,10 +67,12 @@ fun AppearanceEditor(
             Text("Live preview is this screen.", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
             Spacer(Modifier.height(14.dp))
             GlassCard(Modifier.fillMaxWidth().height(132.dp), dark, 18) {
-                AppearanceLayer(look, Modifier.fillMaxSize().clip(RoundedCornerShape(18.dp))) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("My Library", color = ink, fontFamily = Playfair, fontSize = 18.sp)
-                        Text("Wallpaper under a soft wash.", color = mute, fontSize = 12.sp)
+                Box(Modifier.fillMaxSize().clip(RoundedCornerShape(18.dp))) {
+                    AppearanceLayer(look) {
+                        Column(Modifier.padding(16.dp)) {
+                            Text("My Library", color = ink, fontFamily = Playfair, fontSize = 18.sp)
+                            Text("Wallpaper under a soft wash.", color = mute, fontSize = 12.sp)
+                        }
                     }
                 }
             }
@@ -183,7 +185,7 @@ private fun SwatchRow(selected: Long, ink: Color, onPick: (Long) -> Unit) {
                 Modifier
                     .size(32.dp)
                     .clip(CircleShape)
-                    .background(Color(argb.toInt()))
+                    .background(Color(argb))
                     .border(if (on) 2.dp else 1.dp, if (on) Coral else ink.copy(0.25f), CircleShape)
                     .clickable { onPick(argb) }
             )

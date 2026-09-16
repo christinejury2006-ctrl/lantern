@@ -197,7 +197,7 @@ internal fun LanternRoot(store: LanternStore) {
                         title = "Library Appearance",
                         theme = theme,
                         look = store.libraryAppearance.look,
-                        onChange = { store.setLibraryAppearance(com.lantern.library.data.LibraryAppearance(it)) },
+                        onChange = { store.setLibraryAppearance(LibraryAppearance(it)) },
                         onDone = { libraryAppearOpen = false }
                     )
                 } else ProfileScreen(
@@ -213,7 +213,11 @@ internal fun LanternRoot(store: LanternStore) {
                     val book = store.book(r.id)
                     val back = { tab = if (r.fromStudio) Route.Studio else Route.Library }
                     if (book == null) back()
-                    else ReaderScreen(book, store.readingPrefs, { store.setPrefs(it) }, back, { p, n -> store.markRead(book.id, p, n) }, { store.addBookmark(book.id, it) })
+                    else ReaderScreen(
+                        book, store.readingPrefs, { store.setPrefs(it) }, back,
+                        { p, n -> store.markRead(book.id, p, n) }, { store.addBookmark(book.id, it) },
+                        store.readerAppearance, { store.setReaderAppearance(it) }
+                    )
                 }
             }
             val detail = details

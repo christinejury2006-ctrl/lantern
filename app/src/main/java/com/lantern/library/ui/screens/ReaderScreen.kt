@@ -116,7 +116,6 @@ import com.lantern.library.data.ReaderAppearance
 import com.lantern.library.data.ReaderTheme
 import com.lantern.library.data.ReadingPrefs
 import com.lantern.library.ui.components.AppearanceLayer
-import com.lantern.library.ui.screens.AppearanceEditor
 import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.NightText
 import com.lantern.library.ui.theme.Playfair
@@ -387,6 +386,7 @@ fun ReaderScreen(
     val pageTap = Modifier.chromeTap(enabled = !menuOpen, onTap = { toggleChrome() })
 
     AppearanceLayer(appearance.look) {
+    Box(Modifier.fillMaxSize()) {
         when {
             !ready -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("Opening…", color = ink, fontFamily = family)
@@ -797,6 +797,7 @@ fun ReaderScreen(
                 }
             }
         }
+    }
     }
 }
 

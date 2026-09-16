@@ -62,7 +62,8 @@ fun AppearanceEditor(
     theme: ReaderTheme,
     look: AppearLook,
     onChange: (AppearLook) -> Unit,
-    onDone: () -> Unit
+    onDone: () -> Unit,
+    chromeMode: Boolean = false
 ) {
     val dark = theme == ReaderTheme.DARK
     val ink = if (dark) NightText else Ink
@@ -70,7 +71,8 @@ fun AppearanceEditor(
     val gold = Color(0xFFE8D9A8)
     val opacity = if (look.wallpaperOpacity.isFinite()) look.wallpaperOpacity.coerceIn(0f, 1f) else 0.32f
     val overlay = if (look.overlay.isFinite()) look.overlay.coerceIn(0f, 1f) else 0.28f
-    AppearanceLayer(look, dark) {
+    val chrome = if (look.chromeOpacity.isFinite()) look.chromeOpacity.coerceIn(0f, 1f) else 0.5f
+    AppearanceLayer(look, dark, contentWash = !chromeMode) {
         Column(
             Modifier
                 .fillMaxWidth()
@@ -147,19 +149,45 @@ fun AppearanceEditor(
                     }
                 }
             }
-            Field("Wallpaper opacity", mute)
-            Slider(
-                value = opacity,
-                onValueChange = { onChange(look.copy(wallpaperOpacity = it)) },
-                enabled = look.hasWallpaper,
-                colors = SliderDefaults.colors(thumbColor = gold, activeTrackColor = gold)
-            )
-            Field("Translucent overlay", mute)
-            Slider(
-                value = overlay,
-                onValueChange = { onChange(look.copy(overlay = it)) },
-                colors = SliderDefaults.colors(thumbColor = gold, activeTrackColor = gold)
-            )
+            if (chromeMode) {
+                Field("Interface", mute)
+                Text("Translucent", color = mute, fontSize = 11.sp)
+                Slider(
+                    value = chrome,
+                    onValueChange = { onChange(look.copy(chromeOpacity = it)) },
+                    colors = SliderDefaults.colors(thumbColor = gold, activeTrackColor = gold)
+                )
+                Text("Opaque", color = mute, fontSize = 11.sp, modifier = Modifier.fillMaxWidth())
+                Box(
+                    Modifier
+                        .padding(top = 8.dp)
+                        .fillMaxWidth()
+                        .height(52.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color(0xFF1C1C24).copy(alpha = 0.34f + 0.61f * chrome))
+                ) {
+                    Text(
+                        "Reader controls",
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                }
+            } else {
+                Field("Wallpaper opacity", mute)
+                Slider(
+                    value = opacity,
+                    onValueChange = { onChange(look.copy(wallpaperOpacity = it)) },
+                    enabled = look.hasWallpaper,
+                    colors = SliderDefaults.colors(thumbColor = gold, activeTrackColor = gold)
+                )
+                Field("Translucent overlay", mute)
+                Slider(
+                    value = overlay,
+                    onValueChange = { onChange(look.copy(overlay = it)) },
+                    colors = SliderDefaults.colors(thumbColor = gold, activeTrackColor = gold)
+                )
+            }
             GlassCard(Modifier.fillMaxWidth().padding(top = 8.dp).clickable(onClick = onDone), dark, 18) {
                 Text("Done", color = Coral, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
             }

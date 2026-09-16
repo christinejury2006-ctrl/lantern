@@ -31,6 +31,7 @@ fun AppearanceLayer(
     look: AppearLook,
     dark: Boolean = false,
     modifier: Modifier = Modifier,
+    contentWash: Boolean = true,
     content: @Composable () -> Unit
 ) {
     val shown = look.resolvedFor(dark)
@@ -45,7 +46,11 @@ fun AppearanceLayer(
     val opacity = if (shown.wallpaperOpacity.isFinite()) shown.wallpaperOpacity.coerceIn(0f, 1f) else 0.32f
     val overlay = if (shown.overlay.isFinite()) shown.overlay.coerceIn(0f, 1f) else 0.28f
     val hasWp = shown.hasWallpaper && opacity > 0.02f && paper != null
-    val wash = if (hasWp) (0.22f + overlay * 0.55f).coerceIn(0.18f, 0.82f) else 1f
+    val wash = when {
+        !contentWash && hasWp -> 0.16f
+        hasWp -> (0.22f + overlay * 0.55f).coerceIn(0.18f, 0.82f)
+        else -> 1f
+    }
     val start = argbColor(shown.ombreStartArgb)
     val end = argbColor(shown.ombreEndArgb)
     val solid = argbColor(shown.solidArgb)

@@ -116,6 +116,8 @@ import com.lantern.library.data.ReaderAppearance
 import com.lantern.library.data.ReaderTheme
 import com.lantern.library.data.ReadingPrefs
 import com.lantern.library.ui.components.AppearanceLayer
+import com.lantern.library.ui.components.readerChromeBar
+import com.lantern.library.ui.components.readerChromePanel
 import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.LoreMint
 import com.lantern.library.ui.theme.LoreOnMint
@@ -388,9 +390,12 @@ fun ReaderScreen(
     }
 
     val accent = LoreMint
+    val chromeOp = appearance.look.chromeOpacity
+    val chromeBar = readerChromeBar(chromeOp)
+    val chromePanel = readerChromePanel(chromeOp)
     val pageTap = Modifier.chromeTap(enabled = !menuOpen, onTap = { toggleChrome() })
 
-    AppearanceLayer(appearance.look, dark) {
+    AppearanceLayer(appearance.look, dark, contentWash = false) {
     Box(Modifier.fillMaxSize()) {
         when {
             !ready -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -507,6 +512,7 @@ fun ReaderScreen(
                 percent = batteryPct,
                 charging = batteryCharging,
                 ink = ink,
+                chrome = chromeOp,
                 modifier = Modifier.clickable { toggleChrome() }
             )
             if (chrome) {
@@ -534,7 +540,7 @@ fun ReaderScreen(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding()
                     .padding(horizontal = 10.dp, bottom = 8.dp, top = 18.dp)
                     .clip(RoundedCornerShape(28.dp))
-                    .background(Color(0xE61C1C24))
+                    .background(chromeBar)
                     .padding(vertical = 8.dp, horizontal = 4.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
@@ -603,7 +609,7 @@ fun ReaderScreen(
                     .statusBarsPadding().navigationBarsPadding()
                     .padding(top = 56.dp, bottom = 72.dp, end = 10.dp)
                     .clip(RoundedCornerShape(22.dp))
-                    .background(Color(0xE62B2B2B))
+                    .background(chromePanel)
                     .clickable(
                         indication = null,
                         interactionSource = remember { MutableInteractionSource() },
@@ -706,7 +712,7 @@ fun ReaderScreen(
             Box(
                 Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
                     .padding(16.dp, 0.dp, 16.dp, 78.dp)
-                    .clip(RoundedCornerShape(18.dp)).background(Color(0xE62B2B2B))
+                    .clip(RoundedCornerShape(18.dp)).background(chromePanel)
                     .clickable(
                         indication = null,
                         interactionSource = remember { MutableInteractionSource() },
@@ -746,7 +752,7 @@ fun ReaderScreen(
             Column(
                 Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
                     .padding(16.dp, 0.dp, 16.dp, 78.dp)
-                    .clip(RoundedCornerShape(18.dp)).background(Color(0xE62B2B2B))
+                    .clip(RoundedCornerShape(18.dp)).background(chromePanel)
                     .clickable(
                         indication = null,
                         interactionSource = remember { MutableInteractionSource() },
@@ -784,7 +790,7 @@ fun ReaderScreen(
             Column(
                 Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
                     .padding(16.dp, 0.dp, 16.dp, 78.dp)
-                    .clip(RoundedCornerShape(18.dp)).background(Color(0xE62B2B2B))
+                    .clip(RoundedCornerShape(18.dp)).background(chromePanel)
                     .clickable(
                         indication = null,
                         interactionSource = remember { MutableInteractionSource() },

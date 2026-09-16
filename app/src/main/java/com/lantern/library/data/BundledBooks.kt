@@ -9,7 +9,8 @@ data class StarterSpec(
     val asset: String,
     val coverRes: Int,
     val category: String,
-    val synopsis: String
+    val synopsis: String,
+    val format: BookFormat = BookFormat.EPUB
 )
 
 object BundledBooks {
@@ -61,6 +62,16 @@ object BundledBooks {
             coverRes = R.drawable.cover_starter_oz,
             category = "Fantasy",
             synopsis = "Dorothy is carried to Oz and walks the yellow brick road toward the Emerald City."
+        ),
+        StarterSpec(
+            id = "starter_alice",
+            title = "Alice's Adventures in Wonderland",
+            author = "Lewis Carroll",
+            asset = "starter/alices_adventures.pdf",
+            coverRes = R.drawable.cover_starter_alice,
+            category = "Fantasy",
+            synopsis = "Alice follows the White Rabbit into Wonderland. Public-domain text set as a PDF for Reader testing.",
+            format = BookFormat.PDF
         )
     )
 

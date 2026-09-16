@@ -1377,39 +1377,55 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         if (hasUser) return
         val app = getApplication<Application>()
         BundledBooks.starter.asReversed().forEach { spec ->
-            val dest = File(BookIo.booksDir(app), "${spec.id}.epub")
-            val coverDest = File(BookIo.coversDir(app), "${spec.id}.jpg")
-            val copied = runCatching {
-                app.assets.open(spec.asset).use { inp ->
-                    dest.parentFile?.mkdirs()
-                    dest.outputStream().use { inp.copyTo(it) }
-                }
-                dest.exists() && dest.length() > 200L
-            }.getOrDefault(false)
-            if (!copied) {
-                runCatching { dest.delete() }
-                return@forEach
-            }
-            val coverOk = writeStarterCover(app, spec.coverRes, coverDest)
-            target.add(
-                0,
-                LibraryBook(
-                    id = spec.id,
-                    title = spec.title,
-                    author = spec.author,
-                    remoteCover = if (coverOk) coverDest.absolutePath else null,
-                    format = BookFormat.EPUB,
-                    origin = BookOrigin.IMPORT,
-                    filePath = dest.absolutePath,
-                    pageCount = 1,
-                    currentPage = 0,
-                    lastReadAt = 0L,
-                    category = spec.category,
-                    synopsis = spec.synopsis,
-                    pendingUpload = false
-                )
-            )
+            addStarterUnlocked(app, spec, target)
         }
+    }
+
+    private fun maybeSeedStarterPdfUnlocked(target: MutableList<LibraryBook>) {
+        if (prefs.getBoolean("starter_pdf_v1", false)) return
+        prefs.edit().putBoolean("starter_pdf_v1", true).apply()
+        val spec = BundledBooks.starter.firstOrNull { it.format == BookFormat.PDF } ?: return
+        if (target.any { it.id == spec.id }) return
+        if (target.isEmpty()) return
+        if (target.any { !it.id.startsWith("starter_") }) return
+        addStarterUnlocked(getApplication(), spec, target)
+    }
+
+    private fun addStarterUnlocked(app: Application, spec: StarterSpec, target: MutableList<LibraryBook>) {
+        if (target.any { it.id == spec.id }) return
+        val ext = if (spec.format == BookFormat.PDF) "pdf" else "epub"
+        val dest = File(BookIo.booksDir(app), "${spec.id}.$ext")
+        val coverDest = File(BookIo.coversDir(app), "${spec.id}.jpg")
+        val copied = runCatching {
+            app.assets.open(spec.asset).use { inp ->
+                dest.parentFile?.mkdirs()
+                dest.outputStream().use { inp.copyTo(it) }
+            }
+            dest.exists() && dest.length() > 200L
+        }.getOrDefault(false)
+        if (!copied) {
+            runCatching { dest.delete() }
+            return
+        }
+        val coverOk = writeStarterCover(app, spec.coverRes, coverDest)
+        target.add(
+            0,
+            LibraryBook(
+                id = spec.id,
+                title = spec.title,
+                author = spec.author,
+                remoteCover = if (coverOk) coverDest.absolutePath else null,
+                format = spec.format,
+                origin = BookOrigin.IMPORT,
+                filePath = dest.absolutePath,
+                pageCount = 1,
+                currentPage = 0,
+                lastReadAt = 0L,
+                category = spec.category,
+                synopsis = spec.synopsis,
+                pendingUpload = false
+            )
+        )
     }
 
     private fun maybeRefreshStarterCoversUnlocked(target: MutableList<LibraryBook>) {

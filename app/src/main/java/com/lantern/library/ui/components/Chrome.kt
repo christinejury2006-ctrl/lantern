@@ -180,6 +180,16 @@ fun LorePillButton(label: String, onClick: () -> Unit) {
 }
 
 @Composable
+fun readerChromeBar(opacity: Float): Color {
+    val t = if (opacity.isFinite()) opacity.coerceIn(0f, 1f) else 0.5f
+    return Color(0xFF1C1C24).copy(alpha = 0.34f + 0.61f * t)
+}
+
+fun readerChromePanel(opacity: Float): Color {
+    val t = if (opacity.isFinite()) opacity.coerceIn(0f, 1f) else 0.5f
+    return Color(0xFF2B2B2B).copy(alpha = 0.40f + 0.55f * t)
+}
+
 fun LoreGhostButton(label: String, selected: Boolean, onClick: () -> Unit) {
     val shape = RoundedCornerShape(22.dp)
     val stroke = if (selected) LoreGhost else LoreGhost.copy(alpha = 0.55f)

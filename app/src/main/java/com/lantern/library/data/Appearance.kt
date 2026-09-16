@@ -14,7 +14,8 @@ data class AppearLook(
     val wallpaperId: String? = null,
     val wallpaperUrl: String? = null,
     val wallpaperOpacity: Float = 0.32f,
-    val overlay: Float = 0.28f
+    val overlay: Float = 0.28f,
+    val chromeOpacity: Float = 0.5f
 ) {
     val hasWallpaper: Boolean
         get() = WallpaperCatalog.find(wallpaperId) != null
@@ -33,8 +34,9 @@ data class AppearLook(
             solidArgb = 0xFFEDE4F6,
             ombreStartArgb = 0xFFE8B8F4,
             ombreEndArgb = 0xFF6ED4C8,
-            wallpaperOpacity = 0.28f,
-            overlay = 0.42f
+            wallpaperOpacity = 0.50f,
+            overlay = 0.18f,
+            chromeOpacity = 0.5f
         )
         val darkDefault = AppearLook(
             fill = AppearFill.Ombre,
@@ -117,6 +119,7 @@ fun AppearLook.toJson(): JSONObject = JSONObject()
     .put("wallpaperUrl", "")
     .put("wallpaperOpacity", wallpaperOpacity.toDouble())
     .put("overlay", overlay.toDouble())
+    .put("chromeOpacity", chromeOpacity.toDouble())
 
 fun appearLookFromJson(raw: String?, fallback: AppearLook): AppearLook {
     if (raw.isNullOrBlank()) return fallback
@@ -143,6 +146,10 @@ fun appearLookFromObj(o: JSONObject, fallback: AppearLook): AppearLook {
         overlay = unit01(
             o.optDouble("overlay", fallback.overlay.toDouble()).toFloat(),
             fallback.overlay
+        ),
+        chromeOpacity = unit01(
+            o.optDouble("chromeOpacity", fallback.chromeOpacity.toDouble()).toFloat(),
+            fallback.chromeOpacity
         )
     )
 }

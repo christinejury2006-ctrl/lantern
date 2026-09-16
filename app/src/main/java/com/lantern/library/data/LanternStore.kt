@@ -505,8 +505,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                             srcCover.copyTo(coverDest, overwrite = true)
                             true
                         }.getOrDefault(false)
-                    dest.exists() && dest.length() > 0L to coverOk
-                }.getOrDefault(false to false)
+                    val fileOk = dest.exists() && dest.length() > 0L
+                    Pair(fileOk, coverOk)
+                }.getOrDefault(Pair(false, false))
             }
             if (!copied.first) {
                 withContext(Dispatchers.IO) {

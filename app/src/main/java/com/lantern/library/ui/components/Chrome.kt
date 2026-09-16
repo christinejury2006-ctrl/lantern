@@ -7,13 +7,20 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -45,6 +52,10 @@ import com.lantern.library.ui.theme.Garamond
 import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.Inter
 import com.lantern.library.ui.theme.Lilac
+import com.lantern.library.ui.theme.LoreAction
+import com.lantern.library.ui.theme.LoreActionHi
+import com.lantern.library.ui.theme.LoreGhost
+import com.lantern.library.ui.theme.LorePill
 import com.lantern.library.ui.theme.NightText
 import com.lantern.library.ui.theme.Periwinkle
 import com.lantern.library.ui.theme.Playfair
@@ -126,3 +137,61 @@ fun FadeToast(message: String?) {
 }
 
 fun readerFont(id: String): FontFamily = when (id) { "garamond" -> Garamond; "arial" -> Inter; else -> SourceSerif }
+
+@Composable
+fun LoreActionButton(label: String, onClick: () -> Unit, mark: String? = null) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(Brush.horizontalGradient(listOf(LoreAction, LoreActionHi)))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center
+    ) {
+        if (!mark.isNullOrBlank()) {
+            Box(
+                Modifier.size(22.dp).clip(CircleShape).background(Color.White),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(mark, color = LoreAction, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.width(10.dp))
+        }
+        Text(label, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+fun LorePillButton(label: String, onClick: () -> Unit) {
+    Text(
+        label,
+        Modifier
+            .clip(RoundedCornerShape(22.dp))
+            .background(LorePill)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 10.dp),
+        color = Color.White,
+        fontSize = 14.sp,
+        fontWeight = FontWeight.Medium
+    )
+}
+
+@Composable
+fun LoreGhostButton(label: String, selected: Boolean, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(22.dp)
+    val stroke = if (selected) LoreGhost else LoreGhost.copy(alpha = 0.55f)
+    Text(
+        label,
+        Modifier
+            .clip(shape)
+            .then(if (selected) Modifier.background(LoreGhost.copy(alpha = 0.22f)) else Modifier)
+            .border(1.5.dp, stroke, shape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 10.dp),
+        color = if (selected) Color.White else LoreGhost,
+        fontSize = 14.sp
+    )
+}

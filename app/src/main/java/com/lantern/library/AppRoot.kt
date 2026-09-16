@@ -58,6 +58,7 @@ import com.lantern.library.ui.screens.SearchScreen
 import com.lantern.library.ui.screens.StudioScreen
 import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.LanternTheme
+import com.lantern.library.ui.theme.LorePill
 import com.lantern.library.ui.theme.NightText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -279,8 +280,9 @@ private fun BottomBar(theme: ReaderTheme, current: Route, onTab: (Route) -> Unit
 
 @Composable
 private fun TabIcon(icon: ImageVector, label: String, on: Boolean, ink: Color, click: () -> Unit) {
+    val tint = if (on) LorePill else ink.copy(0.42f)
     Column(Modifier.clickable(onClick = click).padding(horizontal = 10.dp, vertical = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Icon(icon, label, tint = if (on) ink else ink.copy(0.45f), modifier = Modifier.size(22.dp))
-        Text(label, color = if (on) ink else ink.copy(0.45f), fontSize = 10.sp)
+        Icon(icon, label, tint = tint, modifier = Modifier.size(22.dp))
+        Text(label, color = tint, fontSize = 10.sp)
     }
 }

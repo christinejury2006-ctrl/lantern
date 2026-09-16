@@ -60,6 +60,8 @@ import com.lantern.library.ui.components.ReadingProgressBar
 import com.lantern.library.ui.theme.Coral
 import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.InkSoft
+import com.lantern.library.ui.theme.LoreMint
+import com.lantern.library.ui.theme.LoreOnMint
 import com.lantern.library.ui.theme.NightText
 import com.lantern.library.ui.theme.Playfair
 
@@ -267,12 +269,14 @@ private fun ForYouShelf(
             }
             Text(
                 "Refresh",
-                color = if (busy) mute else Coral,
+                color = if (busy) mute else LoreOnMint,
                 fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
                 modifier = Modifier
                     .clip(RoundedCornerShape(16.dp))
+                    .background(if (busy) Color(0x332A2A34) else LoreMint)
                     .combinedClickable(enabled = !busy, onClick = onRefresh)
-                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                    .padding(horizontal = 14.dp, vertical = 7.dp)
             )
         }
         Spacer(Modifier.height(10.dp))

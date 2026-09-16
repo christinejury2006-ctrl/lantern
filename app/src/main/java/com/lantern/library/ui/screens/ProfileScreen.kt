@@ -1,6 +1,5 @@
 package com.lantern.library.ui.screens
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,7 +20,9 @@ import com.lantern.library.data.ReaderTheme
 import com.lantern.library.data.ReadingPrefs
 import com.lantern.library.ui.components.AuroraBackdrop
 import com.lantern.library.ui.components.GlassCard
-import com.lantern.library.ui.theme.Coral
+import com.lantern.library.ui.components.LoreActionButton
+import com.lantern.library.ui.components.LoreGhostButton
+import com.lantern.library.ui.components.LorePillButton
 import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.InkSoft
 import com.lantern.library.ui.theme.NightText
@@ -50,13 +51,16 @@ fun ProfileScreen(
             GlassCard(Modifier.fillMaxWidth(), dark, 20) {
                 Column(Modifier.padding(18.dp)) {
                     Text("Appearance", color = ink, fontSize = 16.sp)
-                    Text("Light Mode", color = if (!dark) Coral else ink, modifier = Modifier.fillMaxWidth().clickable { onPrefs(prefs.copy(theme = ReaderTheme.LIGHT)) }.padding(vertical = 10.dp))
-                    Text("Dark Mode", color = if (dark) Coral else ink, modifier = Modifier.fillMaxWidth().clickable { onPrefs(prefs.copy(theme = ReaderTheme.DARK)) }.padding(vertical = 10.dp))
-                    Text(
-                        "Library Appearance",
-                        color = Coral,
-                        modifier = Modifier.fillMaxWidth().clickable(onClick = onLibraryAppearance).padding(vertical = 10.dp)
-                    )
+                    Spacer(Modifier.height(10.dp))
+                    LoreGhostButton("Light Mode", selected = !dark) {
+                        onPrefs(prefs.copy(theme = ReaderTheme.LIGHT))
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    LoreGhostButton("Dark Mode", selected = dark) {
+                        onPrefs(prefs.copy(theme = ReaderTheme.DARK))
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    LorePillButton("Library Appearance", onClick = onLibraryAppearance)
                 }
             }
             Spacer(Modifier.height(12.dp))
@@ -67,13 +71,9 @@ fun ProfileScreen(
                         "Recommendations use only the genres you picked, not your library.",
                         color = mute,
                         fontSize = 13.sp,
-                        modifier = Modifier.padding(top = 6.dp)
+                        modifier = Modifier.padding(top = 6.dp, bottom = 10.dp)
                     )
-                    Text(
-                        "Edit reading interests",
-                        color = Coral,
-                        modifier = Modifier.padding(top = 10.dp).clickable(onClick = onEditInterests)
-                    )
+                    LorePillButton("Edit reading interests", onClick = onEditInterests)
                 }
             }
             Spacer(Modifier.height(12.dp))
@@ -81,20 +81,21 @@ fun ProfileScreen(
                 Column(Modifier.padding(18.dp)) {
                     Text("Account", color = ink, fontSize = 16.sp)
                     if (account.signedIn) {
-                        Text(account.displayName, color = ink)
+                        Text(account.displayName, color = ink, modifier = Modifier.padding(top = 8.dp))
                         Text(account.email, color = mute)
                         if (account.provider == "google") {
                             if (account.driveConnected) {
                                 Text("Library, progress, bookmarks, and settings sync to your account. EPUB and PDF files stay on this phone.", color = mute, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
                             } else {
-                                Text("Account sync is not connected. Everything stays on this phone.", color = mute, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
-                                Text("Connect account sync", color = Coral, modifier = Modifier.padding(top = 10.dp).clickable(onClick = onConnectDrive))
+                                Text("Account sync is not connected. Everything stays on this phone.", color = mute, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp, bottom = 10.dp))
+                                LorePillButton("Connect account sync", onClick = onConnectDrive)
                             }
                         }
-                        Text("Sign out", color = Coral, modifier = Modifier.padding(top = 10.dp).clickable(onClick = onSignOut))
+                        Spacer(Modifier.height(10.dp))
+                        LoreGhostButton("Sign out", selected = false, onClick = onSignOut)
                     } else {
-                        Text("Sign in with Google to keep library, progress, and settings in your account. Book files stay on this phone.", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
-                        Text("Sign in with Google", color = Coral, modifier = Modifier.padding(top = 12.dp).clickable(onClick = onGoogleSignIn))
+                        Text("Sign in with Google to keep library, progress, and settings in your account. Book files stay on this phone.", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp, bottom = 12.dp))
+                        LoreActionButton("Sign in with Google", onClick = onGoogleSignIn, mark = "G")
                     }
                 }
             }

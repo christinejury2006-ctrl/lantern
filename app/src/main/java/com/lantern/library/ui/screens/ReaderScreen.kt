@@ -117,6 +117,8 @@ import com.lantern.library.data.ReaderTheme
 import com.lantern.library.data.ReadingPrefs
 import com.lantern.library.ui.components.AppearanceLayer
 import com.lantern.library.ui.theme.Ink
+import com.lantern.library.ui.theme.LoreMint
+import com.lantern.library.ui.theme.LoreOnMint
 import com.lantern.library.ui.theme.NightText
 import com.lantern.library.ui.theme.Playfair
 import kotlinx.coroutines.Dispatchers
@@ -385,7 +387,7 @@ fun ReaderScreen(
         if (menuOpen) closeMenus() else onBack()
     }
 
-    val gold = Color(0xFFE8D9A8)
+    val accent = LoreMint
     val pageTap = Modifier.chromeTap(enabled = !menuOpen, onTap = { toggleChrome() })
 
     AppearanceLayer(appearance.look, dark) {
@@ -530,8 +532,12 @@ fun ReaderScreen(
         if (chrome) {
             Row(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding()
-                    .padding(bottom = 8.dp, top = 18.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly
+                    .padding(horizontal = 10.dp, bottom = 8.dp, top = 18.dp)
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(Color(0xE61C1C24))
+                    .padding(vertical = 8.dp, horizontal = 4.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 ColBtn(Icons.Filled.List, "Chapters", ink, selected = menu == ReaderMenu.Chapters) {
                     toggleMenu(ReaderMenu.Chapters)
@@ -542,11 +548,16 @@ fun ReaderScreen(
                 Column(
                     Modifier.clickable {
                         onPrefs(prefs.copy(readerTheme = if (dark) ReaderTheme.LIGHT else ReaderTheme.DARK))
-                    }.padding(8.dp, 4.dp),
+                    }.padding(4.dp, 2.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    SunMoonIcon(dark, ink, Modifier.size(22.dp))
-                    Text(if (dark) "Dark" else "Light", color = ink.copy(0.85f), fontSize = 10.sp)
+                    Box(
+                        Modifier.size(40.dp).clip(RoundedCornerShape(20.dp)).background(Color(0xFF2A2A34)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        SunMoonIcon(dark, Color.White, Modifier.size(20.dp))
+                    }
+                    Text(if (dark) "Dark" else "Light", color = Color.White.copy(0.75f), fontSize = 10.sp)
                 }
                 ColBtn(Icons.Filled.Settings, "Settings", ink, selected = menu == ReaderMenu.Settings) {
                     toggleMenu(ReaderMenu.Settings)
@@ -611,7 +622,7 @@ fun ReaderScreen(
                     Slider(
                         prefs.brightness,
                         { onPrefs(prefs.copy(brightness = it)) },
-                        colors = SliderDefaults.colors(thumbColor = gold, activeTrackColor = gold)
+                        colors = SliderDefaults.colors(thumbColor = accent, activeTrackColor = accent)
                     )
                     if (book.format == BookFormat.PDF) {
                         Text(
@@ -627,11 +638,13 @@ fun ReaderScreen(
                                 "A" to 17f,
                                 "a" to 15f
                             ).forEach { (l, s) ->
+                                val on = kotlin.math.abs(prefs.fontSizeSp - s) < 0.05f
                                 Text(
                                     l,
-                                    Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(Color(0x33FFFFFF))
+                                    Modifier.weight(1f).clip(RoundedCornerShape(12.dp))
+                                        .background(if (on) LoreMint else Color(0xFF2A2A34))
                                         .clickable { onPrefs(prefs.copy(fontSizeSp = s)) }.padding(10.dp),
-                                    color = Color.White, textAlign = TextAlign.Center
+                                    color = if (on) LoreOnMint else Color.White, textAlign = TextAlign.Center
                                 )
                             }
                         }
@@ -640,11 +653,11 @@ fun ReaderScreen(
                             val on = prefs.fontId == opt.id || (prefs.fontId == "times" && opt.id == "lora")
                             Text(
                                 opt.label,
-                                Modifier.fillMaxWidth().padding(bottom = 4.dp).clip(RoundedCornerShape(10.dp))
-                                    .background(if (on) Color(0xFFE8D9A8) else Color(0x22FFFFFF))
+                                Modifier.fillMaxWidth().padding(bottom = 4.dp).clip(RoundedCornerShape(12.dp))
+                                    .background(if (on) LoreMint else Color(0xFF2A2A34))
                                     .clickable { onPrefs(prefs.copy(fontId = opt.id)) }
                                     .padding(horizontal = 10.dp, vertical = 8.dp),
-                                color = if (on) Color(0xFF2B2430) else Color.White,
+                                color = if (on) LoreOnMint else Color.White,
                                 fontSize = 13.sp
                             )
                         }
@@ -655,7 +668,7 @@ fun ReaderScreen(
                     ModeSwitch("Portrait", "Landscape", !prefs.landscape) { onPrefs(prefs.copy(landscape = !it)) }
                     Text(
                         "Appearance",
-                        color = gold,
+                        color = accent,
                         modifier = Modifier.padding(top = 16.dp).clickable { menu = ReaderMenu.Appearance }
                     )
                     Text(
@@ -717,7 +730,7 @@ fun ReaderScreen(
                         at.toFloat(),
                         { go(it.toInt()) },
                         valueRange = 0f..(pageCount - 1).coerceAtLeast(0).toFloat(),
-                        colors = SliderDefaults.colors(thumbColor = gold, activeTrackColor = gold)
+                        colors = SliderDefaults.colors(thumbColor = accent, activeTrackColor = accent)
                     )
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("First", color = Color.White, modifier = Modifier.clickable { go(0) }.padding(8.dp))
@@ -887,23 +900,23 @@ private fun SunMoonIcon(dark: Boolean, tint: Color, modifier: Modifier) {
 @Composable
 private fun ModeSwitch(left: String, right: String, leftOn: Boolean, onLeft: (Boolean) -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color(0x22FFFFFF)).padding(4.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color(0xFF1C1C24)).padding(4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
             left,
-            Modifier.weight(1f).clip(RoundedCornerShape(10.dp))
-                .background(if (leftOn) Color(0xFFE8D9A8) else Color.Transparent)
+            Modifier.weight(1f).clip(RoundedCornerShape(14.dp))
+                .background(if (leftOn) LoreMint else Color.Transparent)
                 .clickable { onLeft(true) }.padding(vertical = 10.dp),
-            color = if (leftOn) Color(0xFF2B2430) else Color.White,
+            color = if (leftOn) LoreOnMint else Color.White.copy(0.7f),
             textAlign = TextAlign.Center, fontSize = 13.sp
         )
         Text(
             right,
-            Modifier.weight(1f).clip(RoundedCornerShape(10.dp))
-                .background(if (!leftOn) Color(0xFFE8D9A8) else Color.Transparent)
+            Modifier.weight(1f).clip(RoundedCornerShape(14.dp))
+                .background(if (!leftOn) LoreMint else Color.Transparent)
                 .clickable { onLeft(false) }.padding(vertical = 10.dp),
-            color = if (!leftOn) Color(0xFF2B2430) else Color.White,
+            color = if (!leftOn) LoreOnMint else Color.White.copy(0.7f),
             textAlign = TextAlign.Center, fontSize = 13.sp
         )
     }
@@ -917,15 +930,22 @@ private fun ColBtn(
     selected: Boolean = false,
     onClick: () -> Unit
 ) {
-    val gold = Color(0xFFE8D9A8)
+    val well = Color(0xFF2A2A34)
     Column(
-        Modifier.clip(RoundedCornerShape(12.dp))
-            .background(if (selected) Color(0x33E8D9A8) else Color.Transparent)
-            .clickable(onClick = onClick).padding(8.dp, 4.dp),
+        Modifier.clickable(onClick = onClick).padding(4.dp, 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Icon(icon, label, tint = if (selected) gold else tint, modifier = Modifier.size(22.dp))
-        Text(label, color = (if (selected) gold else tint).copy(0.85f), fontSize = 10.sp, maxLines = 1)
+        Box(
+            Modifier
+                .size(40.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .background(well)
+                .then(if (selected) Modifier.border(2.dp, LoreMint, RoundedCornerShape(20.dp)) else Modifier),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, label, tint = if (selected) LoreMint else Color.White, modifier = Modifier.size(20.dp))
+        }
+        Text(label, color = if (selected) LoreMint else Color.White.copy(0.75f), fontSize = 10.sp, maxLines = 1)
     }
 }
 

@@ -61,6 +61,7 @@ fun StudioScreen(
     onSaveMeta: (String, String, String, Boolean) -> Unit,
     onSelectCover: (String?) -> Unit,
     onCompile: () -> Unit,
+    onPreview: () -> Unit,
     onAddLibrary: () -> Unit
 ) {
     val dark = theme == ReaderTheme.DARK
@@ -81,7 +82,7 @@ fun StudioScreen(
                     web, dark, ink, mute,
                     onWebKeep, onWebRemove, onWebCancel,
                     onOpenChapter, onFollowPossible, onIgnorePossible,
-                    onBeginMeta, onSaveMeta, onSelectCover, onCompile, onAddLibrary
+                    onBeginMeta, onSaveMeta, onSelectCover, onCompile, onPreview, onAddLibrary
                 )
                 filePhase == StudioPhase.Extracting -> Text("Reading this book…", color = mute, fontSize = 15.sp, modifier = Modifier.padding(top = 24.dp))
                 filePhase == StudioPhase.Review || filePhase == StudioPhase.Failed || filePhase == StudioPhase.Committing -> {
@@ -140,6 +141,7 @@ private fun WebPane(
     onSaveMeta: (String, String, String, Boolean) -> Unit,
     onSelectCover: (String?) -> Unit,
     onCompile: () -> Unit,
+    onPreview: () -> Unit,
     onAddLibrary: () -> Unit
 ) {
     when (web.phase) {
@@ -153,7 +155,7 @@ private fun WebPane(
         }
         WebPhase.Meta -> MetaPane(web, dark, ink, mute, onSaveMeta, onCancel)
         WebPhase.Cover -> CoverPane(web, dark, ink, mute, onSelectCover, onCompile, onCancel)
-        WebPhase.Preview -> PreviewPane(web, dark, ink, mute, onAddLibrary, onCancel)
+        WebPhase.Preview -> PreviewPane(web, dark, ink, mute, onPreview, onAddLibrary, onCancel)
         WebPhase.Ready -> {
             val kind = if (web.kind == PageKind.Images) "Images" else "Text"
             Text(web.title.ifBlank { "Untitled book" }, color = ink, fontFamily = Playfair, fontSize = 22.sp, modifier = Modifier.padding(top = 18.dp))
@@ -220,8 +222,14 @@ private fun WebPane(
                     }
                 }
             }
+            val pending = web.pendingUnsure
             GlassCard(Modifier.fillMaxWidth().padding(top = 18.dp).clickable(onClick = onBeginMeta), dark, 18) {
-                Text("Continue", color = Coral, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
+                Text(
+                    if (pending > 0) "Decide Unsure items first" else "Continue",
+                    color = if (pending > 0) mute else Coral,
+                    fontSize = 16.sp,
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp)
+                )
             }
             CancelRow(dark, ink, mute, false, onCancel)
         }
@@ -317,6 +325,7 @@ private fun PreviewPane(
     dark: Boolean,
     ink: Color,
     mute: Color,
+    onPreview: () -> Unit,
     onAddLibrary: () -> Unit,
     onCancel: () -> Unit
 ) {
@@ -325,7 +334,10 @@ private fun PreviewPane(
     Text(web.title.ifBlank { "Untitled" }, color = ink, fontFamily = Playfair, fontSize = 22.sp, modifier = Modifier.padding(top = 12.dp))
     Text(web.author.ifBlank { "Unknown author" }, color = mute, fontSize = 14.sp)
     Text("${web.chapters.size} chapters", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
-    GlassCard(Modifier.fillMaxWidth().padding(top = 20.dp).clickable(onClick = onAddLibrary), dark, 18) {
+    GlassCard(Modifier.fillMaxWidth().padding(top = 20.dp).clickable(onClick = onPreview), dark, 18) {
+        Text("Preview / Open", color = Coral, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
+    }
+    GlassCard(Modifier.fillMaxWidth().padding(top = 10.dp).clickable(onClick = onAddLibrary), dark, 18) {
         Text("Add to Library", color = Coral, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
     }
     CancelRow(dark, ink, mute, false, onCancel)

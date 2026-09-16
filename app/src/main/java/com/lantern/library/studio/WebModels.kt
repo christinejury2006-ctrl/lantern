@@ -87,4 +87,5 @@ data class WebDraft(
         get() = chapters.firstOrNull { it.id == openChapterId } ?: chapters.firstOrNull()
     val kept: List<WebCandidate> get() = open?.kept.orEmpty()
     val unsure: List<WebCandidate> get() = open?.unsure.orEmpty()
+    val pendingUnsure: Int get() = chapters.count { it.hasUnsure }
 }

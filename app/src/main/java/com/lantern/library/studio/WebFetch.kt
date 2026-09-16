@@ -7,7 +7,8 @@ import java.util.concurrent.TimeUnit
 
 internal object WebFetch {
     private const val MAX_HTML = 2_000_000
-    private const val MAX_IMAGE = 1_500_000
+    /** Skip images larger than 8 MB so a chapter cannot exhaust RAM. No downscale. */
+    private const val MAX_IMAGE = 8_000_000
     private const val UA =
         "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Lore/3.5.0 (Studio)"
 

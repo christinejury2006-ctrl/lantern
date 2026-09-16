@@ -92,7 +92,7 @@ internal object BookCrawler {
     private fun attachImages(candidates: List<WebCandidate>, dir: File, chapterIndex: Int): List<WebCandidate> {
         val preview = candidates.filter {
             it.type == WebBlockType.Image && it.verdict != WebVerdict.Drop && !it.imageUrl.isNullOrBlank()
-        }.take(8)
+        }.take(40)
         return candidates.map { c ->
             val hit = preview.indexOfFirst { it.id == c.id }
             if (hit < 0) c else {

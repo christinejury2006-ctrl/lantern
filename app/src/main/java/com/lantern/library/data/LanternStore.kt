@@ -22,6 +22,7 @@ import java.io.File
 class LanternStore(app: Application) : AndroidViewModel(app) {
     companion object {
         const val MAX_USER_BOOKS = 200
+        private const val STUDIO_PREVIEW_ID = "studio_preview"
     }
 
     private val prefs = app.getSharedPreferences("lantern", Context.MODE_PRIVATE)
@@ -59,6 +60,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     var web by mutableStateOf<com.lantern.library.studio.WebDraft?>(null)
         private set
     private var webGen = 0
+    private var previewBook: LibraryBook? = null
     private var driveConsentPrompted = false
     private var googleAccountKey: String? = null
 
@@ -178,9 +180,16 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             .putBoolean("mobile", clean.useMobileData).apply()
     }
     fun toast(msg: String) { viewModelScope.launch { toast = msg; delay(5000); if (toast == msg) toast = null } }
-    fun book(id: String) = synchronized(libraryLock) { books.firstOrNull { it.id == id } }
+    fun book(id: String): LibraryBook? {
+        if (id == STUDIO_PREVIEW_ID) return previewBook
+        return synchronized(libraryLock) { books.firstOrNull { it.id == id } }
+    }
 
     fun upsert(book: LibraryBook) {
+        if (book.id == STUDIO_PREVIEW_ID) {
+            previewBook = book
+            return
+        }
         synchronized(libraryLock) {
             val i = books.indexOfFirst { it.id == book.id }
             if (i >= 0) {
@@ -255,6 +264,16 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         }
     }
     fun markRead(id: String, page: Int, pages: Int) {
+        if (id == STUDIO_PREVIEW_ID) {
+            val b = previewBook ?: return
+            previewBook = b.copy(
+                currentPage = page.coerceAtLeast(0),
+                pageCount = pages.coerceAtLeast(1),
+                lastReadAt = System.currentTimeMillis(),
+                finished = pages > 0 && page >= pages - 1
+            )
+            return
+        }
         val b = book(id) ?: return
         upsert(b.copy(currentPage = page.coerceAtLeast(0), pageCount = pages.coerceAtLeast(1), lastReadAt = System.currentTimeMillis(), finished = pages > 0 && page >= pages - 1))
     }
@@ -565,6 +584,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     fun webCancel() {
         webGen++
         web = null
+        previewBook = null
         viewModelScope.launch(Dispatchers.IO) {
             com.lantern.library.studio.WebFetch.clearWebDir(getApplication<Application>().cacheDir)
         }
@@ -574,6 +594,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         val cur = web ?: return
         if (cur.phase != com.lantern.library.studio.WebPhase.Ready) return
         if (cur.chapters.isEmpty()) return
+        if (cur.pendingUnsure > 0) {
+            toast("Decide Unsure items first.")
+            return
+        }
         web = cur.copy(phase = com.lantern.library.studio.WebPhase.Meta)
     }
 
@@ -592,11 +616,11 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         web = cur.copy(
             phase = com.lantern.library.studio.WebPhase.Cover,
             title = title.trim().ifBlank { cur.title.ifBlank { "Untitled" } },
-            author = author.trim(),
+            author = author.trim().let { if (it.equals("Imported", true)) "" else it },
             series = series.trim(),
             kind = kind,
             coverChoices = choices.take(8),
-            coverPath = choices.firstOrNull()?.path
+            coverPath = null
         )
     }
 
@@ -615,7 +639,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             val out = File(com.lantern.library.studio.WebFetch.webDir(cache), "book.epub")
             val compiled = withContext(Dispatchers.IO) {
                 runCatching {
-                    val model = com.lantern.library.studio.EpubWriter.buildModel(cur)
+                    val model = com.lantern.library.studio.EpubWriter.buildModel(cur) ?: return@runCatching null
                     com.lantern.library.studio.EpubWriter.write(model, out, cache)
                 }.getOrNull()
             }
@@ -633,6 +657,37 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     compiledPath = null
                 )
             }
+        }
+    }
+
+    fun webOpenPreview(then: (LibraryBook?) -> Unit) {
+        val cur = web ?: return then(null)
+        val compiled = cur.compiledPath?.let { File(it) }
+        if (compiled == null || !compiled.exists()) {
+            toast("Could not open this book")
+            then(null)
+            return
+        }
+        viewModelScope.launch {
+            val ready = withContext(Dispatchers.IO) {
+                if (!com.lantern.library.studio.EpubWriter.validate(compiled)) return@withContext null
+                val pages = runCatching {
+                    BookIo.readEpubDocument(compiled).chapters.size
+                }.getOrDefault(1).coerceAtLeast(1)
+                LibraryBook(
+                    id = STUDIO_PREVIEW_ID,
+                    title = cur.title.trim().ifBlank { "Untitled" },
+                    author = cur.author.trim(),
+                    remoteCover = cur.coverPath,
+                    format = BookFormat.EPUB,
+                    origin = BookOrigin.IMPORT,
+                    filePath = compiled.absolutePath,
+                    pageCount = pages
+                )
+            }
+            if (ready == null) toast("Could not open this book")
+            previewBook = ready
+            then(ready)
         }
     }
 
@@ -655,9 +710,14 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             val ok = withContext(Dispatchers.IO) {
                 runCatching {
                     compiled.copyTo(dest, overwrite = true)
-                    val srcCover = cur.coverPath?.let { File(it) }
-                    if (srcCover != null && srcCover.exists()) {
-                        srcCover.copyTo(coverDest, overwrite = true)
+                    val coverSrc = cur.coverPath
+                    if (!coverSrc.isNullOrBlank()) {
+                        val local = File(coverSrc)
+                        when {
+                            local.exists() && local.length() > 40L -> local.copyTo(coverDest, overwrite = true)
+                            coverSrc.startsWith("http") ->
+                                com.lantern.library.studio.WebFetch.image(coverSrc, coverDest)
+                        }
                     }
                     dest.exists() && dest.length() > 200L
                 }.getOrDefault(false)
@@ -686,6 +746,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     toast("Added to Library")
                     webGen++
                     web = null
+                    previewBook = null
                     withContext(Dispatchers.IO) {
                         com.lantern.library.studio.WebFetch.clearWebDir(app.cacheDir)
                     }

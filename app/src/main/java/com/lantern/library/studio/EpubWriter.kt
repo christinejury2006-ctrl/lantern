@@ -10,7 +10,7 @@ import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 
 internal object EpubWriter {
-    fun buildModel(draft: WebDraft): CompiledBook {
+    fun buildModel(draft: WebDraft): CompiledBook? {
         val chapters = draft.chapters.map { ch ->
             val kept = ch.candidates.filter { it.verdict == WebVerdict.Keep }
             CompiledChapter(
@@ -19,46 +19,43 @@ internal object EpubWriter {
                 imageFiles = kept.filter { it.type == WebBlockType.Image }.mapNotNull { it.localPath ?: it.imageUrl }
             )
         }.filter { it.paragraphs.isNotEmpty() || it.imageFiles.isNotEmpty() }
+        if (chapters.isEmpty()) return null
         return CompiledBook(
             title = draft.title.trim().ifBlank { "Untitled" },
             author = draft.author.trim(),
             series = draft.series.trim(),
             kind = draft.kind,
             coverPath = draft.coverPath,
-            chapters = chapters.ifEmpty {
-                listOf(CompiledChapter(draft.title.ifBlank { "Untitled" }, listOf("This book has no extracted text."), emptyList()))
-            }
+            chapters = chapters
         )
     }
 
     fun write(model: CompiledBook, dest: File, cacheDir: File): File? {
+        if (model.chapters.isEmpty()) return null
         dest.parentFile?.mkdirs()
         val work = File(cacheDir, "studio/web/pack")
         work.deleteRecursively()
         work.mkdirs()
         val oebps = File(work, "OEBPS").apply { mkdirs() }
-        val imgDir = File(oebps, "images").apply { mkdirs() }
+        File(oebps, "images").mkdirs()
         val id = "lore-" + UUID.randomUUID().toString()
         val now = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'").apply {
             timeZone = java.util.TimeZone.getTimeZone("UTC")
         }.format(java.util.Date())
         val manifest = StringBuilder()
         val spine = StringBuilder()
-        var coverHref: String? = null
         model.coverPath?.let { path ->
             val src = resolveFile(path, cacheDir)
             if (src != null && src.exists()) {
                 val ext = imageExt(src)
                 val name = "cover.$ext"
                 src.copyTo(File(oebps, name), overwrite = true)
-                coverHref = name
                 manifest.append("""    <item id="cover-img" href="$name" media-type="${imageMime(ext)}" properties="cover-image"/>""").append('\n')
-                File(oebps, "cover.xhtml").writeText(xhtml("Cover", """<div><img src="$name" alt="Cover"/></div>"""))
-                manifest.append("""    <item id="cover-page" href="cover.xhtml" media-type="application/xhtml+xml"/>""").append('\n')
-                spine.append("""    <itemref idref="cover-page"/>""").append('\n')
             }
         }
-        model.chapters.forEachIndexed { i, ch ->
+        val written = ArrayList<CompiledChapter>()
+        model.chapters.forEach { ch ->
+            val i = written.size
             val body = StringBuilder()
             ch.paragraphs.forEach { p ->
                 body.append("<p>").append(esc(p)).append("</p>\n")
@@ -73,13 +70,18 @@ internal object EpubWriter {
                 if (ch.paragraphs.isEmpty()) body.append("<p>").append(esc("Page ${n + 1}")).append("</p>\n")
                 body.append("""<p><img src="$href" alt=""/></p>""").append('\n')
             }
-            if (body.isEmpty()) body.append("<p>.</p>")
+            if (body.isEmpty()) return@forEach
             val href = "ch${i + 1}.xhtml"
             File(oebps, href).writeText(xhtml(ch.title, body.toString()))
             manifest.append("""    <item id="ch${i + 1}" href="$href" media-type="application/xhtml+xml"/>""").append('\n')
             spine.append("""    <itemref idref="ch${i + 1}"/>""").append('\n')
+            written += ch
         }
-        val navItems = model.chapters.mapIndexed { i, ch ->
+        if (written.isEmpty()) {
+            work.deleteRecursively()
+            return null
+        }
+        val navItems = written.mapIndexed { i, ch ->
             """      <li><a href="ch${i + 1}.xhtml">${esc(ch.title)}</a></li>"""
         }.joinToString("\n")
         File(oebps, "nav.xhtml").writeText(
@@ -136,7 +138,20 @@ $spine  </spine>
         zip.use { z ->
             if (z.getEntry("mimetype") == null) return false
             if (z.getEntry("META-INF/container.xml") == null) return false
-            if (z.getEntry("OEBPS/content.opf") == null) return false
+            val opf = z.getEntry("OEBPS/content.opf") ?: return false
+            val xml = runCatching { z.getInputStream(opf).bufferedReader().use { it.readText() } }.getOrNull().orEmpty()
+            if (!xml.contains("<spine") || !xml.contains("<manifest")) return false
+            if (z.getEntry("OEBPS/nav.xhtml") == null) return false
+            Regex("""<item\b[^>]*href="([^"]+)"""").findAll(xml).forEach { m ->
+                val href = m.groupValues[1]
+                if (href.startsWith("http")) return@forEach
+                if (z.getEntry("OEBPS/$href") == null) return false
+            }
+            val spineIds = Regex("""idref="([^"]+)"""").findAll(xml).map { it.groupValues[1] }.toList()
+            if (spineIds.isEmpty()) return false
+            spineIds.forEach { id ->
+                if (!Regex("""<item\b[^>]*id="$id"""").containsMatchIn(xml)) return false
+            }
         }
         val doc = runCatching { BookIo.readEpubDocument(file) }.getOrNull() ?: return false
         return doc.chapters.isNotEmpty()

@@ -75,7 +75,7 @@ private sealed class Route {
     object Studio : Route()
     object Search : Route()
     object Profile : Route()
-    data class Reader(val id: String) : Route()
+    data class Reader(val id: String, val fromStudio: Boolean = false) : Route()
 }
 
 @Composable
@@ -181,6 +181,7 @@ internal fun LanternRoot(store: LanternStore) {
                     onSaveMeta = { t, a, s, img -> store.webSaveMeta(t, a, s, img) },
                     onSelectCover = { store.webSelectCover(it) },
                     onCompile = { store.webCompile() },
+                    onPreview = { store.webOpenPreview { ready -> if (ready != null) tab = Route.Reader(ready.id, fromStudio = true) } },
                     onAddLibrary = { store.webAddToLibrary() }
                 )
                 Route.Search -> SearchScreen(theme) { remote -> store.download(remote) { book -> store.openForReading(book) { ready -> if (ready != null) tab = Route.Reader(ready.id) } } }
@@ -194,8 +195,9 @@ internal fun LanternRoot(store: LanternStore) {
                 )
                 is Route.Reader -> {
                     val book = store.book(r.id)
-                    if (book == null) tab = Route.Library
-                    else ReaderScreen(book, store.readingPrefs, { store.setPrefs(it) }, { tab = Route.Library }, { p, n -> store.markRead(book.id, p, n) }, { store.addBookmark(book.id, it) })
+                    val back = { tab = if (r.fromStudio) Route.Studio else Route.Library }
+                    if (book == null) back()
+                    else ReaderScreen(book, store.readingPrefs, { store.setPrefs(it) }, back, { p, n -> store.markRead(book.id, p, n) }, { store.addBookmark(book.id, it) })
                 }
             }
             val detail = details

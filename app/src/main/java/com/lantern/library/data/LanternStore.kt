@@ -29,6 +29,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     private val booksFile = File(app.filesDir, "library.json")
     private val wantFile = File(app.filesDir, "want_to_read.json")
     private val pendingDeleteFile = File(app.filesDir, "pending_deletes.json")
+    private val libraryAppearFile = File(app.filesDir, "library_appearance.json")
+    private val readerAppearFile = File(app.filesDir, "reader_appearance.json")
     private val libraryLock = Any()
     private val pendingDeleteLock = Any()
     val books = mutableStateListOf<LibraryBook>()
@@ -54,6 +56,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     var editingInterests by mutableStateOf(false)
     var hydrated by mutableStateOf(false)
         private set
+    var libraryAppearance by mutableStateOf(LibraryAppearance())
+        private set
+    var readerAppearance by mutableStateOf(ReaderAppearance())
+        private set
     var studio by mutableStateOf<StudioSession?>(null)
         private set
     private var studioGen = 0
@@ -72,7 +78,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         val want: List<DiscoveryBook>,
         val interestsChosen: Boolean,
         val interests: List<String>,
-        val forYouCached: List<DiscoveryBook>
+        val forYouCached: List<DiscoveryBook>,
+        val libraryAppearance: LibraryAppearance,
+        val readerAppearance: ReaderAppearance
     )
 
     init {
@@ -99,6 +107,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             wantToRead.addAll(disk.want)
             interestsChosen = disk.interestsChosen
             interests = disk.interests
+            libraryAppearance = disk.libraryAppearance
+            readerAppearance = disk.readerAppearance
             StartupTrace.mark("LanternStore prefs interestsChosen=$interestsChosen n=${interests.size}")
             if (interestsChosen) {
                 forYou = disk.forYouCached
@@ -151,9 +161,21 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             .map { it.trim() }
             .filter { it.isNotEmpty() }
         val cached = if (chosen) Recommendations.cached(app, chosenInterests).orEmpty() else emptyList()
+        val libAppear = LibraryAppearance(
+            appearLookFromJson(
+                runCatching { if (libraryAppearFile.exists()) libraryAppearFile.readText() else null }.getOrNull(),
+                AppearLook.libraryDefault
+            )
+        )
+        val readAppear = ReaderAppearance(
+            appearLookFromJson(
+                runCatching { if (readerAppearFile.exists()) readerAppearFile.readText() else null }.getOrNull(),
+                AppearLook.readerDefault
+            )
+        )
         return DiskHydrate(
             loadedPrefs, accountFromPrefs, googleAcc, loadedBooks, want,
-            chosen, chosenInterests, cached
+            chosen, chosenInterests, cached, libAppear, readAppear
         )
     }
 
@@ -179,6 +201,31 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             .putBoolean("swipe", clean.swipeMode).putBoolean("landscape", clean.landscape)
             .putBoolean("mobile", clean.useMobileData).apply()
     }
+
+    fun setLibraryAppearance(next: LibraryAppearance) {
+        libraryAppearance = next
+        persistLook(libraryAppearFile, next.look)
+        prefetchWallpaper(next.look)
+    }
+
+    fun setReaderAppearance(next: ReaderAppearance) {
+        readerAppearance = next
+        persistLook(readerAppearFile, next.look)
+        prefetchWallpaper(next.look)
+    }
+
+    private fun persistLook(file: File, look: AppearLook) {
+        runCatching { atomicWrite(file, look.toJson().toString()) }
+    }
+
+    private fun prefetchWallpaper(look: AppearLook) {
+        if (!look.hasWallpaper) return
+        val app = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            WallpaperStore.load(app, look.wallpaperId, look.wallpaperUrl)
+        }
+    }
+
     fun toast(msg: String) { viewModelScope.launch { toast = msg; delay(5000); if (toast == msg) toast = null } }
     fun book(id: String): LibraryBook? {
         if (id == STUDIO_PREVIEW_ID) return previewBook

@@ -36,7 +36,8 @@ fun ProfileScreen(
     onGoogleSignIn: () -> Unit,
     onSignOut: () -> Unit,
     onConnectDrive: () -> Unit = {},
-    onEditInterests: () -> Unit = {}
+    onEditInterests: () -> Unit = {},
+    onLibraryAppearance: () -> Unit = {}
 ) {
     val dark = prefs.theme == ReaderTheme.DARK
     val ink = if (dark) NightText else Ink
@@ -51,6 +52,11 @@ fun ProfileScreen(
                     Text("Appearance", color = ink, fontSize = 16.sp)
                     Text("Light Mode", color = if (!dark) Coral else ink, modifier = Modifier.fillMaxWidth().clickable { onPrefs(prefs.copy(theme = ReaderTheme.LIGHT)) }.padding(vertical = 10.dp))
                     Text("Dark Mode", color = if (dark) Coral else ink, modifier = Modifier.fillMaxWidth().clickable { onPrefs(prefs.copy(theme = ReaderTheme.DARK)) }.padding(vertical = 10.dp))
+                    Text(
+                        "Library Appearance",
+                        color = Coral,
+                        modifier = Modifier.fillMaxWidth().clickable(onClick = onLibraryAppearance).padding(vertical = 10.dp)
+                    )
                 }
             }
             Spacer(Modifier.height(12.dp))

@@ -83,7 +83,6 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathOperation
@@ -113,15 +112,14 @@ import com.lantern.library.data.LibraryBook
 import com.lantern.library.data.Paginator
 import com.lantern.library.data.ReaderPage
 import com.lantern.library.data.TocEntry
+import com.lantern.library.data.ReaderAppearance
 import com.lantern.library.data.ReaderTheme
 import com.lantern.library.data.ReadingPrefs
-import com.lantern.library.ui.theme.Aqua
+import com.lantern.library.ui.components.AppearanceLayer
+import com.lantern.library.ui.screens.AppearanceEditor
 import com.lantern.library.ui.theme.Ink
-import com.lantern.library.ui.theme.Lilac
 import com.lantern.library.ui.theme.NightText
-import com.lantern.library.ui.theme.Periwinkle
 import com.lantern.library.ui.theme.Playfair
-import com.lantern.library.ui.theme.Sky
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
@@ -132,7 +130,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private enum class ReaderMenu { None, Settings, Nav, Chapters, Marks }
+private enum class ReaderMenu { None, Settings, Appearance, Nav, Chapters, Marks }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -142,7 +140,9 @@ fun ReaderScreen(
     onPrefs: (ReadingPrefs) -> Unit,
     onBack: () -> Unit,
     onProgress: (Int, Int) -> Unit,
-    onBookmark: (Int) -> Unit
+    onBookmark: (Int) -> Unit,
+    appearance: ReaderAppearance = ReaderAppearance(),
+    onAppearance: (ReaderAppearance) -> Unit = {}
 ) {
     val activity = LocalContext.current as Activity
     val family = LanternFonts.family(prefs.fontId)
@@ -383,16 +383,10 @@ fun ReaderScreen(
         if (menuOpen) closeMenus() else onBack()
     }
 
-    val aurora = if (dark) Brush.verticalGradient(
-        listOf(Color(0xFF3E4A5C), Color(0xFF4A5668), Color(0xFF3A4454))
-    ) else Brush.verticalGradient(listOf(Lilac, Periwinkle, Sky, Aqua))
-    val glassFilm = if (dark) Color(0x99404A5C) else Color(0x99EDE4F6)
     val gold = Color(0xFFE8D9A8)
     val pageTap = Modifier.chromeTap(enabled = !menuOpen, onTap = { toggleChrome() })
 
-    Box(Modifier.fillMaxSize().background(aurora)) {
-        Box(Modifier.fillMaxSize().background(glassFilm))
-
+    AppearanceLayer(appearance.look) {
         when {
             !ready -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("Opening…", color = ink, fontFamily = family)
@@ -656,8 +650,39 @@ fun ReaderScreen(
                     ModeSwitch("Swipe", "Scroll", prefs.swipeMode) { onPrefs(prefs.copy(swipeMode = it)) }
                     Text("Page Orientation", color = Color.White, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
                     ModeSwitch("Portrait", "Landscape", !prefs.landscape) { onPrefs(prefs.copy(landscape = !it)) }
+                    Text(
+                        "Appearance",
+                        color = gold,
+                        modifier = Modifier.padding(top = 16.dp).clickable { menu = ReaderMenu.Appearance }
+                    )
+                    Text(
+                        "Reader background only. Library is unchanged.",
+                        color = Color.White.copy(0.7f),
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
                     Spacer(Modifier.height(24.dp))
                 }
+            }
+        }
+
+        if (menu == ReaderMenu.Appearance) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() },
+                        onClick = {}
+                    )
+            ) {
+                AppearanceEditor(
+                    title = "Reader Appearance",
+                    theme = prefs.readerTheme,
+                    look = appearance.look,
+                    onChange = { onAppearance(ReaderAppearance(it)) },
+                    onDone = { closeMenus() }
+                )
             }
         }
 

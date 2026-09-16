@@ -46,11 +46,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lantern.library.data.DiscoveryBook
+import com.lantern.library.data.LibraryAppearance
 import com.lantern.library.data.LibraryBook
 import com.lantern.library.data.ReaderTheme
 import com.lantern.library.data.Recommendations
 import com.lantern.library.data.Shelf
-import com.lantern.library.ui.components.AuroraBackdrop
+import com.lantern.library.ui.components.AppearanceLayer
 import com.lantern.library.ui.components.BookCover
 import com.lantern.library.ui.components.CoverFace
 import com.lantern.library.ui.components.GlassCard
@@ -70,6 +71,7 @@ fun LibraryScreen(
     forYou: List<DiscoveryBook>,
     wantToRead: List<DiscoveryBook>,
     theme: ReaderTheme,
+    appearance: LibraryAppearance = LibraryAppearance(),
     forYouBusy: Boolean = false,
     forYouFailed: Boolean = false,
     onOpen: (LibraryBook) -> Unit,
@@ -90,7 +92,7 @@ fun LibraryScreen(
         LibFilter.FINISHED -> books.filter { it.shelf == Shelf.FINISHED }
         LibFilter.WANT -> emptyList()
     }
-    AuroraBackdrop(theme) {
+    AppearanceLayer(appearance.look) {
         LazyVerticalGrid(
             columns = GridCells.Fixed(3),
             modifier = Modifier.fillMaxSize(),

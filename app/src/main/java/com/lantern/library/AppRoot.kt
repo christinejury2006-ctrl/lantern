@@ -44,9 +44,11 @@ import com.lantern.library.data.DiscoveryBook
 import com.lantern.library.data.GoogleAuth
 import com.lantern.library.data.Gutendex
 import com.lantern.library.data.LanternStore
+import com.lantern.library.data.LibraryAppearance
 import com.lantern.library.data.ReaderTheme
 import com.lantern.library.data.Recommendations
 import com.lantern.library.ui.components.FadeToast
+import com.lantern.library.ui.screens.AppearanceEditor
 import com.lantern.library.ui.screens.BookDetailsOverlay
 import com.lantern.library.ui.screens.InterestOnboardingScreen
 import com.lantern.library.ui.screens.LibraryScreen
@@ -82,6 +84,7 @@ private sealed class Route {
 internal fun LanternRoot(store: LanternStore) {
     var tab by remember { mutableStateOf<Route>(Route.Library) }
     var details by remember { mutableStateOf<DiscoveryBook?>(null) }
+    var libraryAppearOpen by remember { mutableStateOf(false) }
     val theme = store.readingPrefs.theme
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -143,6 +146,9 @@ internal fun LanternRoot(store: LanternStore) {
         if (!openDiscoveryLink(book)) store.toast("No store link available")
     }
     val needsOnboarding = !store.interestsChosen
+    LaunchedEffect(tab) {
+        if (tab !is Route.Profile) libraryAppearOpen = false
+    }
     LanternTheme(theme) {
         Box(Modifier.fillMaxSize()) {
             if (needsOnboarding) {
@@ -156,6 +162,7 @@ internal fun LanternRoot(store: LanternStore) {
             } else when (val r = tab) {
                 Route.Library -> LibraryScreen(
                     store.books, store.forYou, store.wantToRead, theme,
+                    store.libraryAppearance,
                     store.forYouBusy,
                     onOpen = { book -> store.openForReading(book) { ready -> if (ready != null) tab = Route.Reader(ready.id) } },
                     onRemove = { store.remove(it) },
@@ -185,13 +192,22 @@ internal fun LanternRoot(store: LanternStore) {
                     onAddLibrary = { store.webAddToLibrary() }
                 )
                 Route.Search -> SearchScreen(theme) { remote -> store.download(remote) { book -> store.openForReading(book) { ready -> if (ready != null) tab = Route.Reader(ready.id) } } }
-                Route.Profile -> ProfileScreen(
+                Route.Profile -> if (libraryAppearOpen) {
+                    AppearanceEditor(
+                        title = "Library Appearance",
+                        theme = theme,
+                        look = store.libraryAppearance.look,
+                        onChange = { store.setLibraryAppearance(com.lantern.library.data.LibraryAppearance(it)) },
+                        onDone = { libraryAppearOpen = false }
+                    )
+                } else ProfileScreen(
                     store.books, store.account, store.readingPrefs,
                     { store.setPrefs(it) },
                     { googleSignIn.launch(GoogleAuth.signInIntent(activity)) },
                     { store.signOut(activity) },
                     { store.requestDriveConnect() },
-                    { store.openInterestEditor() }
+                    { store.openInterestEditor() },
+                    { libraryAppearOpen = true }
                 )
                 is Route.Reader -> {
                     val book = store.book(r.id)

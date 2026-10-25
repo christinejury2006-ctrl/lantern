@@ -459,6 +459,7 @@ fun ReaderScreen(
                                     fillViewport = true
                                 )
                             }
+                            PageCurlOverlay(pageOffset, Modifier.fillMaxSize())
                         }
                     }
                 } else {
@@ -512,6 +513,7 @@ fun ReaderScreen(
                                     pages.getOrNull(i), family, prefs.fontSizeSp, ink,
                                     Modifier.fillMaxSize().then(pageTap)
                                 )
+                                PageCurlOverlay(pageOffset, Modifier.fillMaxSize())
                             }
                         }
                     }
@@ -1216,5 +1218,49 @@ private fun renderPdf(file: File, index: Int): Bitmap? {
         out
     } catch (_: Exception) {
         null
+    }
+}
+
+
+@Composable
+private fun PageCurlOverlay(pageOffset: Float, modifier: Modifier = Modifier) {
+    val progress = kotlin.math.abs(pageOffset).coerceIn(0f, 1f)
+    if (progress < 0.015f) return
+    Canvas(modifier) {
+        val w = size.width
+        val h = size.height
+        val movingRight = pageOffset < 0f
+        val edgeX = if (movingRight) w * (1f - progress * 0.34f) else w * progress * 0.34f
+        val curlWidth = w * (0.035f + progress * 0.12f)
+        val left = (edgeX - curlWidth).coerceAtLeast(0f)
+        val right = (edgeX + curlWidth).coerceAtMost(w)
+        drawRect(
+            brush = androidx.compose.ui.graphics.Brush.horizontalGradient(
+                colors = if (movingRight) listOf(Color.Transparent, Color(0x18000000), Color(0x55000000), Color(0x22FFFFFF))
+                else listOf(Color(0x22FFFFFF), Color(0x55000000), Color(0x18000000), Color.Transparent),
+                startX = left, endX = right
+            ),
+            topLeft = Offset(left, 0f),
+            size = Size((right - left).coerceAtLeast(0f), h)
+        )
+        val curl = Path().apply {
+            if (movingRight) {
+                moveTo(edgeX, 0f)
+                cubicTo(edgeX - curlWidth * 0.35f, h * 0.28f, edgeX + curlWidth * 0.8f, h * 0.68f, edgeX, h)
+                cubicTo(edgeX + curlWidth * 0.42f, h * 0.72f, edgeX + curlWidth * 0.28f, h * 0.3f, edgeX, 0f)
+            } else {
+                moveTo(edgeX, 0f)
+                cubicTo(edgeX + curlWidth * 0.35f, h * 0.28f, edgeX - curlWidth * 0.8f, h * 0.68f, edgeX, h)
+                cubicTo(edgeX - curlWidth * 0.42f, h * 0.72f, edgeX - curlWidth * 0.28f, h * 0.3f, edgeX, 0f)
+            }
+            close()
+        }
+        drawPath(
+            curl,
+            brush = androidx.compose.ui.graphics.Brush.horizontalGradient(
+                colors = listOf(Color(0x00FFFFFF), Color(0x99FFFFFF), Color(0x44000000)),
+                startX = left, endX = right
+            )
+        )
     }
 }

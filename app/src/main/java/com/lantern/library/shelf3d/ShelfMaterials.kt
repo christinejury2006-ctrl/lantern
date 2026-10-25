@@ -35,14 +35,29 @@ object ShelfMaterials {
     private const val WOOD = "wood_pbr"
 
     /**
-     * Every book shares one material and differs only by instance parameters. `baseColor`,
-     * `roughness` and `metallic` are all per-instance, so one draw state covers the shelf and
-     * the colours can come from the library's own covers.
+     * A book: its binding colour, and the rectangle of the spine atlas holding its cover art.
+     *
+     * Every book shares this one material and differs only by instance parameters, so a whole
+     * shelf is still one material, one texture and one draw state. The mesh's own uv is
+     * remapped through a per-book offset and scale to pick that book's tile.
      *
      * `prepareMaterial(material)` must come first: it fills in the defaults Filament expects
      * before the shader touches any of the standard fields.
      */
-    private val LIT_FRAGMENT = """
+    private val BOOK_FRAGMENT = """
+        void material(inout MaterialInputs material) {
+            prepareMaterial(material);
+            vec2 uv = materialParams.uvOffset + materialParams.uvScale * getUV0();
+            vec4 art = texture(materialParams_spineMap, uv);
+            // A book with no cover keeps its binding colour.
+            material.baseColor = mix(vec4(materialParams.baseColor, 1.0), art, materialParams.useArtwork);
+            material.roughness = materialParams.roughness;
+            material.metallic = materialParams.metallic;
+        }
+    """.trimIndent()
+
+    /** The woodwork: colour and roughness only, no texture. */
+    private val WOOD_FRAGMENT = """
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
             material.baseColor.rgb = materialParams.baseColor;
@@ -120,6 +135,7 @@ object ShelfMaterials {
                     samplerParameter(
                         MaterialBuilder.SamplerType.SAMPLER_2D,
                         MaterialBuilder.SamplerFormat.FLOAT,
+                        MaterialBuilder.ParameterPrecision.DEFAULT,
                         "spineMap"
                     )
                     material(BOOK_FRAGMENT)

@@ -318,7 +318,7 @@ private fun SpineFace(
 }
 
 /** Colours for a spine, derived from its title so a book always looks the same. */
-private data class Leather(val base: Color, val deep: Color, val lightInk: Boolean)
+internal data class Leather(val base: Color, val deep: Color, val lightInk: Boolean)
 
 private val cloth = listOf(
     0xFF8C3B32 to 0xFF5E241E, // oxblood

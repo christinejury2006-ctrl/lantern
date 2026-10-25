@@ -94,29 +94,11 @@ fun AppearanceEditor(
                 Box(previewMod) {
                     Column(Modifier.padding(16.dp)) {
                         Text("My Library", color = ink, fontFamily = Playfair, fontSize = 18.sp)
-                        Text("Wallpaper under a soft wash.", color = mute, fontSize = 12.sp)
+                        Text("Soft, abstract glass textures. No nature scenes.", color = mute, fontSize = 12.sp)
                     }
                 }
             }
-            Field("Background", mute)
-            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color(0x33FFFFFF))) {
-                FillChip("Solid", look.fill == AppearFill.Solid, ink) {
-                    onChange(look.copy(fill = AppearFill.Solid))
-                }
-                FillChip("Ombre", look.fill == AppearFill.Ombre, ink) {
-                    onChange(look.copy(fill = AppearFill.Ombre))
-                }
-            }
-            if (look.fill == AppearFill.Solid) {
-                Field("Colour", mute)
-                SwatchRow(look.solidArgb, ink) { onChange(look.copy(solidArgb = it)) }
-            } else {
-                Field("Ombre start", mute)
-                SwatchRow(look.ombreStartArgb, ink) { onChange(look.copy(ombreStartArgb = it)) }
-                Field("Ombre end", mute)
-                SwatchRow(look.ombreEndArgb, ink) { onChange(look.copy(ombreEndArgb = it)) }
-            }
-            Field("Wallpaper", mute)
+            Field("Choose a wallpaper", mute)
             Row(
                 Modifier.horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),

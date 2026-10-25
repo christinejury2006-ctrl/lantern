@@ -178,6 +178,20 @@ fun CylinderShelfScreen(
             )
         }
 
+        // A small pile of books left on top of the case, with an apple on it. It drops in when
+        // the shelf appears and opens its top book through the same lift. This sits in the
+        // outer box, not the column, so it can pin itself to a corner without taking a slot in
+        // the layout.
+        if (books.isNotEmpty() && failure == null && !searching) {
+            ShelfTopStack(
+                books = books.takeLast(3).reversed(),
+                onOpen = { book -> lifted = book },
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 14.dp, bottom = 116.dp)
+            )
+        }
+
         Column(
             Modifier
                 .fillMaxSize()
@@ -280,18 +294,6 @@ fun CylinderShelfScreen(
                 }
             }
             Spacer(Modifier.height(96.dp).navigationBarsPadding())
-        }
-
-        // A small pile of books left on top of the case, with an apple on it. It drops in when
-        // the shelf appears and opens the top book when tapped, through the same lift.
-        if (books.isNotEmpty() && failure == null && !searching) {
-            ShelfTopStack(
-                books = books.takeLast(3).reversed(),
-                onOpen = { book -> lifted = book },
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(start = 18.dp, bottom = 150.dp)
-            )
         }
 
         // Loading cover, only while there is genuinely nothing to show.

@@ -64,7 +64,7 @@ fun LeafPager(
     val safeOnPage by rememberUpdatedState(onPage)
     // Near camera: Compose's default is 8 * density. Halving it makes the foreshortening
     // visible; too far and the rotation reads as a horizontal squash.
-    val camera = with(density) { 4f * density }
+    val camera = 4f * density.density
 
     // A page changed from outside (chapter jump, restore) resets the leaf.
     LaunchedEffect(page) { if (turn.value != 0f) turn.snapTo(0f) }

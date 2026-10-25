@@ -1,5 +1,9 @@
 name: Build debug APK
 
+# Every build carries a higher versionCode and (when the update key secrets are set) the
+# same signature, so installing a newer APK updates the app in place instead of forcing an
+# uninstall that wipes the library.
+
 on:
   workflow_dispatch:
   push:
@@ -30,6 +34,30 @@ jobs:
         run: |
           sdkmanager "platforms;android-34" "build-tools;34.0.0" "build-tools;30.0.3"
 
+      # Restores the one key that stays the same across builds. Without it, each runner
+      # generates a fresh debug key, Android sees a different signer, and refuses the
+      # update ("App not installed").
+      - name: Configure update signing key
+        env:
+          LORE_KEYSTORE_BASE64: ${{ secrets.LORE_KEYSTORE_BASE64 }}
+          LORE_KEYSTORE_PASSWORD: ${{ secrets.LORE_KEYSTORE_PASSWORD }}
+          LORE_KEY_ALIAS: ${{ secrets.LORE_KEY_ALIAS }}
+          LORE_KEY_PASSWORD: ${{ secrets.LORE_KEY_PASSWORD }}
+        run: |
+          if [ -n "$LORE_KEYSTORE_BASE64" ] && [ -n "$LORE_KEYSTORE_PASSWORD" ] \
+             && [ -n "$LORE_KEY_ALIAS" ] && [ -n "$LORE_KEY_PASSWORD" ]; then
+            echo "$LORE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/lore-update.keystore"
+            {
+              echo "LORE_KEYSTORE_PATH=$RUNNER_TEMP/lore-update.keystore"
+              echo "LORE_KEYSTORE_PASSWORD=$LORE_KEYSTORE_PASSWORD"
+              echo "LORE_KEY_ALIAS=$LORE_KEY_ALIAS"
+              echo "LORE_KEY_PASSWORD=$LORE_KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+            echo "Update key configured: this APK will install over the previous build."
+          else
+            echo "::warning title=No update signing key::LORE_KEYSTORE_BASE64 secrets are not set, so this APK is signed with a throwaway key. Installing it over an existing Lore build will fail with a signature mismatch and require an uninstall. Run tools/make-update-key.sh once to fix this."
+          fi
+
       - name: Run unit tests
         run: |
           chmod +x gradlew
@@ -38,6 +66,8 @@ jobs:
       - name: Build debug APK
         env:
           GOOGLE_BOOKS_API_KEY: ${{ secrets.GOOGLE_BOOKS_API_KEY }}
+          # Monotonic across runs: a newer build always has a higher versionCode.
+          LORE_VERSION_CODE: ${{ format('{0}{1}', 100, github.run_number) }}
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace

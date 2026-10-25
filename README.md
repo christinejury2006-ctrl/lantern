@@ -32,6 +32,22 @@ Or open this folder in Android Studio and Run.
 
 GitHub itself cannot launch an APK. The Pages link is the web test.
 
+## Updating without uninstalling
+
+New builds install **over** the existing app and keep your library, progress and settings,
+just like a store update. That needs two things, both handled by this repo:
+
+- **the same signing key every time** — set up once with `./tools/make-update-key.sh`, which
+  creates a keystore and stores it as GitHub secrets (`LORE_KEYSTORE_BASE64`,
+  `LORE_KEYSTORE_PASSWORD`, `LORE_KEY_ALIAS`, `LORE_KEY_PASSWORD`). Without those secrets
+  CI builds are signed with a throwaway key and Android refuses the update with
+  *"App not installed"*.
+- **a higher `versionCode`** — CI sets it from the run number, so every build supersedes
+  the previous one.
+
+Tagging releases gives a permanent download: `git tag v3.5.1 && git push origin v3.5.1`
+publishes `lore-v3.5.1.apk` on the Releases page, already signed for in-place updates.
+
 ## Building locally
 
 ```bash

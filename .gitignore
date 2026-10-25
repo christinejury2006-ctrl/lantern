@@ -11,3 +11,8 @@ captures/
 *.apk
 *.ap_
 *.dex
+
+# signing keys for in-place updates — never commit these
+*.keystore
+*.jks
+*.p12

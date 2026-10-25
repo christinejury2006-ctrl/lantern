@@ -1,3 +1,4 @@
+import java.io.File
 import java.util.Properties
 
 plugins {
@@ -13,14 +14,43 @@ android {
         applicationId = "com.lantern.library"
         minSdk = 26
         targetSdk = 34
-        versionCode = 9
-        versionName = "3.5.0"
+        // CI passes LORE_VERSION_CODE (base + run number) so every build is newer than the
+        // last one and Android accepts it as an in-place update. Local builds fall back here.
+        versionCode = resolveVersionCode()
+        versionName = "3.5.1"
         vectorDrawables.useSupportLibrary = true
         buildConfigField("String", "GOOGLE_BOOKS_API_KEY", "\"${escapeBuildConfig(resolveGoogleBooksApiKey())}\"")
     }
 
+    // A stable signing key is what makes "download the new APK and install it" update the
+    // existing app instead of failing with a signature mismatch. Supplied by CI secrets or
+    // by tools/make-update-key.sh locally. Without it we fall back to the throwaway debug
+    // key, which Android will refuse to install over a previous build.
+    signingConfigs {
+        val keyFile = resolveSigningFile()
+        val storePass = signingValue("LORE_KEYSTORE_PASSWORD")
+        val alias = signingValue("LORE_KEY_ALIAS")
+        val keyPass = signingValue("LORE_KEY_PASSWORD")
+        if (keyFile != null && storePass != null && alias != null && keyPass != null) {
+            create("stableUpdate") {
+                storeFile = keyFile
+                storePassword = storePass
+                keyAlias = alias
+                keyPassword = keyPass
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (signingConfigs.findByName("stableUpdate") != null) {
+                signingConfig = signingConfigs.getByName("stableUpdate")
+            }
+        }
         release {
+            if (signingConfigs.findByName("stableUpdate") != null) {
+                signingConfig = signingConfigs.getByName("stableUpdate")
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -93,3 +123,23 @@ fun resolveGoogleBooksApiKey(): String {
 
 fun escapeBuildConfig(value: String): String =
     value.replace("\\", "\\\\").replace("\"", "\\\"")
+
+/** 10 is the first code that can update over the old 3.5.0 (versionCode 9) builds. */
+private const val BASE_VERSION_CODE = 10
+
+fun resolveVersionCode(): Int {
+    val raw = System.getenv("LORE_VERSION_CODE")?.trim().orEmpty()
+        .ifEmpty { (project.findProperty("LORE_VERSION_CODE") as? String)?.trim().orEmpty() }
+    return raw.toIntOrNull()?.takeIf { it > 0 } ?: BASE_VERSION_CODE
+}
+
+fun signingValue(name: String): String? =
+    System.getenv(name)?.trim().orEmpty()
+        .ifEmpty { (project.findProperty(name) as? String)?.trim().orEmpty() }
+        .takeIf { it.isNotEmpty() }
+
+fun resolveSigningFile(): File? {
+    val path = signingValue("LORE_KEYSTORE_PATH") ?: return null
+    val candidate = File(path)
+    return if (candidate.exists()) candidate else null
+}

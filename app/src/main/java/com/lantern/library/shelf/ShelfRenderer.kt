@@ -41,12 +41,27 @@ class ShelfPrepared(
  */
 object ShelfPreparer {
 
-    fun prepare(context: Context, books: List<BookArt>): ShelfPrepared {
+    /**
+     * [onPhase] is called between steps so the screen can say what it is waiting for. The
+     * slow one is the material: Filament ships no built-in material and matc is not available
+     * to this project, so the shader is compiled on the phone the first time and cached after
+     * that. Everything else here is milliseconds.
+     */
+    fun prepare(
+        context: Context,
+        books: List<BookArt>,
+        onPhase: (String) -> Unit = {}
+    ): ShelfPrepared {
+        onPhase("Compiling the shelf shader")
+        val material = ShelfMaterials.load(context)
+        onPhase("Painting ${books.size} spines")
+        val atlas = ShelfAtlas.paint(books)
+        onPhase("Hanging the room")
         val wood = decode(context, R.drawable.wood_shelf)
         val room = decode(context, R.drawable.library_room)
         return ShelfPrepared(
-            materialBytes = ShelfMaterials.load(context),
-            atlas = ShelfAtlas.paint(books),
+            materialBytes = material,
+            atlas = atlas,
             wood = wood,
             room = room
         )
@@ -72,7 +87,8 @@ class ShelfRenderer(
     private val onStats: (fps: Int, p95Ms: Float, drawCalls: Int, moving: Boolean) -> Unit,
     private val onOpen: (slotIndex: Int) -> Unit,
     private val onTap: (slotIndex: Int) -> Unit = {},
-    private val onError: (message: String) -> Unit = {}
+    private val onError: (message: String) -> Unit = {},
+    private val onFirstFrame: () -> Unit = {}
 ) : TextureView.SurfaceTextureListener {
 
     private companion object {
@@ -387,6 +403,14 @@ class ShelfRenderer(
             if (r.beginFrame(sc, frameTimeNanos)) {
                 r.render(v)
                 r.endFrame()
+                if (!firstFrameDrawn) {
+                    firstFrameDrawn = true
+                    // The scene is on screen now. Nothing else has to happen for it to be
+                    // visible, so say so immediately: waiting for a stats tick meant the
+                    // loading cover stayed up forever, because an idle shelf draws one frame
+                    // and then stops.
+                    runCatching { onFirstFrame() }
+                }
                 recordFrameTime((System.nanoTime() - started) / 1_000_000f)
             }
         } catch (t: Throwable) {
@@ -395,6 +419,7 @@ class ShelfRenderer(
         }
     }
 
+    private var firstFrameDrawn = false
     private var failureReported = false
 
     /** Surfaces a problem once, so the screen can say what happened instead of hanging. */
@@ -411,7 +436,7 @@ class ShelfRenderer(
         if (frameTimeCount < frameTimes.size) frameTimeCount++
         framesSinceStats++
         val now = System.nanoTime()
-        if (lastStatsNanos == 0L) lastStatsNanos = now
+        if (lastStatsNanos == 0L) lastStatsNanos = now - 500_000_000L
         if (now - lastStatsNanos < 500_000_000L) return
         val elapsed = (now - lastStatsNanos) / 1_000_000_000f
         lastStatsNanos = now

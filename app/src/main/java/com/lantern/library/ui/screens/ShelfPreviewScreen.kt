@@ -74,13 +74,24 @@ fun ShelfPreviewScreen(
     var lifted by remember { mutableStateOf(-1) }
     var drawn by remember { mutableStateOf(false) }
     var hud by remember { mutableStateOf("") }
+    var phase by remember { mutableStateOf("Lighting the room\u2026") }
+
+    // If no frame arrives at all, say so rather than leaving a permanent "loading" screen.
+    LaunchedEffect(capability.supported, room.size) {
+        if (!capability.supported || room.isEmpty()) return@LaunchedEffect
+        kotlinx.coroutines.delay(12_000)
+        if (!drawn && failure == null) {
+            failure = "The scene has not drawn a frame yet. This phone may not be able to " +
+                "run it, or another app is holding the graphics driver."
+        }
+    }
 
     LaunchedEffect(room, capability.supported) {
         if (!capability.supported || room.isEmpty()) return@LaunchedEffect
         // Compiling the material and painting 64 spines takes a moment; none of it belongs
         // on the main thread.
         val result = withContext(Dispatchers.Default) {
-            runCatching { ShelfPreparer.prepare(context, room) }
+            runCatching { ShelfPreparer.prepare(context, room) { text -> phase = text } }
         }
         result.onSuccess { prepared = it }
         result.onFailure { failure = it.message ?: it.javaClass.simpleName }
@@ -102,13 +113,13 @@ fun ShelfPreviewScreen(
                 slots = slots,
                 modifier = Modifier.fillMaxSize(),
                 onStats = { fps, p95, calls, moving ->
-                    drawn = true
                     hud = "$fps fps  ·  p95 ${"%.1f".format(p95)} ms  ·  $calls draw calls" +
                         if (moving) "  ·  moving" else "  ·  idle"
                 },
                 onOpen = { index -> books.getOrNull(index)?.let(onOpenBook) },
                 onLifted = { lifted = it },
-                onError = { message -> failure = message }
+                onError = { message -> failure = message },
+                onFirstFrame = { drawn = true }
             )
         }
 
@@ -130,7 +141,7 @@ fun ShelfPreviewScreen(
                             !capability.supported -> "This phone cannot show the 3D shelf"
                             room.isEmpty() -> "Your shelf is empty"
                             failure != null -> "The shelf could not start"
-                            else -> "Lighting the room\u2026"
+                            else -> phase
                         },
                         color = Parchment,
                         fontFamily = Playfair,
@@ -143,7 +154,7 @@ fun ShelfPreviewScreen(
                             !capability.supported -> capability.reason ?: "OpenGL ES 3.0 is required."
                             room.isEmpty() -> "Add a book and it will appear on the shelf."
                             failure != null -> failure ?: ""
-                            else -> "Painting ${room.size} spines"
+                            else -> "One time only \u00b7 cached after this"
                         },
                         color = Color(0xFFC9B79F),
                         fontSize = 13.sp,

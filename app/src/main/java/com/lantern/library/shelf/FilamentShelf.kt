@@ -28,12 +28,14 @@ fun FilamentShelf(
     onStats: (fps: Int, p95Ms: Float, drawCalls: Int, moving: Boolean) -> Unit = { _, _, _, _ -> },
     onOpen: (slotIndex: Int) -> Unit = {},
     onLifted: (slotIndex: Int) -> Unit = {},
-    onError: (String) -> Unit = {}
+    onError: (String) -> Unit = {},
+    onFirstFrame: () -> Unit = {}
 ) {
     val stats = rememberUpdatedState(onStats)
     val open = rememberUpdatedState(onOpen)
     val lifted = rememberUpdatedState(onLifted)
     val error = rememberUpdatedState(onError)
+    val firstFrame = rememberUpdatedState(onFirstFrame)
 
     // Rebuilt only if the books change: the scene owns GPU memory, so it is not cheap.
     val renderer = remember(prepared, slots) {
@@ -43,7 +45,8 @@ fun FilamentShelf(
             onStats = { fps, p95, calls, moving -> stats.value(fps, p95, calls, moving) },
             onOpen = { index -> open.value(index) },
             onTap = { index -> lifted.value(index) },
-            onError = { message -> error.value(message) }
+            onError = { message -> error.value(message) },
+            onFirstFrame = { firstFrame.value() }
         )
     }
 

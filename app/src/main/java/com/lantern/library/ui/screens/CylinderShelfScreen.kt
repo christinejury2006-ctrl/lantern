@@ -34,6 +34,7 @@ import com.lantern.library.data.LibraryBook
 import com.lantern.library.shelf3d.CylinderRotationController
 import com.lantern.library.shelf3d.CylinderShelfSurfaceView
 import com.lantern.library.shelf3d.ShelfMaterials
+import com.lantern.library.shelf3d.SpineAtlas
 import com.lantern.library.ui.components.LorePillButton
 import com.lantern.library.ui.components.spineColorFor
 import com.lantern.library.ui.theme.Parchment
@@ -63,6 +64,7 @@ fun CylinderShelfScreen(
     val controller = remember { CylinderRotationController() }
 
     var materialBytes by remember { mutableStateOf<Map<String, ByteArray>?>(null) }
+    var spineAtlas by remember { mutableStateOf<SpineAtlas?>(null) }
     var failure by remember { mutableStateOf<String?>(null) }
     var phase by remember { mutableStateOf("Warming the workshop\u2026") }
     var frontIndex by remember { mutableStateOf(0) }
@@ -80,6 +82,9 @@ fun CylinderShelfScreen(
         val result = withContext(Dispatchers.Default) {
             runCatching { ShelfMaterials.load(context) }
         }
+        phase = "Binding the spines\u2026"
+        // Covers are decoded from disk; a book with none keeps its leather colour.
+        spineAtlas = runCatching { SpineAtlas.build(context, books) }.getOrNull()
         result.onSuccess { materialBytes = it }
         result.onFailure { failure = it.message ?: it.javaClass.simpleName }
         phase = "Raising the shelf\u2026"
@@ -100,6 +105,7 @@ fun CylinderShelfScreen(
                         materialBytes = ready,
                         bookCount = books.size,
                         bookColors = colors,
+                        spineAtlas = spineAtlas,
                         onError = { message -> failure = message },
                         onFrontBook = { index -> frontIndex = index },
                         onTapBook = { index ->

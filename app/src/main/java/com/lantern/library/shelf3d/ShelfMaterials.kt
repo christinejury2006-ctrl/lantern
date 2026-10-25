@@ -20,7 +20,13 @@ import java.io.File
 object ShelfMaterials {
 
     private const val TAG = "ShelfMaterials"
-    private const val VERSION = 1
+    /**
+     * Bumped whenever the shader changes.
+     *
+     * The compiled package is cached in filesDir, so a device that ran an older build would
+     * otherwise keep loading a material that has no spine sampler in it.
+     */
+    private const val VERSION = 2
 
     /** A book: leather or cloth, with a paper fore-edge. */
     private const val BOOK = "book_pbr"
@@ -77,7 +83,9 @@ object ShelfMaterials {
     @Volatile
     private var filamatReady = false
 
-    private fun compile(name: String): ByteArray {
+    private fun compile(name: String): ByteArray = compile(name, name == BOOK)
+
+    private fun compile(name: String, withArtwork: Boolean): ByteArray {
         // Must run before any MaterialBuilder use. Deliberately never shut down: the context is
         // a small static allocation, and tearing it down here could free it from under a
         // concurrent compile.
@@ -101,9 +109,24 @@ object ShelfMaterials {
             .uniformParameter(MaterialBuilder.UniformType.FLOAT, "metallic")
             // Winding must never be able to make a book disappear.
             .culling(MaterialBuilder.CullingMode.NONE)
-            // UVs are authored top-down, like every image this app draws.
+            // UVs are authored top-down, like every image this app draws. The spine atlas
+            // relies on it: v = 0 is the top of a book and the top of its tile.
             .flipUV(false)
-            .material(LIT_FRAGMENT)
+            .apply {
+                if (withArtwork) {
+                    uniformParameter(MaterialBuilder.UniformType.FLOAT2, "uvOffset")
+                    uniformParameter(MaterialBuilder.UniformType.FLOAT2, "uvScale")
+                    uniformParameter(MaterialBuilder.UniformType.FLOAT, "useArtwork")
+                    samplerParameter(
+                        MaterialBuilder.SamplerType.SAMPLER_2D,
+                        MaterialBuilder.SamplerFormat.FLOAT,
+                        "spineMap"
+                    )
+                    material(BOOK_FRAGMENT)
+                } else {
+                    material(WOOD_FRAGMENT)
+                }
+            }
 
         // build() returns a MaterialPackage: the native blob plus an isValid flag. Always check
         // the flag — an invalid package handed to Material.Builder produces an engine

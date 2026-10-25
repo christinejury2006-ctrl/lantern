@@ -12,6 +12,8 @@ import com.google.android.filament.Material
 import com.google.android.filament.MaterialInstance
 import com.google.android.filament.RenderableManager
 import com.google.android.filament.Scene
+import com.google.android.filament.Texture
+import com.google.android.filament.TextureSampler
 import com.google.android.filament.VertexBuffer
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -31,7 +33,9 @@ class CylinderShelfScene(
     private val controller: CylinderRotationController,
     private val materialBytes: Map<String, ByteArray>,
     /** Colours for each book, supplied by the app so spines match the library's covers. */
-    private val bookColors: List<Int>
+    private val bookColors: List<Int>,
+    /** Cover art for the spines, or null to draw plain bindings. */
+    private val spineAtlas: SpineAtlas? = null
 ) : FilamentShelfEngine.ShelfContent {
 
 
@@ -147,7 +151,11 @@ class CylinderShelfScene(
                 color = WOOD_FLOOR
             )
 
-            addBooks(engine, scene, res, vertices, indices, bookMaterial)
+            // Spine artwork. A single 1x1 texture stands in when there is no atlas, because
+            // the material declares a sampler and every instance must bind something to it.
+            val artwork = uploadAtlas(engine, spineAtlas)
+            res.track(artwork)
+            addBooks(engine, scene, res, vertices, indices, bookMaterial, artwork)
             addLights(engine, scene, res)
         } catch (t: Throwable) {
             Log.e(TAG, "could not build the scene", t)
@@ -210,13 +218,47 @@ class CylinderShelfScene(
 
     private val staticEntities = ArrayList<Int>(4)
 
+    /**
+     * Uploads the spine atlas, or a single white pixel when there is no artwork.
+     *
+     * SRGB8_A8 rather than RGBA8 because the atlas holds sRGB cover art: the GPU then converts
+     * to linear on sample, which is what keeps leather looking like leather under the sun
+     * instead of washing out.
+     */
+    private fun uploadAtlas(engine: Engine, atlas: SpineAtlas?): Texture {
+        val source: android.graphics.Bitmap = atlas?.bitmap ?: android.graphics.Bitmap
+            .createBitmap(1, 1, android.graphics.Bitmap.Config.ARGB_8888)
+            .apply { eraseColor(android.graphics.Color.WHITE) }
+
+        val texture = Texture.Builder()
+            .width(source.width)
+            .height(source.height)
+            // One level: no mipmaps means no need for the GEN_MIPMAPPABLE usage flag.
+            .levels(1)
+            .sampler(Texture.Sampler.SAMPLER_2D)
+            .format(Texture.InternalFormat.SRGB8_A8)
+            .build(engine)
+
+        val bytes = ByteBuffer.allocateDirect(source.width * source.height * 4)
+            .order(ByteOrder.nativeOrder())
+        source.copyPixelsToBuffer(bytes)
+        bytes.flip()
+        pendingBuffers.add(bytes)
+        texture.setImage(
+            engine, 0,
+            Texture.PixelBufferDescriptor(bytes, Texture.Format.RGBA, Texture.Type.UBYTE)
+        )
+        return texture
+    }
+
     private fun addBooks(
         engine: Engine,
         scene: Scene,
         res: ShelfResources,
         vertices: VertexBuffer,
         indices: IndexBuffer,
-        material: Material
+        material: Material,
+        artwork: Texture
     ) {
         val count = bookCount()
         for (i in 0 until count) {
@@ -232,6 +274,23 @@ class CylinderShelfScene(
             )
             instance.setParameter("roughness", 0.55f + (i % 5) * 0.06f)
             instance.setParameter("metallic", 0f)
+
+            // Bind the atlas on every book, then point this one at its own tile.
+            instance.setParameter(
+                "spineMap",
+                artwork,
+                TextureSampler(TextureSampler.MagFilter.LINEAR, TextureSampler.WrapMode.CLAMP_TO_EDGE)
+            )
+            val tile = spineAtlas?.tiles?.getOrNull(i)
+            if (tile != null) {
+                instance.setParameter("uvOffset", tile.u0, tile.v0)
+                instance.setParameter("uvScale", tile.u1 - tile.u0, tile.v1 - tile.v0)
+                instance.setParameter("useArtwork", 1f)
+            } else {
+                instance.setParameter("uvOffset", 0f, 0f)
+                instance.setParameter("uvScale", 1f, 1f)
+                instance.setParameter("useArtwork", 0f)
+            }
             res.track(instance)
             bookInstances.add(instance)
 

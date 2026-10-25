@@ -436,7 +436,6 @@ private fun RecentlyReadShelf(
                 Text(current.title, Modifier.padding(top = 8.dp, start = 16.dp, end = 16.dp), color = ink, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(current.author, Modifier.padding(start = 16.dp, top = 1.dp), color = mute, fontSize = 11.sp)
             }
-        }
     }
 }
 

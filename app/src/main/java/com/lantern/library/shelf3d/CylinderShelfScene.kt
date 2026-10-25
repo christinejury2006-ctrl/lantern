@@ -1,0 +1,395 @@
+package com.lantern.library.shelf3d
+
+import android.graphics.Color
+import android.util.Log
+import com.google.android.filament.Box
+import com.google.android.filament.Engine
+import com.google.android.filament.EntityManager
+import com.google.android.filament.IndirectLight
+import com.google.android.filament.IndexBuffer
+import com.google.android.filament.LightManager
+import com.google.android.filament.Material
+import com.google.android.filament.MaterialInstance
+import com.google.android.filament.RenderableManager
+import com.google.android.filament.Scene
+import com.google.android.filament.VertexBuffer
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+
+/**
+ * The bookcase scene: books standing around a drum, a wooden plinth, a sun and a soft ambient
+ * fill, all driven by [CylinderRotationController].
+ *
+ * Lighting is deliberately two-part. A single directional light gives shape — the falloff
+ * across a curved drum is what reads as curvature — and a first-order spherical-harmonic
+ * indirect light stops the unlit side going to pure black, which is what makes a lit PBR scene
+ * look like a flat silhouette in a dark room. Neither needs a cubemap, so there are no
+ * .ktx assets to ship or generate.
+ */
+class CylinderShelfScene(
+    private val bookCount: () -> Int,
+    private val controller: CylinderRotationController,
+    private val materialBytes: Map<String, ByteArray>,
+    /** Colours for each book, supplied by the app so spines match the library's covers. */
+    private val bookColors: List<Int>
+) : FilamentShelfEngine.ShelfContent {
+
+    private companion object {
+        const val TAG = "CylinderShelfScene"
+    }
+
+    private var engine: Engine? = null
+    private var resources: ShelfResources? = null
+
+    private val bookEntities = ArrayList<Int>(64)
+    private val bookInstances = ArrayList<MaterialInstance>(64)
+    private val transforms = ArrayList<Int>(64)
+
+    /** Reused every frame so the render loop allocates nothing. */
+    private val matrix = FloatArray(16)
+
+    /** Lighting constants, in Filament's physical units (lux). */
+    private val sunDirection = floatArrayOf(-0.35f, -0.55f, -0.76f)
+    private val sunColor = floatArrayOf(1.0f, 0.94f, 0.86f)
+    private var frameNanos = 0L
+
+    var onSceneError: ((String) -> Unit)? = null
+
+    /**
+     * Told which book has come to the front whenever that changes.
+     *
+     * Including while the drum is coasting and settling: a flick that lands on a different book
+     * must update the caption, and the DragGestureHandler has no idea where the drum will stop.
+     */
+    var onFrontBookChanged: ((Int) -> Unit)? = null
+
+    private var lastFrontIndex = -1
+
+    override fun onCreate(engine: Engine, scene: Scene) {
+        this.engine = engine
+        val res = ShelfResources(engine)
+        resources = res
+
+        try {
+            val boxMesh = ShelfGeometry.box()
+            val vertices = vertexBuffer(engine, boxMesh)
+            val indices = indexBuffer(engine, boxMesh)
+            res.track(vertices)
+            res.track(indices)
+
+            val bookMaterial = buildMaterial(engine, ShelfMaterials.BOOK_MATERIAL)
+            res.track(bookMaterial)
+
+            // The plinth the books stand on: one curved board around the whole drum, so it
+            // never needs rebuilding as the shelf turns.
+            val plinthMesh = ShelfGeometry.plinth(
+                // The board's top face lands exactly under the books' feet.
+                radius = CylinderMath.DRUM_RADIUS + 0.006f,
+                topY = CylinderMath.BOOK_Y - CylinderMath.BOOK_HEIGHT / 2f,
+                // Deep enough that a book stands fully on the board, not on its front edge.
+                thickness = CylinderMath.BOOK_DEPTH
+            )
+            val woodMaterial = buildMaterial(engine, ShelfMaterials.WOOD_MATERIAL)
+            res.track(woodMaterial)
+
+            addStatic(
+                engine, scene, res, plinthMesh, woodMaterial,
+                center = floatArrayOf(0f, CylinderMath.BOOK_Y, -CylinderMath.AXIS_DISTANCE),
+                halfExtent = floatArrayOf(
+                    CylinderMath.DRUM_RADIUS + 0.1f, 0.3f, CylinderMath.DRUM_RADIUS + 0.1f
+                )
+            )
+
+            // The carcass: a wall standing just behind the books, all the way round.
+            //
+            // This is not decoration. Without it the drum is a ring of floating boxes and the
+            // books on the far side show through the gaps between the near ones — the shelf
+            // reads as a flat row with ghosts behind it. The wall is what makes the drum solid
+            // and what hides everything past its horizon.
+            val wallMesh = ShelfGeometry.backboard(
+                radius = CylinderMath.DRUM_RADIUS - CylinderMath.BOOK_DEPTH * 0.5f - 0.008f,
+                yBottom = CylinderMath.BOOK_Y - CylinderMath.BOOK_HEIGHT * 0.5f - 0.03f,
+                yTop = CylinderMath.BOOK_Y + CylinderMath.BOOK_HEIGHT * 0.62f,
+                segments = 72
+            )
+            addStatic(
+                engine, scene, res, wallMesh, woodMaterial,
+                center = floatArrayOf(0f, CylinderMath.BOOK_Y, -CylinderMath.AXIS_DISTANCE),
+                halfExtent = floatArrayOf(
+                    CylinderMath.DRUM_RADIUS + 0.1f, 0.4f, CylinderMath.DRUM_RADIUS + 0.1f
+                )
+            )
+            addBooks(engine, scene, res, vertices, indices, bookMaterial)
+            addLights(engine, scene, res)
+        } catch (t: Throwable) {
+            Log.e(TAG, "could not build the scene", t)
+            onSceneError?.invoke(t.message ?: t.javaClass.simpleName)
+        }
+    }
+
+    /** Keeps material payload and mesh buffers alive until the engine has copied them. */
+    private val pendingBuffers = ArrayList<ByteBuffer>(8)
+
+    /**
+     * Builds a Material from a compiled package.
+     *
+     * The payload buffer must stay reachable until Filament has copied it, so it is held here;
+     * letting it be collected immediately is a classic intermittent crash.
+     */
+    private fun buildMaterial(engine: Engine, name: String): Material {
+        val bytes = materialBytes[name] ?: error("no compiled material called $name")
+        val buffer = ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder())
+        buffer.put(bytes)
+        buffer.flip()
+        pendingBuffers.add(buffer)
+        return Material.Builder().payload(buffer, buffer.remaining()).build(engine)
+    }
+
+    /**
+     * Adds a static, full-circle piece of the carcass (the board the books stand on, or the wall
+     * behind them).
+     *
+     * [center] and [halfExtent] describe a box enclosing the whole piece. They are not optional:
+     * frustum culling is on by default, and a wrong box makes the piece vanish.
+     */
+    private fun addStatic(
+        engine: Engine,
+        scene: Scene,
+        res: ShelfResources,
+        mesh: ShelfGeometry.Mesh,
+        material: Material,
+        center: FloatArray,
+        halfExtent: FloatArray
+    ) {
+        val instance = material.createInstance().also {
+            it.setParameter("baseColor", 0.22f, 0.13f, 0.08f)
+            it.setParameter("roughness", 0.55f)
+            it.setParameter("metallic", 0.0f)
+        }
+        res.track(instance)
+        val vb = res.track(vertexBuffer(engine, mesh))
+        val ib = res.track(indexBuffer(engine, mesh))
+        val entity = EntityManager.get().create()
+        RenderableManager.Builder(1)
+            .geometry(0, RenderableManager.PrimitiveType.TRIANGLES, vb, ib)
+            .material(0, instance)
+            .boundingBox(Box(center.copyOf(), halfExtent.copyOf()))
+            .build(engine, entity)
+        scene.addEntity(entity)
+        staticEntities.add(entity)
+    }
+
+    private val staticEntities = ArrayList<Int>(4)
+
+    private fun addBooks(
+        engine: Engine,
+        scene: Scene,
+        res: ShelfResources,
+        vertices: VertexBuffer,
+        indices: IndexBuffer,
+        material: Material
+    ) {
+        val count = bookCount()
+        for (i in 0 until count) {
+            val instance = material.createInstance()
+            val color = bookColors.getOrElse(i) { 0xFF6B4A32.toInt() }
+            // Linear-ish base colour; sRGB would need a colour space conversion, and a slightly
+            // desaturated leather reads better under the sun anyway.
+            instance.setParameter(
+                "baseColor",
+                Color.red(color) / 255f,
+                Color.green(color) / 255f,
+                Color.blue(color) / 255f
+            )
+            instance.setParameter("roughness", 0.55f + (i % 5) * 0.06f)
+            instance.setParameter("metallic", 0f)
+            res.track(instance)
+            bookInstances.add(instance)
+
+            val entity = EntityManager.get().create()
+            val half = floatArrayOf(
+                CylinderMath.BOOK_WIDTH / 2f,
+                CylinderMath.BOOK_HEIGHT / 2f,
+                CylinderMath.BOOK_DEPTH / 2f
+            )
+            RenderableManager.Builder(1)
+                .geometry(0, RenderableManager.PrimitiveType.TRIANGLES, vertices, indices)
+                .material(0, instance)
+                .boundingBox(Box(floatArrayOf(0f, 0f, 0f), half))
+                // Small, always-on-screen objects: culling would cost more than it saves.
+                .culling(false)
+                .build(engine, entity)
+            scene.addEntity(entity)
+            bookEntities.add(entity)
+            transforms.add(engine.transformManager.getInstance(entity))
+        }
+        // Place them immediately, so the first frame is already a shelf and not a pile at the
+        // origin.
+        applyRotation()
+    }
+
+    private fun addLights(engine: Engine, scene: Scene, res: ShelfResources) {
+        val sun = EntityManager.get().create()
+        LightManager.Builder(LightManager.Type.DIRECTIONAL)
+            .direction(sunDirection[0], sunDirection[1], sunDirection[2])
+            .color(sunColor[0], sunColor[1], sunColor[2])
+            .intensity(90_000f)
+            // Shadows are Step 4; a shadow map over a spinning drum needs its own tuning.
+            .castShadows(false)
+            .build(engine, sun)
+        scene.addEntity(sun)
+        sunEntity = sun
+
+        // Ambient fill from spherical harmonics. One band is the average radiance of the room
+        // and needs exactly three floats; asking for three bands needs twenty-seven, and
+        // passing nine throws ArrayIndexOutOfBoundsException at build time.
+        //
+        // The value is in the same units the intensity scales: 0.30 x 30000 is about 9000 lux,
+        // roughly a tenth of the sun above, which is what a cosy room actually looks like.
+        val ambient = floatArrayOf(0.30f, 0.28f, 0.25f)
+        val indirect = IndirectLight.Builder()
+            .irradiance(1, ambient)
+            .intensity(30_000f)
+            .build(engine)
+        scene.indirectLight = indirect
+        res.track(indirect)
+    }
+
+    private var sunEntity = 0
+
+    // ---------------------------------------------------------------- frame
+
+    override fun onResize(width: Int, height: Int) = Unit
+
+    override fun onFrame(frameTimeNanos: Long): Boolean {
+        if (frameNanos == 0L) {
+            frameNanos = frameTimeNanos
+            return true
+        }
+        val dt = ((frameTimeNanos - frameNanos) / 1_000_000_000f).coerceIn(0f, 0.05f)
+        frameNanos = frameTimeNanos
+        val moving = controller.tick(dt)
+        if (moving) applyRotation()
+        return moving
+    }
+
+    /**
+     * Writes every book's transform for the current drum rotation.
+     *
+     * One 16-float matrix per book per frame, reused rather than allocated: at 60 fps with
+     * dozens of books, allocating here is the difference between a smooth sweep and a stutter
+     * every few seconds from garbage collection.
+     */
+    private fun applyRotation() {
+        val e = engine ?: return
+        val tm = e.transformManager
+        val count = bookEntities.size
+        if (count == 0) return
+        val rotation = controller.rotation
+        for (i in 0 until count) {
+            val angle = CylinderMath.angleOf(i, count, rotation)
+            val x = CylinderMath.positionX(angle)
+            val z = CylinderMath.positionZ(angle)
+            val degrees = CylinderMath.facingDegrees(angle)
+            buildTransform(x, CylinderMath.BOOK_Y, z, degrees)
+            val instance = transforms[i]
+            if (instance != 0) tm.setTransform(instance, matrix)
+        }
+        val front = CylinderMath.frontIndex(count, rotation)
+        if (front != lastFrontIndex) {
+            lastFrontIndex = front
+            onFrontBookChanged?.invoke(front)
+        }
+    }
+
+    /**
+     * Translation then yaw then scale, in column-major order (Filament takes the same layout
+     * as OpenGL). Written out rather than calling android.opengl.Matrix so nothing allocates.
+     */
+    private fun buildTransform(x: Float, y: Float, z: Float, yawDegrees: Float) {
+        val a = Math.toRadians(yawDegrees.toDouble())
+        val c = kotlin.math.cos(a).toFloat()
+        val s = kotlin.math.sin(a).toFloat()
+        val sx = CylinderMath.BOOK_WIDTH
+        val sy = CylinderMath.BOOK_HEIGHT
+        val sz = CylinderMath.BOOK_DEPTH
+        java.util.Arrays.fill(matrix, 0f)
+        // R_y(yaw) * S
+        matrix[0] = c * sx;  matrix[1] = 0f; matrix[2] = -s * sx;  matrix[3] = 0f
+        matrix[4] = 0f;      matrix[5] = sy; matrix[6] = 0f;       matrix[7] = 0f
+        matrix[8] = s * sz;  matrix[9] = 0f; matrix[10] = c * sz;  matrix[11] = 0f
+        matrix[12] = x;      matrix[13] = y; matrix[14] = z;       matrix[15] = 1f
+    }
+
+    // ---------------------------------------------------------------- buffers
+
+    private fun vertexBuffer(engine: Engine, mesh: ShelfGeometry.Mesh): VertexBuffer {
+        val vb = VertexBuffer.Builder()
+            .vertexCount(mesh.vertexCount)
+            .bufferCount(1)
+            .attribute(
+                VertexBuffer.VertexAttribute.POSITION, 0,
+                VertexBuffer.AttributeType.FLOAT3, ShelfGeometry.POSITION_OFFSET, ShelfGeometry.STRIDE_BYTES
+            )
+            // No NORMAL attribute exists: the tangent frame carries the normal.
+            .attribute(
+                VertexBuffer.VertexAttribute.TANGENTS, 0,
+                VertexBuffer.AttributeType.FLOAT4, ShelfGeometry.TANGENT_OFFSET, ShelfGeometry.STRIDE_BYTES
+            )
+            .attribute(
+                VertexBuffer.VertexAttribute.UV0, 0,
+                VertexBuffer.AttributeType.FLOAT2, ShelfGeometry.UV_OFFSET, ShelfGeometry.STRIDE_BYTES
+            )
+            .build(engine)
+        val data = ByteBuffer.allocateDirect(mesh.vertices.size * 4).order(ByteOrder.nativeOrder())
+        data.asFloatBuffer().put(mesh.vertices)
+        vb.setBufferAt(engine, 0, data)
+        pendingBuffers.add(data)
+        return vb
+    }
+
+    private fun indexBuffer(engine: Engine, mesh: ShelfGeometry.Mesh): IndexBuffer {
+        val ib = IndexBuffer.Builder()
+            .indexCount(mesh.indexCount)
+            .bufferType(IndexBuffer.Builder.IndexType.USHORT)
+            .build(engine)
+        val data = ByteBuffer.allocateDirect(mesh.indices.size * 2).order(ByteOrder.nativeOrder())
+        data.asShortBuffer().put(mesh.indices)
+        ib.setBuffer(engine, data)
+        pendingBuffers.add(data)
+        return ib
+    }
+
+    // ---------------------------------------------------------------- queries
+
+    /** The book nearest the front of the drum, for the caption under the shelf. */
+    fun frontBook(): Int = CylinderMath.frontIndex(bookEntities.size, controller.rotation)
+
+    /** Which book a tap at [screenX] hit, or -1. */
+    fun bookAtScreenX(screenX: Float, viewWidth: Float): Int {
+        val count = bookEntities.size
+        if (count == 0) return -1
+        val angle = CylinderMath.angleForScreenX(screenX, viewWidth) ?: return -1
+        val index = CylinderMath.bookNearAngle(count, controller.rotation, angle)
+        // ignore taps that land past the edge of the drum
+        return if (CylinderMath.isVisible(CylinderMath.angleOf(index, count, controller.rotation))) index else -1
+    }
+
+    override fun onDestroy(engine: Engine) {
+        if (sunEntity != 0) {
+            EntityManager.get().destroy(sunEntity)
+            sunEntity = 0
+        }
+        staticEntities.forEach { EntityManager.get().destroy(it) }
+        staticEntities.clear()
+        bookEntities.forEach { EntityManager.get().destroy(it) }
+        bookEntities.clear()
+        bookInstances.clear()
+        transforms.clear()
+        resources?.release()
+        resources = null
+        pendingBuffers.clear()
+        engine.flushAndWait()
+        this.engine = null
+    }
+}

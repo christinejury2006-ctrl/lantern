@@ -88,6 +88,10 @@ android {
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
+    androidResources {
+        // Material packages and textures are read as raw blobs and must not be recompressed.
+        noCompress += listOf("filamat", "ktx")
+    }
 
 }
 
@@ -111,9 +115,18 @@ dependencies {
     implementation("org.jsoup:jsoup:1.17.2")
     implementation("com.google.android.gms:play-services-auth:20.7.0")
     implementation("io.github.oothp:pdfium-android:1.9.5-beta01")
-    // The bookcase is drawn with OpenGL ES 2.0 directly (see com.lantern.library.shelf):
-    // no rendering engine, no native dependency, nothing to satisfy but the graphics API
-    // that already ships with Android.
+    // Filament renders the revolving bookcase (see com.lantern.library.shelf3d).
+    //
+    // - filament-android: the engine itself. Its Java classes are JNI wrappers, so
+    //   Filament.init() must be called before anything else, or the first native call fails.
+    // - filamat-android: the material compiler as a library. Filament ships no built-in
+    //   material and matc is a host tool Gradle cannot run, so the PBR shaders are compiled on
+    //   the device once and cached in filesDir.
+    //
+    // Pinned to 1.72.0 deliberately: 1.73+ is built against a newer SDK and its AAR metadata
+    // demands a compileSdk this project does not use.
+    implementation("com.google.android.filament:filament-android:1.72.0")
+    implementation("com.google.android.filament:filamat-android:1.72.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
 }

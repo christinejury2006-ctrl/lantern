@@ -338,10 +338,21 @@ private val cloth = listOf(
  * colour, and two books rarely collide in a row.
  */
 internal fun leatherFor(title: String, id: String): Leather {
-    val hash = title.hashCode() * 31 + id.hashCode()
-    val index = ((hash % cloth.size) + cloth.size) % cloth.size
+    val index = clothIndex(title, id)
     val (base, deep) = cloth[index]
     // the two lightest cloths need dark type to stay legible
     val light = index == 3 || index == 6
     return Leather(Color(base), Color(deep), light)
 }
+
+/** The palette index a book maps to. Shared so the 2D and 3D shelves agree on colour. */
+internal fun clothIndex(title: String, id: String): Int {
+    val hash = title.hashCode() * 31 + id.hashCode()
+    return ((hash % cloth.size) + cloth.size) % cloth.size
+}
+
+/**
+ * A book's leather colour as an ARGB int, for the 3D scene which takes plain colours rather
+ * than Compose types.
+ */
+internal fun spineColorFor(title: String, id: String): Int = cloth[clothIndex(title, id)].first.toInt()

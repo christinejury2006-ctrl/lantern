@@ -141,17 +141,25 @@ jobs:
           "$ANDROID_HOME"/build-tools/34.0.0/apksigner verify --print-certs "$apk" \
             | head -3 | tr '\n' '|' | xargs -I{} echo "::notice title=APK signer::{}"
 
-      # The shelf used to depend on a native renderer. It no longer does, so this guards the
-      # opposite mistake: an engine creeping back into the APK.
-      - name: Check the APK ships no engine libraries
+      # The shelf draws with Filament, which is a native engine: the JNI libraries must be in
+      # the APK or the first engine call dies with UnsatisfiedLinkError. This checks both are
+      # present for the ABI the phone actually runs, and reports the ABI split so a silently
+      # missing arm64 slice is visible rather than suspected.
+      - name: Check the APK ships Filament's native libraries
         run: |
-          apk="$(ls app/build/outputs/apk/debug/*.apk | head -n 1)"
+          apk=app/build/outputs/apk/debug/lore-debug.apk
           echo "Native libraries in $apk:"
           unzip -l "$apk" | grep -E '\.so$' | awk '{print $4}' | sort || echo "(none)"
-          if unzip -l "$apk" | grep -qE 'lib/(arm64-v8a|armeabi-v7a)/lib(filament|filamat)-jni\.so'; then
-            echo "::error title=Engine library in APK::A native renderer is packaged again; the shelf draws with OpenGL ES directly."
-            exit 1
-          fi
+          missing=0
+          for lib in libfilament-jni.so libfilamat-jni.so; do
+            if unzip -l "$apk" | grep -qE "lib/(arm64-v8a|armeabi-v7a|x86_64)/$lib"; then
+              echo "OK: $lib is packaged"
+            else
+              echo "::error title=Missing engine library::$lib is not in the APK, so the shelf cannot start."
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then exit 1; fi
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4

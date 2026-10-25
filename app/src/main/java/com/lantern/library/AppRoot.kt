@@ -53,7 +53,7 @@ import com.lantern.library.ui.components.FadeToast
 import com.lantern.library.ui.screens.AppearanceEditor
 import com.lantern.library.ui.screens.BookDetailsOverlay
 import com.lantern.library.ui.screens.InterestOnboardingScreen
-import com.lantern.library.ui.screens.ShelfPreviewScreen
+import com.lantern.library.ui.screens.CylinderShelfScreen
 import com.lantern.library.ui.screens.LibraryScreen
 import com.lantern.library.ui.screens.ProfileScreen
 import com.lantern.library.ui.screens.ReaderScreen
@@ -250,7 +250,7 @@ internal fun LanternRoot(store: LanternStore) {
                 }
             }
             if (shelf3D) {
-                ShelfPreviewScreen(
+                CylinderShelfScreen(
                     books = store.books,
                     onOpenBook = { book ->
                         shelf3D = false

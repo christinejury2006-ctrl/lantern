@@ -49,8 +49,11 @@ data class AppearLook(
     }
 
     fun resolvedFor(dark: Boolean): AppearLook {
-        val factoryLight = sameFills(libraryDefault) || sameFills(readerDefault)
-        val factoryDark = sameFills(darkDefault)
+        val legacyLibrary = AppearLook(fill = AppearFill.Ombre, solidArgb = 0xFFE8B8F4, ombreStartArgb = 0xFFE8B8F4, ombreEndArgb = 0xFF6ED4C8)
+        val legacyReader = AppearLook(fill = AppearFill.Ombre, solidArgb = 0xFFEDE4F6, ombreStartArgb = 0xFFE8B8F4, ombreEndArgb = 0xFF6ED4C8)
+        val legacyDark = AppearLook(fill = AppearFill.Ombre, solidArgb = 0xFF3A4454, ombreStartArgb = 0xFF3E4A5C, ombreEndArgb = 0xFF2B2430)
+        val factoryLight = sameFills(libraryDefault) || sameFills(readerDefault) || sameFills(legacyLibrary) || sameFills(legacyReader)
+        val factoryDark = sameFills(darkDefault) || sameFills(legacyDark)
         return when {
             dark && factoryLight -> copy(
                 solidArgb = darkDefault.solidArgb,

@@ -13,8 +13,8 @@ android {
         applicationId = "com.lantern.library"
         minSdk = 26
         targetSdk = 34
-        versionCode = 9
-        versionName = "3.5.0"
+        versionCode = 10
+        versionName = "3.6.0"
         vectorDrawables.useSupportLibrary = true
         buildConfigField("String", "GOOGLE_BOOKS_API_KEY", "\"${escapeBuildConfig(resolveGoogleBooksApiKey())}\"")
     }

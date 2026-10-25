@@ -28,8 +28,8 @@ class CylinderShelfSurfaceView(
     private val bookCount: Int,
     bookColors: List<Int>,
     onError: (String) -> Unit,
-    onFrontBook: (Int) -> Unit,
-    onTapBook: (Int) -> Unit
+    private val onFrontBook: (Int) -> Unit,
+    private val onTapBook: (Int) -> Unit
 ) : SurfaceView(context) {
 
     private val scene = CylinderShelfScene(

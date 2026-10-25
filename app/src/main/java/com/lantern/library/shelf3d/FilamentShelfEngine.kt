@@ -123,7 +123,9 @@ class FilamentShelfEngine(
             val v = e.createView()
             view = v
             v.scene = s
-            v.postProcessingEnabled = false
+            // No bloom or anti-aliasing pass: the scene is a few hundred flat-shaded boxes,
+            // and each post-processing pass is a full-screen frame buffer copy.
+            v.isPostProcessingEnabled = false
 
             cameraEntity = EntityManager.get().create()
             camera = e.createCamera(cameraEntity).also { v.camera = it }
@@ -161,7 +163,7 @@ class FilamentShelfEngine(
                 if (destroyed) return
                 swapChain?.let { e.destroySwapChain(it) }
                 swapChain = e.createSwapChain(surface)
-                displayHelper?.attach(renderer, surfaceView.display)
+                renderer?.let { displayHelper?.attach(it, surfaceView.display) }
                 surfaceReady = true
                 invalidate()
             }

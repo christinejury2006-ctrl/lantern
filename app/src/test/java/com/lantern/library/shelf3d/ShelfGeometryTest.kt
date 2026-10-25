@@ -154,8 +154,8 @@ class ShelfGeometryTest {
     fun `the carcass sits around the drum and hides what is past its horizon`() {
         val mesh = ShelfGeometry.backboard(
             radius = CylinderMath.DRUM_RADIUS - CylinderMath.BOOK_DEPTH * 0.5f - 0.008f,
-            yBottom = -0.3f,
-            yTop = 0.1f
+            yBottom = -0.6f,
+            yTop = 1.4f
         )
         assertEquals(0, mesh.vertexCount % 2)
         for (v in 0 until mesh.vertexCount) {
@@ -165,11 +165,32 @@ class ShelfGeometryTest {
             val z = mesh.vertices[base + 2]
             // same radius everywhere, so the wall is a true cylinder
             val r = sqrt(x * x + (z + CylinderMath.AXIS_DISTANCE) * (z + CylinderMath.AXIS_DISTANCE))
-            assertEquals(CylinderMath.DRUM_RADIUS - 0.108f, r, 1e-3f)
+            // the wall stands just behind the backs of the books
+            assertEquals(CylinderMath.DRUM_RADIUS - CylinderMath.BOOK_DEPTH / 2f - 0.008f, r, 1e-3f)
             // and it stands behind the books, never in front of them
             assertTrue("wall pokes through the shelf at z=$z", z < 0f)
-            assertTrue(y == -0.3f || y == 0.1f)
+            assertTrue(y == -0.6f || y == 1.4f)
         }
+    }
+
+    @Test
+    fun `the floor lies flat under the room`() {
+        val y = CylinderMath.BOOK_Y - CylinderMath.BOOK_HEIGHT / 2f - 0.035f
+        val mesh = ShelfGeometry.floor(centreZ = -CylinderMath.AXIS_DISTANCE, y = y, radius = 2.5f)
+        assertTrue(mesh.vertexCount > 2)
+        for (v in 0 until mesh.vertexCount) {
+            val base = v * ShelfGeometry.FLOATS_PER_VERTEX
+            assertEquals("the floor must be level", y, mesh.vertices[base + 1], 1e-6f)
+            val n = decodeNormal(
+                floatArrayOf(
+                    mesh.vertices[base + 3], mesh.vertices[base + 4],
+                    mesh.vertices[base + 5], mesh.vertices[base + 6]
+                )
+            )
+            assertVec(floatArrayOf(0f, 1f, 0f), n, "the floor faces up")
+        }
+        // and it sits below the board the books stand on
+        assertTrue(y < CylinderMath.BOOK_Y - CylinderMath.BOOK_HEIGHT / 2f)
     }
 
     @Test

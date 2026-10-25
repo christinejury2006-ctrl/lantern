@@ -12,7 +12,15 @@ import org.junit.Test
  */
 class CylinderRotationControllerTest {
 
-    private fun controller(books: Int = 6) = CylinderRotationController().apply { setBookCount(books) }
+    /** A portrait phone, which is what the shelf is framed for. */
+    private val width = 690
+    private val viewportHalfFov = CylinderMath.halfFovH(aspect = 690f / 1376f)
+
+    private fun controller(books: Int = 6) = CylinderRotationController().apply {
+        // without this the controller has no idea how pixels map to the drum
+        trackViewport(width, viewportHalfFov)
+        setBookCount(books)
+    }
 
     @Test
     fun `dragging turns the drum with the finger`() {
@@ -21,7 +29,49 @@ class CylinderRotationControllerTest {
         assertTrue(moved)
         // dragging right rolls the surface right, which turns the drum the other way
         assertTrue("a rightward drag must turn the drum anticlockwise", c.rotation < 0f)
-        assertEquals(-100f * 0.006f, c.rotation, 1e-5f)
+        assertEquals(-100f * c.radiansPerPixel(), c.rotation, 1e-6f)
+    }
+
+    @Test
+    fun `the drum keeps up with the finger`() {
+        // The whole point: a swipe across the screen must move the shelf's surface by as much
+        // as the finger travelled, not ten times more. The first device build used a
+        // hand-picked constant and ran 9.7x too fast, which felt like "it jumps to the next
+        // book" because any drag overshot a slot.
+        val c = controller()
+        assertEquals(
+            "tracking gain should be R / (axis - R)",
+            CylinderMath.DRUM_RADIUS / (CylinderMath.AXIS_DISTANCE - CylinderMath.DRUM_RADIUS),
+            CylinderMath.trackingGain(),
+            1e-4f
+        )
+        // one pixel should be worth roughly one milliradian of drum at this viewport
+        assertEquals(1.02f, c.radiansPerPixel() * 1000f, 0.05f)
+        // a full-width swipe turns the drum by the view angle divided by the gain, and nothing
+        // near a whole revolution
+        c.onDrag(width.toFloat())
+        val expected = -2f * kotlin.math.tan(viewportHalfFov) / CylinderMath.trackingGain()
+        assertEquals(expected, c.rotation, 1e-4f)
+        assertTrue("a full swipe turned the drum too far", abs(c.rotation) < 1f)
+    }
+
+    @Test
+    fun `a small drag does not skip a book`() {
+        // with 10 books a slot is 36 degrees; a 60 px drag is about 3.5 degrees and must not
+        // cross one
+        val c = controller(books = 10)
+        c.onDrag(60f)
+        val slot = CylinderMath.angleStep(10)
+        assertTrue("a short drag crossed ${abs(c.rotation) / slot} of a slot", abs(c.rotation) < slot * 0.2f)
+    }
+
+    @Test
+    fun `an unknown viewport still turns the drum a sane amount`() {
+        // before a surface exists the gain is a fallback; it must not be violent
+        val c = CylinderRotationController()
+        c.setBookCount(8)
+        c.onDrag(500f)
+        assertTrue("fallback gain turned the drum ${c.rotation} rad", abs(c.rotation) < 1.5f)
     }
 
     @Test
@@ -153,7 +203,7 @@ class CylinderRotationControllerTest {
     fun `a flick is speed limited`() {
         val c = controller()
         c.onRelease(50_000f)
-        assertTrue("velocity must be capped", abs(c.velocity) <= 8f + 1e-4f)
+        assertTrue("velocity must be capped", abs(c.velocity) <= 4f + 1e-4f)
     }
 
     @Test

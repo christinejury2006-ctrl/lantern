@@ -193,9 +193,16 @@ class FilamentShelfEngine(
 
     private fun updateProjection(v: View) {
         val aspect = width.toDouble() / height.toDouble().coerceAtLeast(1.0)
-        // A slightly long lens keeps the far side of the drum from stretching; 50 degrees
-        // vertical reads close to a phone camera.
-        camera?.setProjection(50.0, aspect, 0.05, 60.0, Camera.Fov.VERTICAL)
+        // The scene is framed from these numbers as much as from the camera's: shelf3d sizes a
+        // book to fill a good part of the screen at CylinderMath.FOV_VERTICAL_DEGREES, and the
+        // drag gain and every tap depend on it. Changing one without the other breaks both.
+        camera?.setProjection(
+            CylinderMath.FOV_VERTICAL_DEGREES.toDouble(),
+            aspect,
+            0.02,
+            30.0,
+            Camera.Fov.VERTICAL
+        )
         v.viewport = Viewport(0, 0, width, height)
     }
 

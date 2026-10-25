@@ -194,12 +194,14 @@ class CylinderMathTest {
                 if (!CylinderMath.isVisible(angle)) continue
                 // where that book appears on screen
                 val screenAngle = CylinderMath.screenAngle(angle)
-                // convert back to a pixel position in a 1080-wide view
-                val tanHalf = kotlin.math.tan(CylinderMath.HALF_FOV_H)
+                // convert back to a pixel position in a 1080-wide view. The lens must be the
+                // one the viewport produces, not an assumed constant.
+                val halfFov = CylinderMath.halfFovH(aspect = 1080f / 2160f)
+                val tanHalf = kotlin.math.tan(halfFov)
                 val nx = kotlin.math.tan(screenAngle) / tanHalf
                 val x = (nx * 0.5f + 0.5f) * 1080f
                 // and the inverse must recover the angle, hence the book
-                val recovered = CylinderMath.angleForScreenX(x, 1080f)
+                val recovered = CylinderMath.angleForScreenX(x, 1080f, halfFov)
                 assertNotNull("could not hit-test book $i", recovered)
                 assertEquals(
                     "book $i was hit as the wrong one",
@@ -212,9 +214,75 @@ class CylinderMathTest {
 
     @Test
     fun `a tap outside the lens hits nothing`() {
-        assertEquals(null, CylinderMath.angleForScreenX(-40f, 1080f))
-        assertEquals(null, CylinderMath.angleForScreenX(1120f, 1080f))
-        assertEquals(null, CylinderMath.angleForScreenX(500f, 0f))
+        val halfFov = CylinderMath.halfFovH(aspect = 0.5f)
+        assertEquals(null, CylinderMath.angleForScreenX(-40f, 1080f, halfFov))
+        assertEquals(null, CylinderMath.angleForScreenX(1120f, 1080f, halfFov))
+        assertEquals(null, CylinderMath.angleForScreenX(500f, 0f, halfFov))
+    }
+
+    @Test
+    fun `the lens is computed from the viewport, never assumed`() {
+        // a phone in portrait: a 55 degree vertical lens is only about 29 degrees horizontally
+        val portrait = CylinderMath.halfFovH(aspect = 690f / 1376f)
+        assertEquals(0.256f, portrait, 0.005f)
+        assertEquals(29.3f, Math.toDegrees(portrait.toDouble()).toFloat(), 0.3f)
+        // and a landscape screen is much wider
+        val landscape = CylinderMath.halfFovH(aspect = 1376f / 690f)
+        assertTrue("landscape must be wider than portrait", landscape > portrait)
+        // a square viewport is exactly the vertical half-angle
+        assertEquals(
+            Math.toRadians(CylinderMath.FOV_VERTICAL_DEGREES / 2.0).toFloat(),
+            CylinderMath.halfFovH(aspect = 1f),
+            1e-4f
+        )
+    }
+
+    @Test
+    fun `a tap on the bare shelf between books opens nothing`() {
+        // with 4 books they are 90 degrees apart and a book is only 11 degrees wide, so most of
+        // the shelf is empty and must not respond
+        val count = 4
+        val bookWidth = CylinderMath.bookArcRadians()
+        assertTrue(
+            "a tap on the middle of book 0",
+            CylinderMath.isTapOnBook(0f, 0, count, 0f)
+        )
+        assertTrue(
+            "a tap just inside the spine's edge",
+            CylinderMath.isTapOnBook(bookWidth * 0.49f, 0, count, 0f)
+        )
+        assertTrue(
+            "a tap well clear of any book",
+            !CylinderMath.isTapOnBook(bookWidth * 1.5f, 0, count, 0f)
+        )
+        // half a slot away is the empty middle: nothing there
+        assertTrue(
+            "half a slot from book 0 is empty shelf",
+            !CylinderMath.isTapOnBook(CylinderMath.angleStep(count) / 2f, 0, count, 0f)
+        )
+        // out of range indices are never a hit
+        assertTrue(!CylinderMath.isTapOnBook(0f, -1, count, 0f))
+        assertTrue(!CylinderMath.isTapOnBook(0f, count, count, 0f))
+        assertTrue(!CylinderMath.isTapOnBook(0f, 0, 0, 0f))
+    }
+
+    @Test
+    fun `a book fills a sensible part of a portrait screen`() {
+        // The whole scene's scale exists to satisfy this. A book should span a good fraction of
+        // the screen height, and the camera must sit where the geometry says it does.
+        val aspect = 690f / 1376f
+        val halfFovV = Math.toRadians(CylinderMath.FOV_VERTICAL_DEGREES / 2.0).toFloat()
+        val visibleHeight = 2f * CylinderMath.SPINE_DISTANCE * kotlin.math.tan(halfFovV)
+        val fraction = CylinderMath.BOOK_HEIGHT / visibleHeight
+        assertTrue("a book covers only ${fraction * 100}% of the screen", fraction > 0.35f)
+        assertTrue("a book overflows the screen", fraction < 0.55f)
+        // and the camera really is that far from the front book's spine
+        // the spine is the book's front face, half its depth nearer the reader than its centre
+        val spineZ = CylinderMath.positionZ(0f) + CylinderMath.BOOK_DEPTH / 2f
+        assertEquals(CylinderMath.SPINE_DISTANCE, -spineZ, 1e-4f)
+        // the lens is not so narrow that only one book is ever visible
+        val halfFovH = CylinderMath.halfFovH(aspect = aspect)
+        assertTrue("horizontal lens is too narrow", halfFovH > 0.2f)
     }
 
     @Test

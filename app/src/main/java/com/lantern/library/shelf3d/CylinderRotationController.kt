@@ -15,8 +15,14 @@ import kotlin.math.sign
  * All angles are radians. Drag distances are pixels.
  */
 class CylinderRotationController(
-    /** Angle turned per pixel dragged. Tuned so a full-screen swipe crosses several books. */
-    private val radiansPerPixel: Float = 0.006f,
+    /**
+     * Angle turned per pixel dragged.
+     *
+     * Deliberately tiny until the viewport is known: [trackViewport] replaces it with the value
+     * that makes the drum's surface keep up with the finger. The fallback only matters for a
+     * unit test or the first frame before a surface exists.
+     */
+    private var radiansPerPixel: Float = 0.001f,
     /** Fraction of velocity kept per second: how quickly a spun drum coasts to a stop. */
     private val frictionPerSecond: Float = 0.06f,
     /** Angular speed below which a coasting drum is considered stopped. */
@@ -29,11 +35,11 @@ class CylinderRotationController(
      * frame. Eight radians a second is about one and a quarter books, which reads as a brisk
      * spin and stays legible.
      */
-    private val maxVelocity: Float = 8f,
+    private val maxVelocity: Float = 4f,
     /** Whether a released drum snaps the nearest book to the front. */
     private val snapToBooks: Boolean = true,
     /** Rate at which the drum eases onto a book. Higher settles faster. */
-    private val snapRate: Float = 14f,
+    private val snapRate: Float = 9f,
     /** Hard cap on how far the drum may move in one frame while settling, in radians. */
     private val maxSnapStep: Float = 0.12f
 ) {
@@ -53,6 +59,25 @@ class CylinderRotationController(
     private var totalBooks: Int = 0
     private var snapTarget: Float? = null
     private var dragging = false
+
+    /**
+     * Tells the controller how the scene is being framed, so a drag can move the drum by exactly
+     * as much as the finger moved.
+     *
+     * The conversion is: pixels to view angle (a pinhole camera spreads its field of view across
+     * the viewport), then view angle to drum angle through [CylinderMath.trackingGain]. Without
+     * this the drum either crawls or — as it did on the first device build — runs nearly ten
+     * times too fast, which reads as "it jumps to the next book" because even a short drag
+     * overshoots a whole slot and the settle pulls it forward.
+     */
+    fun trackViewport(viewWidthPx: Int, halfFovH: Float) {
+        if (viewWidthPx <= 0) return
+        val viewAnglePerPixel = 2f * kotlin.math.tan(halfFovH) / viewWidthPx
+        radiansPerPixel = viewAnglePerPixel / CylinderMath.trackingGain()
+    }
+
+    /** Angle turned per pixel dragged, for tests and for the HUD. */
+    fun radiansPerPixel(): Float = radiansPerPixel
 
     /** Books on the drum. Snap targets depend on this, so it is kept in step with the data. */
     fun setBookCount(count: Int) {

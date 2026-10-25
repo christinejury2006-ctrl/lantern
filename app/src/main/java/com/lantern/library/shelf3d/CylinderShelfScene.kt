@@ -34,9 +34,7 @@ class CylinderShelfScene(
     private val bookColors: List<Int>
 ) : FilamentShelfEngine.ShelfContent {
 
-    private companion object {
-        const val TAG = "CylinderShelfScene"
-    }
+
 
     private var engine: Engine? = null
     private var resources: ShelfResources? = null
@@ -65,6 +63,21 @@ class CylinderShelfScene(
 
     private var lastFrontIndex = -1
 
+    /** Half the horizontal field of view, recomputed whenever the viewport changes shape. */
+    private var halfFovH: Float = CylinderMath.halfFovH(aspect = 0.5f)
+
+    private companion object {
+        const val TAG = "CylinderShelfScene"
+
+        /** Just below the board the books stand on: the room's floor. */
+        val FLOOR_Y = CylinderMath.BOOK_Y - CylinderMath.BOOK_HEIGHT / 2f - 0.035f
+
+        /** Base colours for the room's woodwork, as linear values rather than sRGB. */
+        val WOOD_WALL = floatArrayOf(0.20f, 0.115f, 0.070f)
+        val WOOD_SHELF = floatArrayOf(0.26f, 0.150f, 0.090f)
+        val WOOD_FLOOR = floatArrayOf(0.16f, 0.093f, 0.058f)
+    }
+
     override fun onCreate(engine: Engine, scene: Scene) {
         this.engine = engine
         val res = ShelfResources(engine)
@@ -79,46 +92,61 @@ class CylinderShelfScene(
 
             val bookMaterial = buildMaterial(engine, ShelfMaterials.BOOK_MATERIAL)
             res.track(bookMaterial)
-
-            // The plinth the books stand on: one curved board around the whole drum, so it
-            // never needs rebuilding as the shelf turns.
-            val plinthMesh = ShelfGeometry.plinth(
-                // The board's top face lands exactly under the books' feet.
-                radius = CylinderMath.DRUM_RADIUS + 0.006f,
-                topY = CylinderMath.BOOK_Y - CylinderMath.BOOK_HEIGHT / 2f,
-                // Deep enough that a book stands fully on the board, not on its front edge.
-                thickness = CylinderMath.BOOK_DEPTH
-            )
             val woodMaterial = buildMaterial(engine, ShelfMaterials.WOOD_MATERIAL)
             res.track(woodMaterial)
 
+            // The carcass wall stands just behind the backs of the books.
+            val wallRadius = CylinderMath.DRUM_RADIUS - CylinderMath.BOOK_DEPTH / 2f - 0.008f
+
+            // The board the books stand on. Its inner edge stops at the wall so the two meet
+            // cleanly instead of intersecting.
+            val plinthMesh = ShelfGeometry.plinth(
+                radius = CylinderMath.DRUM_RADIUS + 0.006f,
+                topY = CylinderMath.BOOK_Y - CylinderMath.BOOK_HEIGHT / 2f,
+                thickness = CylinderMath.DRUM_RADIUS + 0.006f - wallRadius
+            )
             addStatic(
                 engine, scene, res, plinthMesh, woodMaterial,
                 center = floatArrayOf(0f, CylinderMath.BOOK_Y, -CylinderMath.AXIS_DISTANCE),
                 halfExtent = floatArrayOf(
                     CylinderMath.DRUM_RADIUS + 0.1f, 0.3f, CylinderMath.DRUM_RADIUS + 0.1f
-                )
+                ),
+                color = WOOD_SHELF
             )
 
-            // The carcass: a wall standing just behind the books, all the way round.
+            // The wall behind the books.
             //
-            // This is not decoration. Without it the drum is a ring of floating boxes and the
-            // books on the far side show through the gaps between the near ones — the shelf
-            // reads as a flat row with ghosts behind it. The wall is what makes the drum solid
-            // and what hides everything past its horizon.
+            // Two jobs. It hides the books that have turned past the drum's horizon, so the
+            // shelf reads as solid instead of as a ring of floating boxes. And it is tall
+            // enough to fill the frame: a room-scale backdrop, floor to well above the reader's
+            // eye, is the difference between a shelf and a strip of furniture in a black void.
             val wallMesh = ShelfGeometry.backboard(
-                radius = CylinderMath.DRUM_RADIUS - CylinderMath.BOOK_DEPTH * 0.5f - 0.008f,
-                yBottom = CylinderMath.BOOK_Y - CylinderMath.BOOK_HEIGHT * 0.5f - 0.03f,
-                yTop = CylinderMath.BOOK_Y + CylinderMath.BOOK_HEIGHT * 0.62f,
-                segments = 72
+                radius = wallRadius,
+                yBottom = FLOOR_Y - 0.4f,
+                yTop = 1.40f,
+                segments = 96
             )
             addStatic(
                 engine, scene, res, wallMesh, woodMaterial,
-                center = floatArrayOf(0f, CylinderMath.BOOK_Y, -CylinderMath.AXIS_DISTANCE),
-                halfExtent = floatArrayOf(
-                    CylinderMath.DRUM_RADIUS + 0.1f, 0.4f, CylinderMath.DRUM_RADIUS + 0.1f
-                )
+                center = floatArrayOf(0f, (1.40f + FLOOR_Y - 0.4f) / 2f, -CylinderMath.AXIS_DISTANCE),
+                halfExtent = floatArrayOf(wallRadius + 0.1f, 1.2f, wallRadius + 0.1f),
+                color = WOOD_WALL
             )
+
+            // A floor, so the bottom of the frame is a room rather than a void. Only the strip
+            // between the reader and the drum is visible; the rest is behind the wall.
+            val floorMesh = ShelfGeometry.floor(
+                centreZ = -CylinderMath.AXIS_DISTANCE,
+                y = FLOOR_Y,
+                radius = 2.5f
+            )
+            addStatic(
+                engine, scene, res, floorMesh, woodMaterial,
+                center = floatArrayOf(0f, FLOOR_Y, -CylinderMath.AXIS_DISTANCE),
+                halfExtent = floatArrayOf(2.5f, 0.05f, 2.5f),
+                color = WOOD_FLOOR
+            )
+
             addBooks(engine, scene, res, vertices, indices, bookMaterial)
             addLights(engine, scene, res)
         } catch (t: Throwable) {
@@ -159,11 +187,12 @@ class CylinderShelfScene(
         mesh: ShelfGeometry.Mesh,
         material: Material,
         center: FloatArray,
-        halfExtent: FloatArray
+        halfExtent: FloatArray,
+        color: FloatArray
     ) {
         val instance = material.createInstance().also {
-            it.setParameter("baseColor", 0.22f, 0.13f, 0.08f)
-            it.setParameter("roughness", 0.55f)
+            it.setParameter("baseColor", color[0], color[1], color[2])
+            it.setParameter("roughness", 0.62f)
             it.setParameter("metallic", 0.0f)
         }
         res.track(instance)
@@ -259,7 +288,20 @@ class CylinderShelfScene(
 
     // ---------------------------------------------------------------- frame
 
-    override fun onResize(width: Int, height: Int) = Unit
+    /**
+     * Tells the drag controller how pixels map to the drum, and remembers the lens for hit
+     * testing.
+     *
+     * Called from the render thread on every surface change, so it must stay trivial.
+     */
+    override fun onResize(width: Int, height: Int) {
+        if (width <= 0 || height <= 0) return
+        halfFovH = CylinderMath.halfFovH(
+            verticalFovDegrees = CylinderMath.FOV_VERTICAL_DEGREES,
+            aspect = width.toFloat() / height.toFloat()
+        )
+        controller.trackViewport(width, halfFovH)
+    }
 
     override fun onFrame(frameTimeNanos: Long): Boolean {
         if (frameNanos == 0L) {
@@ -369,10 +411,12 @@ class CylinderShelfScene(
     fun bookAtScreenX(screenX: Float, viewWidth: Float): Int {
         val count = bookEntities.size
         if (count == 0) return -1
-        val angle = CylinderMath.angleForScreenX(screenX, viewWidth) ?: return -1
+        val angle = CylinderMath.angleForScreenX(screenX, viewWidth, halfFovH) ?: return -1
         val index = CylinderMath.bookNearAngle(count, controller.rotation, angle)
-        // ignore taps that land past the edge of the drum
-        return if (CylinderMath.isVisible(CylinderMath.angleOf(index, count, controller.rotation))) index else -1
+        if (!CylinderMath.isVisible(CylinderMath.angleOf(index, count, controller.rotation))) return -1
+        // A tap on the bare shelf between two books opens nothing, rather than opening whichever
+        // book happens to be nearest.
+        return if (CylinderMath.isTapOnBook(angle, index, count, controller.rotation)) index else -1
     }
 
     override fun onDestroy(engine: Engine) {

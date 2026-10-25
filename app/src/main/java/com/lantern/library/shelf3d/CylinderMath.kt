@@ -30,19 +30,37 @@ import kotlin.math.tan
  */
 object CylinderMath {
 
-    /** How far in front of the reader the drum's axis sits. */
-    const val AXIS_DISTANCE = 4.50f
-
-    /** Radius of the drum: the distance of each book from the axis. */
-    const val DRUM_RADIUS = 2.35f
+    /**
+     * Radius of the drum: the distance of each book's centre from the axis.
+     *
+     * The whole scene is sized from one requirement: a book should fill a good part of a phone
+     * held in portrait. At radius 2.35 m with the axis 4.5 m away, a 0.31 m book sat 2.15 m from
+     * the camera and covered 15% of the screen height, leaving a thin strip of shelf in a black
+     * void. These numbers put the nearest spine 0.72 m away, where the same book covers 41%.
+     */
+    const val DRUM_RADIUS = 0.60f
 
     /** A book's centre height, just below the reader's eye line. */
-    const val BOOK_Y = -0.10f
+    const val BOOK_Y = -0.05f
 
-    /** Book dimensions in metres. A chunky hardback, sized to read at two metres. */
+    /** Book dimensions in metres. */
     const val BOOK_WIDTH = 0.115f
     const val BOOK_HEIGHT = 0.31f
-    const val BOOK_DEPTH = 0.20f
+    const val BOOK_DEPTH = 0.18f
+
+    /** Distance from the camera to the spine of the book at the front of the drum. */
+    const val SPINE_DISTANCE = 0.72f
+
+    /**
+     * How far in front of the reader the drum's axis sits.
+     *
+     * Derived, not chosen: it puts the spine of the front book exactly [SPINE_DISTANCE] from
+     * the camera, which is what fixes a book's apparent size on screen.
+     */
+    const val AXIS_DISTANCE = DRUM_RADIUS + SPINE_DISTANCE + BOOK_DEPTH / 2f
+
+    /** The camera's vertical field of view, in degrees. A phone-camera-like lens. */
+    const val FOV_VERTICAL_DEGREES = 55f
 
     /**
      * The true horizon of a drum seen from this distance: beyond it a book has turned past the
@@ -63,8 +81,30 @@ object CylinderMath {
      */
     val VISIBLE_ARC_DEGREES: Float = HORIZON_DEGREES - 3f
 
-    /** Half the horizontal field of view of the camera, in radians. */
-    const val HALF_FOV_H = 0.6109f // 35 degrees: 70 degree horizontal lens
+    /**
+     * Half the horizontal field of view, in radians.
+     *
+     * This must be computed from the viewport, never assumed. A phone in portrait with a 55
+     * degree vertical lens has only about 29 degrees of horizontal view, and every hit test and
+     * every drag distance depends on knowing that exactly.
+     */
+    fun halfFovH(verticalFovDegrees: Float = FOV_VERTICAL_DEGREES, aspect: Float): Float =
+        atan2(tan(Math.toRadians(verticalFovDegrees / 2.0).toFloat()) * aspect, 1f)
+
+    /**
+     * How fast the drum must turn for its surface to keep up with a finger, in drum radians per
+     * radian of view angle.
+     *
+     * A book at the front sits [DRUM_RADIUS] from the axis and the camera is
+     * `AXIS_DISTANCE - DRUM_RADIUS` from the axis, so a small turn dθ moves the book sideways
+     * by `R dθ` while appearing to move by `(A - R) dθ`. Without this correction the surface
+     * races the finger: with a hand-picked constant the drum turned about ten times too far for
+     * a given swipe.
+     */
+    fun trackingGain(): Float = DRUM_RADIUS / (AXIS_DISTANCE - DRUM_RADIUS)
+
+    /** The angular width of one book's spine on the drum, in radians. */
+    fun bookArcRadians(): Float = BOOK_WIDTH / DRUM_RADIUS
 
     private const val TWO_PI = (PI * 2.0).toFloat()
 
@@ -134,7 +174,11 @@ object CylinderMath {
     /**
      * Angle of the drum a tap at [screenX] points at, or null if it is outside the lens.
      */
-    fun angleForScreenX(screenX: Float, viewWidth: Float, halfFovH: Float = HALF_FOV_H): Float? {
+    fun angleForScreenX(
+        screenX: Float,
+        viewWidth: Float,
+        halfFovH: Float = halfFovH(aspect = 0.5f)
+    ): Float? {
         if (viewWidth <= 0f) return null
         val nx = (screenX / viewWidth - 0.5f) * 2f
         val screenAngle = atan2(nx * tan(halfFovH), 1f)
@@ -150,6 +194,29 @@ object CylinderMath {
             if (screenAngle(mid) < screenAngle) low = mid else high = mid
         }
         return (low + high) / 2f
+    }
+
+    /**
+     * Whether a tap at drum angle [tapAngle] actually lands on book [index], rather than on the
+     * bare shelf beside it.
+     *
+     * When books are spaced apart — a small library spread round a whole drum — most of the
+     * shelf between them is empty. Without this, a tap anywhere on the wood would open whichever
+     * book happened to be closest.
+     */
+    fun isTapOnBook(
+        tapAngle: Float,
+        index: Int,
+        count: Int,
+        rotation: Float,
+        slop: Float = 1.25f
+    ): Boolean {
+        if (count <= 0 || index < 0 || index >= count) return false
+        val centre = angleOf(index, count, rotation)
+        val off = abs(wrapSigned(tapAngle - centre))
+        val halfBook = bookArcRadians() / 2f * slop
+        val halfSlot = angleStep(count) / 2f
+        return off <= minOf(halfBook, halfSlot)
     }
 
     /** The book nearest [angle] on the drum, given the current [rotation]. */

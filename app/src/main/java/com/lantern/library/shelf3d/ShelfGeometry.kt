@@ -268,6 +268,36 @@ object ShelfGeometry {
     }
 
     /**
+     * The room's floor: a disc centred under the drum, facing up.
+     *
+     * Only the near part is ever visible — the carcass wall hides the rest — but drawing the
+     * whole disc means the floor never ends at a visible edge, however the phone is held.
+     */
+    fun floor(centreZ: Float, y: Float, radius: Float, segments: Int = 64): Mesh {
+        val v = ArrayList<Float>(FLOATS_PER_VERTEX * (segments + 2))
+        val idx = ArrayList<Short>(segments * 3)
+        val up = floatArrayOf(0f, 1f, 0f)
+        val q = tangentFrame(up[0], up[1], up[2], 1f, 0f, 0f)
+        // centre vertex
+        v.add(0f); v.add(y); v.add(centreZ)
+        v.add(q[0]); v.add(q[1]); v.add(q[2]); v.add(q[3])
+        v.add(radius / 0.9f); v.add(radius / 0.9f)
+        for (s in 0..segments) {
+            val a = s.toFloat() / segments * (Math.PI * 2).toFloat()
+            val x = radius * kotlin.math.sin(a)
+            val z = centreZ + radius * kotlin.math.cos(a)
+            v.add(x); v.add(y); v.add(z)
+            v.add(q[0]); v.add(q[1]); v.add(q[2]); v.add(q[3])
+            // uv in metres, so a texture would tile at a constant real-world size
+            v.add(x / 0.9f); v.add(z / 0.9f)
+        }
+        for (s in 1..segments) {
+            idx.add(0); idx.add((s).toShort()); idx.add((s + 1).toShort())
+        }
+        return Mesh(v.toFloatArray(), idx.toShortArray())
+    }
+
+    /**
      * The carcass wall: a vertical band all the way round the drum at [radius], from [yBottom]
      * to [yTop].
      *

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -56,7 +57,7 @@ import com.lantern.library.ui.theme.Playfair
 private enum class LibFilter { ALL, CURRENT, TO_READ, WANT, FINISHED }
 
 private const val SPINES_PER_SHELF = 12
-private val SHELF_HEIGHT = 150.dp
+private val SHELF_HEIGHT = 168.dp
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -89,7 +90,7 @@ fun LibraryScreen(
         LibFilter.FINISHED -> books.filter { it.shelf == Shelf.FINISHED }
         LibFilter.WANT -> emptyList()
     }
-    val continuing = recentlyRead(books)
+    val continuing = continuingBooks(books)
     val wallAlpha = if (appearance.look.resolvedFor(dark).hasWallpaper) 0.42f else 1f
 
     AppearanceLayer(appearance.look, dark) {
@@ -99,7 +100,8 @@ fun LibraryScreen(
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
                     .then(if (lifted != null) Modifier.blur(18.dp) else Modifier)
-                    .padding(bottom = 108.dp)
+                    .statusBarsPadding()
+                    .padding(bottom = 150.dp)
             ) {
                 // Header
                 Row(
@@ -219,14 +221,14 @@ fun LibraryScreen(
                     EmptyShelf(dark, label = "Your shelf is empty. Tap + to import a book.")
                 }
 
-                if (continuing.isNotEmpty()) {
+                if (continuing.isNotEmpty() && continuing.size < books.size) {
                     Spacer(Modifier.height(6.dp))
                     TitledShelf(
                         title = "Continue reading",
                         subtitle = "Back to where you left off",
                         spines = continuing.map { it.toSpine() },
                         dark = dark,
-                        shelfHeight = 132.dp,
+                        shelfHeight = 150.dp,
                         emptyLabel = "Nothing in progress",
                         onOpen = { spine -> books.firstOrNull { it.id == spine.id }?.let { lifted = it } },
                         onLongPress = { spine ->
@@ -241,7 +243,7 @@ fun LibraryScreen(
                         subtitle = "Saved discoveries",
                         spines = wantToRead.map { it.toSpine() },
                         dark = dark,
-                        shelfHeight = 132.dp,
+                        shelfHeight = 150.dp,
                         emptyLabel = "Long-press a For You spine to save one",
                         onOpen = { spine -> wantToRead.firstOrNull { it.volumeId == spine.id }?.let(onOpenDiscovery) }
                     )
@@ -310,9 +312,11 @@ private fun DiscoveryBook.toSpine(): Spine =
         coverFallbacks = coverUrls
     )
 
-private fun recentlyRead(books: List<LibraryBook>): List<LibraryBook> {
-    val current = books.filter { it.shelf == Shelf.CURRENT }.sortedByDescending { it.lastReadAt }
-    val rest = books.filter { it.shelf != Shelf.CURRENT }
-        .sortedWith(compareByDescending<LibraryBook> { it.lastReadAt }.thenByDescending { it.addedAt })
-    return (current + rest).distinctBy { it.id }.take(12)
-}
+/**
+ * Only books that are genuinely part-read. Listing everything here made this shelf a
+ * duplicate of the main one, which read as the same books pinned up twice.
+ */
+private fun continuingBooks(books: List<LibraryBook>): List<LibraryBook> =
+    books.filter { it.shelf == Shelf.CURRENT && it.progress > 0.005f }
+        .sortedByDescending { it.lastReadAt }
+        .take(12)

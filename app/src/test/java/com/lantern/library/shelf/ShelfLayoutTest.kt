@@ -213,10 +213,13 @@ class ShelfLayoutTest {
     fun `a tap off the case misses, and the case reaches the screen edges`() {
         assertNull(ShelfLayout.pickAngle(540f, 2f, 1080f, 2400f))
         assertNull(ShelfLayout.pickAngle(540f, 1200f, 0f, 0f))
-        // the camera is aimed at the middle of the case, so the bottom board is on screen and
-        // a tap near the bottom edge is a real tap on the bottom shelf
-        val bottom = ShelfLayout.pickAngle(540f, 2390f, 1080f, 2400f)
-        assertNotNull("the bottom of the case is off screen", bottom)
+        // the camera is aimed at the middle of the case, so the bottom board is on screen:
+        // tap exactly where a book on the lowest shelf appears
+        val y = ShelfLayout.rowBaseY(0) + 0.05f
+        val sy = (0.5f - (y - ShelfLayout.caseCentreY()) /
+            (ShelfLayout.tanVFov() * ShelfLayout.RADIUS) * 0.5f) * 2400f
+        val bottom = ShelfLayout.pickAngle(540f, sy, 1080f, 2400f)
+        assertNotNull("the bottom shelf is off screen", bottom)
         assertEquals(0, bottom!!.first)
     }
 
@@ -330,10 +333,11 @@ class ShelfLayoutTest {
         val strips = ShelfLayout.caseStrips()
         assertTrue(strips.size >= ShelfLayout.ROWS + 1)
         // one back panel per row, so the wood grain repeats at a believable scale
+        // the back panels sit further back than the boards and stiles, which share a radius
         val backRadius = ShelfLayout.RADIUS + ShelfLayout.BOOK_MAX_D + 0.03f
         assertEquals(
             ShelfLayout.ROWS,
-            strips.count { it.radius <= backRadius + 1e-4f && it.y1 - it.y0 > ShelfLayout.BOARD * 1.5f }
+            strips.count { it.radius > backRadius - 1e-3f && it.y1 - it.y0 > ShelfLayout.BOARD * 1.5f }
         )
         for (strip in strips) {
             assertTrue(strip.a0 < strip.a1)

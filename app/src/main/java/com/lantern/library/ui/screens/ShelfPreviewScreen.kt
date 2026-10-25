@@ -31,7 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lantern.library.data.LibraryBook
 import com.lantern.library.shelf.BookArt
-import com.lantern.library.shelf.FilamentShelf
+import com.lantern.library.shelf.ShelfGlView
 import com.lantern.library.shelf.ShelfLayout
 import com.lantern.library.shelf.ShelfPrepared
 import com.lantern.library.shelf.ShelfPreparer
@@ -108,7 +108,7 @@ fun ShelfPreviewScreen(
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Ink, Color(0xFF241A13))))) {
         val ready = prepared
         if (capability.supported && room.isNotEmpty() && ready != null && failure == null) {
-            FilamentShelf(
+            ShelfGlView(
                 prepared = ready,
                 slots = slots,
                 modifier = Modifier.fillMaxSize(),

@@ -63,8 +63,7 @@ import com.lantern.library.ui.theme.Sky
 import com.lantern.library.ui.theme.SlateHi
 import com.lantern.library.ui.theme.SourceSerif
 
-fun auroraBrush(dark: Boolean) = if (dark) Brush.verticalGradient(listOf(Color(0xFF3E4A5C), Color(0xFF4A5668), Color(0xFF3A4454)))
-else Brush.verticalGradient(listOf(Lilac, Periwinkle, Sky, Aqua))
+fun auroraBrush(dark: Boolean) = if (dark) Brush.verticalGradient(listOf(Color(0xFF202124), Color(0xFF303134), Color(0xFF202124)))\nelse Brush.verticalGradient(listOf(Color(0xFFF8F9FA), Color(0xFFE9ECEF), Color(0xFFF3F4F6)))
 
 @Composable
 fun AuroraBackdrop(theme: ReaderTheme, content: @Composable BoxScope.() -> Unit) {
@@ -73,7 +72,7 @@ fun AuroraBackdrop(theme: ReaderTheme, content: @Composable BoxScope.() -> Unit)
 
 @Composable
 fun GlassCard(modifier: Modifier = Modifier, dark: Boolean = false, radius: Int = 22, content: @Composable BoxScope.() -> Unit) {
-    val fill = if (dark) Color(0x664A5568) else Color(0x99FFFFFF)
+    val fill = if (dark) Color(0x66202124) else Color(0x99FFFFFF)
     Box(modifier.shadow(10.dp, RoundedCornerShape(radius.dp), spotColor = Color(0x33000000)).clip(RoundedCornerShape(radius.dp)).background(fill).border(1.dp, if (dark) Color(0x33FFFFFF) else Color(0x66FFFFFF), RoundedCornerShape(radius.dp)), content = content)
 }
 
@@ -97,7 +96,7 @@ fun ReadingProgressBar(progress: Float, modifier: Modifier = Modifier) {
                 Modifier
                     .fillMaxHeight()
                     .fillMaxWidth(filled)
-                    .background(Brush.horizontalGradient(listOf(Aqua, Lilac, Coral)))
+                    .background(Color(0xFF9CA3AF))
             )
         }
     }
@@ -145,7 +144,7 @@ fun LoreActionButton(label: String, onClick: () -> Unit, mark: String? = null) {
             .fillMaxWidth()
             .height(48.dp)
             .clip(RoundedCornerShape(24.dp))
-            .background(Brush.horizontalGradient(listOf(LoreAction, LoreActionHi)))
+            .background(Color(0xDD374151))
             .clickable(onClick = onClick)
             .padding(horizontal = 18.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -170,7 +169,7 @@ fun LorePillButton(label: String, onClick: () -> Unit) {
         label,
         Modifier
             .clip(RoundedCornerShape(22.dp))
-            .background(LorePill)
+            .background(Color(0xCC4B5563))
             .clickable(onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 10.dp),
         color = Color.White,

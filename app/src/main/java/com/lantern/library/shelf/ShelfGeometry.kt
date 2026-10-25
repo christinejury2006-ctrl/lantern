@@ -166,19 +166,26 @@ object ShelfGeometry {
      * The case: every strip in [ShelfLayout.caseStrips], swept around the arc. Shading falls
      * off toward the edges of the arc, which is what sells the curve without any lights.
      */
-    fun caseMesh(segments: Int = 24): Mesh {
+    fun caseMesh(rows: Int = ShelfLayout.ROWS, segments: Int = 24): Mesh {
         val b = Builder()
-        val list = ShelfLayout.caseStrips()
+        val list = ShelfLayout.caseStrips(rows)
         for (strip in list) {
             val base = b.vertexCount
+            // A board is 22 mm thick. Mapping a whole photograph of wood into 22 mm turns the
+            // grain into a vertical smear, so boards sample a thin horizontal band of it and
+            // the grain runs along the shelf. The back panel spans a whole row and gets the
+            // full height of the texture.
+            val thick = strip.y1 - strip.y0 > ShelfLayout.BOARD * 1.5f
+            val vTop = if (thick) 0f else 0.46f
+            val vBottom = if (thick) 1f else 0.56f
             for (s in 0..segments) {
                 val t = s.toFloat() / segments
                 val a = strip.a0 + (strip.a1 - strip.a0) * t
                 val x = ShelfLayout.arcX(a, strip.radius)
                 val z = ShelfLayout.arcZ(a, strip.radius)
                 val curve = 0.84f + 0.16f * cos(a).coerceAtLeast(0f)
-                b.vertex(x, strip.y1, z, t, 0f, strip.shade * curve)
-                b.vertex(x, strip.y0, z, t, 1f, strip.shade * curve * 0.92f)
+                b.vertex(x, strip.y1, z, t, vTop, strip.shade * curve)
+                b.vertex(x, strip.y0, z, t, vBottom, strip.shade * curve * 0.92f)
             }
             for (s in 0 until segments) {
                 val a0 = base + s * 2
@@ -196,13 +203,13 @@ object ShelfGeometry {
      * The painted room standing behind the case: one wide arc, bright, so the shelf sits in
      * a lit interior instead of in blackness.
      */
-    fun roomMesh(segments: Int = 24): Mesh {
+    fun roomMesh(rows: Int = ShelfLayout.ROWS, segments: Int = 24): Mesh {
         val b = Builder()
         // Deliberately much larger than the case: the painted room has to cover the whole
         // window whatever shape it is, or the scene shows black bars above and below it.
         val a0 = -ShelfLayout.HALF_ARC - 0.70f
         val a1 = ShelfLayout.HALF_ARC + 0.70f
-        val top = ShelfLayout.caseTopY() + 2.30f
+        val top = ShelfLayout.caseTopY(rows) + 2.30f
         val bottom = ShelfLayout.caseBottomY() - 2.60f
         val base = 0
         for (s in 0..segments) {
@@ -210,8 +217,10 @@ object ShelfGeometry {
             val a = a0 + (a1 - a0) * t
             val x = ShelfLayout.arcX(a, ShelfLayout.ROOM_RADIUS)
             val z = ShelfLayout.arcZ(a, ShelfLayout.ROOM_RADIUS)
-            b.vertex(x, top, z, t, 0f, 1f)
-            b.vertex(x, bottom, z, t, 1f, 0.78f)
+            // Dimmed hard. It is a painted backdrop seen past the case, not a second shelf:
+            // at full brightness it reads as a flat photo stuck on top of the real books.
+            b.vertex(x, top, z, t, 0f, 0.44f)
+            b.vertex(x, bottom, z, t, 1f, 0.24f)
         }
         for (s in 0 until segments) {
             val i0 = base + s * 2

@@ -100,6 +100,8 @@ class ShelfGlScene(
     private var viewWidth = 1
     private var viewHeight = 1
 
+    private val rows = ShelfLayout.rowsUsed(slots)
+
     private val lifts = FloatArray(slots.size)
     private val velocities = FloatArray(slots.size)
     private val targets = FloatArray(slots.size)
@@ -262,12 +264,12 @@ class ShelfGlScene(
         boxIndices = uploadIndices(box)
         boxIndexCount = box.indexCount
 
-        val case = ShelfGeometry.caseMesh()
+        val case = ShelfGeometry.caseMesh(rows)
         caseVertices = uploadVertices(case)
         caseIndices = uploadIndices(case)
         caseIndexCount = case.indexCount
 
-        val room = ShelfGeometry.roomMesh()
+        val room = ShelfGeometry.roomMesh(rows)
         roomVertices = uploadVertices(room)
         roomIndices = uploadIndices(room)
         roomIndexCount = room.indexCount
@@ -383,8 +385,8 @@ class ShelfGlScene(
         val aspect = egl.surfaceWidth.toFloat() / egl.surfaceHeight.toFloat().coerceAtLeast(1f)
         val near = 0.05f
         val far = 8f
-        val tanH = ShelfLayout.tanHFor(aspect)
-        val tanV = ShelfLayout.tanVFor(aspect)
+        val tanH = ShelfLayout.tanHFov(aspect, rows)
+        val tanV = ShelfLayout.tanVFov(rows)
         // Column-major perspective with the eye at the origin looking down -z.
         java.util.Arrays.fill(viewProj, 0f)
         viewProj[0] = 1f / tanH
@@ -552,7 +554,7 @@ class ShelfGlScene(
      * [Tap.slot] is -1 when the tap missed the shelf.
      */
     fun tap(x: Float, y: Float): Tap {
-        val pick = ShelfLayout.pickAngle(x, y, viewWidth.toFloat(), viewHeight.toFloat())
+        val pick = ShelfLayout.pickAngle(x, y, viewWidth.toFloat(), viewHeight.toFloat(), rows)
         val slot = pick?.let { ShelfLayout.slotAt(slots, it.first, it.second) }
         if (slot == null) {
             if (selected >= 0) {

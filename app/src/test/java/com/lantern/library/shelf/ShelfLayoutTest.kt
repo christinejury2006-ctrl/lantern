@@ -56,15 +56,66 @@ class ShelfLayoutTest {
         val slots = ShelfLayout.slots(6)
         assertEquals(6, slots.size)
         for (slot in slots) {
-            // a book, not a plank
-            assertTrue("book is ${slot.width} m wide", slot.width <= 0.075f)
-            assertTrue("book is ${slot.width} m wide", slot.width >= 0.03f)
+            // a book, not a plank, and a substantial one rather than a bookmark
+            // the widest a book can be drawn is the typical width plus its own variation
+            assertTrue(
+                "book is ${slot.width} m wide",
+                slot.width <= ShelfLayout.TYPICAL_WIDTH * 1.12f + 1e-4f
+            )
+            assertTrue("book is ${slot.width} m wide", slot.width >= 0.04f)
         }
         // rows are centred, so the shelf is not lopsided around a handful of books
         for (row in 0 until ShelfLayout.ROWS) {
             val inRow = slots.filter { it.row == row }
             val middle = inRow.sumOf { it.angle.toDouble() } / inRow.size
             assertTrue("row $row is off centre by $middle", abs(middle) < 0.02)
+        }
+    }
+
+    @Test
+    fun `a small library uses fewer shelves instead of leaving them empty`() {
+        assertEquals(1, ShelfLayout.rowsFor(2))
+        assertEquals(2, ShelfLayout.rowsFor(6))
+        assertEquals(2, ShelfLayout.rowsFor(9))
+        assertEquals(3, ShelfLayout.rowsFor(12))
+        assertEquals(3, ShelfLayout.rowsFor(60))
+        // and the case is built to match, so there is never a shelf with nothing on it
+        for (count in listOf(1, 2, 6, 9, 12, 40)) {
+            val slots = ShelfLayout.slots(count)
+            assertEquals(ShelfLayout.rowsFor(count), ShelfLayout.rowsUsed(slots))
+            for (row in 0 until ShelfLayout.rowsUsed(slots)) {
+                assertTrue("row $row of $count is empty", slots.any { it.row == row })
+            }
+        }
+    }
+
+    @Test
+    fun `the case fills the screen instead of floating in the middle of it`() {
+        // This is the regression that made the shelf a small island in a photo: fitting the
+        // width as well as the height zoomed the lens out on a tall phone.
+        for (rows in 1..ShelfLayout.ROWS) {
+            val tanV = ShelfLayout.tanVFov(rows)
+            val halfHeight = (ShelfLayout.caseTopY(rows) - ShelfLayout.caseBottomY()) / 2f
+            val fills = (halfHeight / ShelfLayout.RADIUS) / tanV
+            assertTrue("a $rows-row case only fills ${fills * 100}% of the screen", fills > 0.70f)
+        }
+    }
+
+    @Test
+    fun `books are laid out across the arc that is actually on screen`() {
+        for (count in listOf(2, 6, 9, 12, 40)) {
+            val rows = ShelfLayout.rowsFor(count)
+            val arc = ShelfLayout.layoutArc(rows)
+            // the arc books occupy must be inside what a tall phone can show, or the outer
+            // books are cropped off the edges of the screen
+            val visible = ShelfLayout.visibleHalfArc(0.44f, rows)
+            assertTrue(
+                "$count books span ${arc} rad but only ${visible} rad is visible",
+                arc <= visible + 0.02f
+            )
+            for (slot in ShelfLayout.slots(count)) {
+                assertTrue(slot.angle + slot.arc / 2f <= arc + 1e-3f)
+            }
         }
     }
 
@@ -189,38 +240,40 @@ class ShelfLayoutTest {
     }
 
     @Test
-    fun `the projection matches the width the shelf is tuned for`() {
+    fun `the projection covers the height of the case`() {
         val near = 0.05f
         val p = ShelfLayout.projection(0.45f, near)
         val left = p[0]
         val right = p[1]
         val bottom = p[2]
         val top = p[3]
-        // at the radius of the books, the frustum must cover the visible half width
-        val visibleHalfWidth = right / near * ShelfLayout.RADIUS
-        assertEquals(ShelfLayout.HALF_WIDTH, visibleHalfWidth, 1e-3f)
         assertEquals(-left, right, 1e-6f)
         assertEquals(-bottom, top, 1e-6f)
-        assertTrue(top > right / 0.45f * 0.9f)
+        // at the radius of the books, the frustum must reach past the top and bottom boards
+        val visibleHalfHeight = top / near * ShelfLayout.RADIUS
+        assertTrue(
+            "frustum reaches $visibleHalfHeight m but the case needs " +
+                "${ShelfLayout.visibleHalfHeight()} m",
+            visibleHalfHeight >= ShelfLayout.visibleHalfHeight() - 1e-4f
+        )
     }
 
     @Test
     fun `the whole case fits whatever shape the window is`() {
         // a portrait phone, the wide band the Library shelf sits in, and landscape
-        for (aspect in listOf(0.45f, 0.75f, 1.0f, 1.4f, 2.2f)) {
-            val tanV = ShelfLayout.tanVFor(aspect)
-            val tanH = ShelfLayout.tanHFor(aspect)
-            // every row of the case is inside the view, top and bottom
-            assertTrue(
-                "aspect $aspect crops the case vertically",
-                tanV * ShelfLayout.RADIUS >= ShelfLayout.visibleHalfHeight() - 1e-5f
-            )
-            // and we still see at least the width the shelf is tuned for
-            assertTrue(
-                "aspect $aspect shows too little shelf",
-                tanH * ShelfLayout.RADIUS >= ShelfLayout.HALF_WIDTH - 1e-5f
-            )
-            assertEquals(aspect, tanH / tanV, 1e-4f)
+        for (rows in 1..ShelfLayout.ROWS) {
+            for (aspect in listOf(0.45f, 0.75f, 1.0f, 1.4f, 2.2f)) {
+                val tanV = ShelfLayout.tanVFov(rows)
+                val tanH = ShelfLayout.tanHFov(aspect, rows)
+                // every row of the case is inside the view, top and bottom
+                assertTrue(
+                    "aspect $aspect crops the case vertically",
+                    tanV * ShelfLayout.RADIUS >= ShelfLayout.visibleHalfHeight(rows) - 1e-5f
+                )
+                // a wide window shows at least as much shelf as a tall one
+                assertTrue(tanH > 0f)
+                assertEquals(aspect, tanH / tanV, 1e-4f)
+            }
         }
     }
 
@@ -229,8 +282,8 @@ class ShelfLayoutTest {
         for (aspect in listOf(0.45f, 1.0f, 1.4f, 2.2f)) {
             val w = 1000f
             val h = w / aspect
-            val tanH = ShelfLayout.tanHFor(aspect)
-            val tanV = ShelfLayout.tanVFor(aspect)
+            val tanH = ShelfLayout.tanHFov(aspect)
+            val tanV = ShelfLayout.tanVFov()
             // project a known point on the shelf and tap it
             for (angle in listOf(-0.3f, 0f, 0.25f)) {
                 val x = ShelfLayout.RADIUS * sin(angle)
@@ -270,6 +323,8 @@ class ShelfLayoutTest {
     fun `the case encloses the books and the room sits behind it`() {
         val strips = ShelfLayout.caseStrips()
         assertTrue(strips.size >= ShelfLayout.ROWS + 1)
+        // one back panel per row, so the wood grain repeats at a believable scale
+        assertEquals(ShelfLayout.ROWS, strips.count { it.y1 - it.y0 > ShelfLayout.BOARD * 1.5f })
         for (strip in strips) {
             assertTrue(strip.a0 < strip.a1)
             assertTrue(strip.y0 < strip.y1)
@@ -327,7 +382,8 @@ class ShelfLayoutTest {
         val edgeX = ShelfLayout.arcX(ShelfLayout.HALF_ARC, ShelfLayout.RADIUS)
         assertEquals(ShelfLayout.RADIUS * sin(ShelfLayout.HALF_ARC), edgeX, 1e-5f)
         assertEquals(-ShelfLayout.RADIUS * cos(ShelfLayout.HALF_ARC), edge, 1e-5f)
-        // the visible half angle must be smaller than the arc, so edges stay off screen
-        assertTrue(atan(ShelfLayout.RADIUS * sin(ShelfLayout.HALF_ARC) / -edge) > ShelfLayout.halfAngleH())
+        // the built case reaches past any screen, so it never ends mid-view
+        assertTrue(atan(ShelfLayout.RADIUS * sin(ShelfLayout.HALF_ARC) / -edge) >
+            ShelfLayout.visibleHalfArc(0.44f))
     }
 }

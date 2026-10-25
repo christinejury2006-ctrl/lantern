@@ -22,8 +22,23 @@ object ShelfLayout {
     /** Radius of the inside of the case, i.e. how far the books are from the eye. */
     const val RADIUS = 1.15f
 
-    /** Half the arc the case spans, in radians. Wider than the screen so the edges never end. */
+    /** Half the arc the case is built over. Wider than any screen, so the case never ends. */
     const val HALF_ARC = 0.86f
+
+    /**
+     * Half the arc books are laid out over, per row count.
+     *
+     * The camera fits the case vertically, so the wider slice of shelf it can show depends on
+     * how tall the case is: a one-row case fills the screen with a narrow arc visible, a
+     * three-row case fills it with a wider one. Laying books out to the arc that will actually
+     * be on screen is what keeps them a believable size instead of bunched in the middle, and
+     * the case itself continues past the edges as real joinery would.
+     */
+    fun layoutArc(rows: Int): Float = when (rows) {
+        1 -> 0.085f
+        2 -> 0.150f
+        else -> 0.210f
+    }
 
     /** Thickness of a shelf board. */
     const val BOARD = 0.022f
@@ -43,11 +58,14 @@ object ShelfLayout {
     /** How far a lifted book comes out of the shelf toward the viewer. */
     const val LIFT_DISTANCE = 0.26f
 
-    /** Rows of books, bottom to top. Three is what a phone's field of view holds. */
+    /** The most rows the case will ever have. Small libraries use fewer. */
     const val ROWS = 3
 
-    /** Half the width of shelf visible on screen, measured at the radius of the books. */
-    const val HALF_WIDTH = 0.63f
+    /** Width a book is drawn at when there is room for it, in metres. */
+    const val TYPICAL_WIDTH = 0.105f
+
+    /** The gap left between neighbouring books. */
+    const val TYPICAL_GAP = 0.012f
 
     /** Atlas grid: 8 x 8 cells of spine art. */
     const val ATLAS_COLS = 8
@@ -61,14 +79,23 @@ object ShelfLayout {
     const val SPINE_U1 = 0.42f
     const val COVER_V1 = 0.62f
 
-    /** Width a book is drawn at when there is room for it, in metres. */
-    const val TYPICAL_WIDTH = 0.058f
-
-    /** The gap left between neighbouring books. */
-    const val TYPICAL_GAP = 0.009f
-
     /** Radius of the painted room behind the case. */
     const val ROOM_RADIUS = RADIUS + 0.95f
+
+    /**
+     * How many rows a library of [count] books needs.
+     *
+     * Two books on each of three shelves looks like an abandoned shop. A small library gets
+     * one or two shelves and wider spacing; the case only grows as the library does.
+     */
+    fun rowsFor(count: Int): Int = when {
+        count <= 3 -> 1
+        count <= 9 -> 2
+        else -> ROWS
+    }
+
+    /** How many books a comfortable row holds. */
+    private fun perRowTarget(): Int = 4
 
     /** Top of the board that [row] stands on. */
     fun rowBaseY(row: Int): Float = BASE_Y + row * ROW_GAP
@@ -79,8 +106,8 @@ object ShelfLayout {
     /** Centre y of a book of [height] standing in [row]. */
     fun bookCentreY(row: Int, height: Float): Float = rowBaseY(row) + height / 2f
 
-    /** y of the top of the case. */
-    fun caseTopY(): Float = rowBaseY(ROWS - 1) + ROW_GAP
+    /** y of the top of a case with [rows] shelves. */
+    fun caseTopY(rows: Int = ROWS): Float = rowBaseY(rows - 1) + ROW_GAP
 
     /** y of the underside of the lowest board. */
     fun caseBottomY(): Float = BASE_Y - BOARD
@@ -121,39 +148,40 @@ object ShelfLayout {
     }
 
     /**
-     * Lays [count] books across [ROWS] rows.
+     * Lays [count] books across as many rows as they need, filling the arc that will be on screen.
      *
-     * Books keep a believable width rather than being stretched to fill whatever space they
-     * are given: a library of six books sits as six books in the middle of the shelf with
-     * bare boards either side, and only a large library gets squeezed tight across the arc.
-     * Rows are centred, and every book in the library is always on the shelf.
+     * Books are spread evenly across the arc so a row reads as one run of books with even air
+     * between them, rather than a clump in the middle. Width is capped so a nearly empty
+     * shelf gives ordinary books with space around them, not planks.
      */
     fun slots(count: Int): List<Slot> {
         if (count <= 0) return emptyList()
-        val perRow = (count + ROWS - 1) / ROWS
-        val arcSpan = HALF_ARC * 2f
-        val idealStride = (TYPICAL_WIDTH + TYPICAL_GAP) / RADIUS
+        val rows = rowsFor(count)
+        val arc = layoutArc(rows)
+        val perRow = (count + rows - 1) / rows
         val out = ArrayList<Slot>(count)
         var placed = 0
-        for (row in 0 until ROWS) {
+        for (row in 0 until rows) {
             val inThisRow = minOf(perRow, count - placed)
             if (inThisRow <= 0) break
-            // Keep natural spacing until the row no longer fits, then close ranks.
-            val stride = minOf(idealStride, arcSpan / inThisRow)
-            val start = -(stride * inThisRow) / 2f
+            // Book centres stop half a book short of the arc, otherwise the outer books hang
+            // off the edge of the screen by half their width.
+            val maxHalfBook = TYPICAL_WIDTH * 1.12f / 2f / RADIUS
+            val centreSpan = (arc - maxHalfBook).coerceAtLeast(0f)
+            val stride = if (inThisRow == 1) 0f else (centreSpan * 2f) / (inThisRow - 1)
             for (i in 0 until inThisRow) {
                 val n = placed + i
-                val h = BOOK_MAX_H * (0.72f + 0.28f * wobble(n, 1))
-                val w = minOf(
-                    TYPICAL_WIDTH * (0.84f + 0.32f * wobble(n, 2)),
-                    RADIUS * stride * 0.86f
-                )
-                val d = BOOK_MAX_D * (0.68f + 0.32f * wobble(n, 3))
+                val h = BOOK_MAX_H * (0.76f + 0.24f * wobble(n, 1))
+                // never wider than its stride allows, never wider than a real hardback
+                val room = if (inThisRow == 1) arc * 2f else stride * RADIUS * 0.86f
+                val w = minOf(TYPICAL_WIDTH * (0.82f + 0.30f * wobble(n, 2)), room)
+                val d = BOOK_MAX_D * (0.66f + 0.30f * wobble(n, 3))
+                val centre = if (inThisRow == 1) 0f else -centreSpan + stride * i
                 out.add(
                     Slot(
                         row = row,
                         index = n,
-                        angle = start + stride * (i + 0.5f),
+                        angle = centre,
                         arc = w / RADIUS,
                         width = w,
                         height = h,
@@ -166,6 +194,10 @@ object ShelfLayout {
         }
         return out
     }
+
+    /** How many rows the given books actually occupy. */
+    fun rowsUsed(slots: List<Slot>): Int =
+        if (slots.isEmpty()) ROWS else (slots.maxOf { it.row } + 1)
 
     /**
      * Column-major 4x4 transform placing a book's unit box on the shelf.
@@ -208,10 +240,6 @@ object ShelfLayout {
         return out
     }
 
-    /** Where a book's spine sits in world space once placed, for hit testing. */
-    fun spineCentre(slot: Slot): FloatArray =
-        floatArrayOf(arcX(slot.angle, RADIUS - slot.depth / 2f), bookCentreY(slot.row, slot.height), arcZ(slot.angle, RADIUS - slot.depth / 2f))
-
     /**
      * A strip of the case around the arc: [a0]..[a1] at [radius], from [y0] to [y1].
      * Boards, the back panel and the stiles are all built from these.
@@ -227,79 +255,92 @@ object ShelfLayout {
     )
 
     /**
-     * The case: a curved back panel, a board under every row plus one on top, and two
-     * vertical stiles at the ends of the arc to close it off.
+     * The case: a back panel behind every row, a board under every row plus one on top, and
+     * two vertical stiles at the ends to close it off.
+     *
+     * The back panel is split per row on purpose: one panel for the whole case would stretch
+     * a single photograph of wood across three shelves and the grain would be a smear.
      */
-    fun caseStrips(): List<Strip> {
+    fun caseStrips(rows: Int = ROWS): List<Strip> {
         val strips = ArrayList<Strip>()
         val back = RADIUS + BOOK_MAX_D + 0.03f
-        strips.add(Strip(-HALF_ARC, HALF_ARC, back, caseBottomY(), caseTopY(), 0.58f))
-        for (row in 0..ROWS) {
-            val y = if (row == ROWS) caseTopY() else rowBaseY(row) - BOARD
+        val top = caseTopY(rows)
+        for (row in 0 until rows) {
+            // one back panel per row, so the wood grain repeats at a believable scale
+            strips.add(
+                Strip(
+                    -HALF_ARC, HALF_ARC, back,
+                    rowBaseY(row) - BOARD, rowBaseY(row) + ROW_GAP,
+                    0.52f
+                )
+            )
+        }
+        for (row in 0..rows) {
+            val y = if (row == rows) top else rowBaseY(row) - BOARD
             strips.add(Strip(-HALF_ARC, HALF_ARC, RADIUS + BOOK_MAX_D + 0.012f, y, y + BOARD, 0.98f))
         }
         // stiles: narrow vertical posts at both ends of the arc
         val stile = 0.055f
-        strips.add(Strip(-HALF_ARC, -HALF_ARC + stile, RADIUS + BOOK_MAX_D + 0.012f, caseBottomY(), caseTopY(), 0.78f))
-        strips.add(Strip(HALF_ARC - stile, HALF_ARC, RADIUS + BOOK_MAX_D + 0.012f, caseBottomY(), caseTopY(), 0.78f))
+        strips.add(Strip(-HALF_ARC, -HALF_ARC + stile, RADIUS + BOOK_MAX_D + 0.012f, caseBottomY(), top, 0.78f))
+        strips.add(Strip(HALF_ARC - stile, HALF_ARC, RADIUS + BOOK_MAX_D + 0.012f, caseBottomY(), top, 0.78f))
         return strips
+    }
+
+    /**
+     * Half the height the camera must show: the whole case plus a margin of air.
+     */
+    fun visibleHalfHeight(rows: Int = ROWS): Float =
+        (caseTopY(rows) - caseBottomY()) / 2f + 0.055f
+
+    /**
+     * Tangent of the half vertical field of view.
+     *
+     * This is derived purely from the height of the case, and it is deliberately the ONLY
+     * constraint. Fitting the width as well forced a very wide lens on a tall phone, which
+     * shrank the case to a third of the screen and left the painted room filling the rest.
+     * Horizontal cropping is fine: the case is built wider than any screen, so it simply
+     * continues past the edges like real shelving.
+     */
+    fun tanVFov(rows: Int = ROWS): Float = visibleHalfHeight(rows) / RADIUS
+
+    /** Tangent of the half horizontal field of view, straight from the window's aspect. */
+    fun tanHFov(aspect: Float, rows: Int = ROWS): Float =
+        tanVFov(rows) * aspect.coerceAtLeast(0.2f)
+
+    /** The half angle the screen actually covers, for laying things out. */
+    fun visibleHalfArc(aspect: Float, rows: Int = ROWS): Float = atan(tanHFov(aspect, rows))
+
+    /**
+     * Perspective projection terms: left, right, bottom, top, near, far.
+     */
+    fun projection(aspect: Float, near: Float, rows: Int = ROWS): FloatArray {
+        val th = tanHFov(aspect, rows) * near
+        val tv = tanVFov(rows) * near
+        return floatArrayOf(-th, th, -tv, tv, near, 8f)
     }
 
     /**
      * Where a tap at ([screenX], [screenY]) lands: (row, angle), or null if it misses the
      * shelf. Mirrors the projection the camera is set up with, so no picking pass is needed.
      */
-    fun pickAngle(screenX: Float, screenY: Float, viewW: Float, viewH: Float): Pair<Int, Float>? {
+    fun pickAngle(
+        screenX: Float,
+        screenY: Float,
+        viewW: Float,
+        viewH: Float,
+        rows: Int = ROWS
+    ): Pair<Int, Float>? {
         if (viewW <= 0f || viewH <= 0f) return null
         val aspect = viewW / viewH
         val nx = (screenX / viewW - 0.5f) * 2f
-        val angle = atan(nx * tanHFor(aspect))
+        val angle = atan(nx * tanHFov(aspect, rows))
         val ny = (0.5f - screenY / viewH) * 2f
         // where that ray crosses the plane of the books
-        val y = ny * tanVFor(aspect) * RADIUS
-        for (row in 0 until ROWS) {
+        val y = ny * tanVFov(rows) * RADIUS
+        for (row in 0 until rows) {
             if (y >= rowBaseY(row) && y <= rowCeilingY(row) + BOARD) return Pair(row, angle)
         }
         return null
-    }
-
-    /** Half the horizontal field of view, from the width we want to see at [RADIUS]. */
-    fun halfAngleH(): Float = atan(HALF_WIDTH / RADIUS)
-
-    /** Half the vertical field of view for a given aspect ratio. */
-    fun halfAngleV(aspect: Float): Float = atan(tan(halfAngleH()) / aspect.coerceAtLeast(0.2f))
-
-    /** Half the height of the case, plus a margin of air above and below it. */
-    fun visibleHalfHeight(): Float = (caseTopY() - caseBottomY()) / 2f + 0.10f
-
-    /**
-     * Tangent of the half vertical field of view, for whatever shape of window the scene has
-     * been given.
-     *
-     * The shelf has to work in a tall phone, a short band inside the Library and a wide
-     * landscape window, so the camera fits whichever constraint bites harder: the full height
-     * of the case, or the half width of shelf we want to see. Previously the vertical angle
-     * was derived purely from the width, which cropped the top and bottom rows off any
-     * window that was not tall enough.
-     */
-    fun tanVFor(aspect: Float): Float {
-        val a = aspect.coerceAtLeast(0.2f)
-        val forHeight = visibleHalfHeight() / RADIUS
-        val forWidth = (HALF_WIDTH / RADIUS) / a
-        return maxOf(forHeight, forWidth)
-    }
-
-    /** Tangent of the half horizontal field of view for that same window. */
-    fun tanHFor(aspect: Float): Float = tanVFor(aspect) * aspect.coerceAtLeast(0.2f)
-
-    /**
-     * Perspective projection terms for Camera.setProjection:
-     * left, right, bottom, top, near, far.
-     */
-    fun projection(aspect: Float, near: Float): FloatArray {
-        val th = tanHFor(aspect) * near
-        val tv = tanVFor(aspect) * near
-        return floatArrayOf(-th, th, -tv, tv, near, 8f)
     }
 
     /** The book nearest [angle] in [row], or null if nothing is close enough. */
@@ -307,7 +348,7 @@ object ShelfLayout {
         slots.asSequence()
             .filter { it.row == row }
             .minByOrNull { abs(it.angle - angle) }
-            ?.takeIf { abs(it.angle - angle) <= it.arc / 2f + 0.03f }
+            ?.takeIf { abs(it.angle - angle) <= it.arc / 2f + 0.055f }
 
     /**
      * Critically damped spring, one step. Every bit of motion uses this so nothing snaps

@@ -91,8 +91,9 @@ object ShelfMaterials {
      */
     fun load(context: Context): Map<String, ByteArray> {
         val out = HashMap<String, ByteArray>(2)
-        out[BOOK] = loadAsset(context, BOOK) ?: loadOrCompile(context, BOOK)
-        out[WOOD] = loadAsset(context, WOOD) ?: loadOrCompile(context, WOOD)
+        for (name in listOf(BOOK, WOOD)) {
+            out[name] = loadAsset(context, name) ?: fallBackToCompiling(context, name)
+        }
         return out
     }
 
@@ -101,6 +102,25 @@ object ShelfMaterials {
         runCatching {
             context.assets.open("materials/$name.filamat").use { it.readBytes() }
         }.getOrNull()?.takeIf { it.isNotEmpty() }
+
+    /**
+     * The last resort when the APK carries no compiled material.
+     *
+     * It exists so the app still runs from Android Studio, where the materials step does not
+     * run. It is not a normal path: if it is taken, the build shipped the wrong file name or no
+     * file at all, and saying so is the difference between a five-minute fix and a shelf that
+     * quietly refuses to start.
+     */
+    private fun fallBackToCompiling(context: Context, name: String): ByteArray {
+        Log.w(TAG, "no precompiled materials/$name.filamat in the APK; compiling on the device")
+        return runCatching { loadOrCompile(context, name) }.getOrElse { error ->
+            throw IllegalStateException(
+                "The APK has no materials/$name.filamat, and compiling it on the device " +
+                    "failed too (${error.message ?: error.javaClass.simpleName}).",
+                error
+            )
+        }
+    }
 
     const val BOOK_MATERIAL = BOOK
     const val WOOD_MATERIAL = WOOD

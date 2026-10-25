@@ -28,10 +28,20 @@ fi
 chmod +x .matc/matc
 echo "matc: $(.matc/matc --version 2>&1 | head -1)"
 
+# The output is named after the material's declared name, not after the file it came from.
+# Filament looks a material up by name, so the two drifting apart means the app asks for an
+# asset that was never written and quietly falls back to compiling on the phone — the very
+# thing this step exists to remove.
 for source in materials/*.mat; do
-  name="$(basename "$source" .mat)"
+  name="$(sed -n 's/^[[:space:]]*name[[:space:]]*:[[:space:]]*\([A-Za-z0-9_]*\).*/\1/p' "$source" | head -1)"
+  if [ -z "$name" ]; then
+    echo "no material name declared in $source" >&2
+    exit 1
+  fi
   echo "== $source -> $OUT/$name.filamat"
   .matc/matc -p mobile -a all -o "$OUT/$name.filamat" "$source"
+  test -s "$OUT/$name.filamat" || { echo "matc wrote nothing for $source" >&2; exit 1; }
+  echo "   material '$name', $(wc -c < "$OUT/$name.filamat") bytes"
 done
 
 ls -l "$OUT"

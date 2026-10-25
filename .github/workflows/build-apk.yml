@@ -185,6 +185,25 @@ jobs:
           done
           if [ "$missing" -ne 0 ]; then exit 1; fi
 
+      # The shelf asks for these by material name. A build that ships book.filamat when the app
+      # wants book_pbr.filamat looks completely healthy and then refuses to start on the phone,
+      # which is exactly what happened — so the file names are checked in the APK itself.
+      - name: Check the APK carries the compiled materials
+        run: |
+          apk=app/build/outputs/apk/debug/lore-debug.apk
+          echo "Materials in $apk:"
+          unzip -l "$apk" | grep -E 'assets/materials/' || echo "(none)"
+          missing=0
+          for name in book_pbr wood_pbr; do
+            if unzip -l "$apk" | grep -qE "assets/materials/$name\.filamat"; then
+              echo "OK: $name.filamat is packaged"
+            else
+              echo "::error title=Missing material::assets/materials/$name.filamat is not in the APK, so the shelf cannot start."
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then exit 1; fi
+
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:

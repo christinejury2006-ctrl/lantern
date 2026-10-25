@@ -27,7 +27,11 @@ jobs:
       # compile there takes the whole scene with it, and the device has no way to tell anyone
       # which line it choked on. matc fails the build instead.
       - name: Compile the shelf materials
-        run: ./tools/compile-materials.sh 2>&1 | tee material-compile.log
+        run: |
+          # pipefail, or bash reports tee's status and a failing compiler looks like a pass.
+          # That is how an empty materials directory reached an APK and a phone.
+          set -o pipefail
+          ./tools/compile-materials.sh 2>&1 | tee material-compile.log
 
       # The runner's log lives on a host that cannot always be reached from where this is
       # debugged, so the compiler's own words are posted as a commit comment as well.

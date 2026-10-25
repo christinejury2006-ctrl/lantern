@@ -19,9 +19,12 @@ if [ ! -x .matc/matc ]; then
   rm -f filament.tgz
   FOUND="$(find . -path ./.matc -prune -o -type f -name matc -print | head -1)"
   if [ -z "$FOUND" ]; then
-    echo "matc was not in the Filament release archive" >&2
+    echo "matc was not in the Filament release archive. What it did contain:" >&2
+    find . -maxdepth 3 -type d -name filament >&2 || true
+    find . -maxdepth 4 -type f -perm -u+x | head -20 >&2 || true
     exit 1
   fi
+  echo "matc found at $FOUND"
   if [ "$FOUND" != ".matc/matc" ]; then mv "$FOUND" .matc/matc; fi
 fi
 

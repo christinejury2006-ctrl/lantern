@@ -85,9 +85,10 @@ jobs:
           ./gradlew assembleDebug --no-daemon --stacktrace > gradle-build.log 2>&1
           code=$?
           if [ "$code" -ne 0 ]; then
-            msg=$(grep -A 14 "What went wrong" gradle-build.log | tr '\n' '|' | cut -c1-3000)
-            [ -z "$msg" ] && msg=$(grep -m 20 -E "^e: |^error:|Caused by|Unresolved" gradle-build.log | tr '\n' '|' | cut -c1-3000)
-            [ -z "$msg" ] && msg=$(tail -n 25 gradle-build.log | tr '\n' '|' | cut -c1-3000)
+            errs=$(grep -m 12 -E "^e: " gradle-build.log | tr '\n' '|' | cut -c1-2500)
+            why=$(grep -A 6 "What went wrong" gradle-build.log | tr '\n' '|' | cut -c1-800)
+            msg="${errs:-$why}"
+            [ -z "$msg" ] && msg=$(tail -n 25 gradle-build.log | tr '\n' '|' | cut -c1-2000)
             echo "::error title=APK build failed::$msg"
           fi
           tail -n 40 gradle-build.log

@@ -26,7 +26,7 @@ object ShelfMaterials {
      * The compiled package is cached in filesDir, so a device that ran an older build would
      * otherwise keep loading a material that has no spine sampler in it.
      */
-    private const val VERSION = 2
+    private const val VERSION = 3
 
     /** A book: leather or cloth, with a paper fore-edge. */
     private const val BOOK = "book_pbr"
@@ -47,12 +47,26 @@ object ShelfMaterials {
     private val BOOK_FRAGMENT = """
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
-            vec2 uv = materialParams.uvOffset + materialParams.uvScale * getUV0();
+            vec2 spine = getUV0();
+            vec2 uv = materialParams.uvOffset + materialParams.uvScale * spine;
             vec4 art = texture(materialParams_spineMap, uv);
             // A book with no cover keeps its binding colour.
             material.baseColor = mix(vec4(materialParams.baseColor, 1.0), art, materialParams.useArtwork);
             material.roughness = materialParams.roughness;
             material.metallic = materialParams.metallic;
+
+            // A brass ribbon across the spine of a book picked for the reader. Drawn rather than
+            // modelled: it is a stripe on the leather, and a second piece of geometry per book
+            // would cost draw calls to say the same thing.
+            //
+            // The band is placed on the spine's own uv, which runs down the book's height, so it
+            // sits at a fixed height on the book however tall the book is on screen. It is
+            // deliberately narrow and sits just above the middle, where a real ribbon is tied.
+            float across = step(0.42, spine.y) * step(spine.y, 0.56) * materialParams.useRibbon;
+            vec3 brass = vec3(0.60, 0.40, 0.13);
+            material.baseColor = mix(material.baseColor, vec4(brass, 1.0), across);
+            material.roughness = mix(material.roughness, 0.30, across);
+            material.metallic = mix(material.metallic, 0.80, across);
         }
     """.trimIndent()
 
@@ -132,6 +146,8 @@ object ShelfMaterials {
                     uniformParameter(MaterialBuilder.UniformType.FLOAT2, "uvOffset")
                     uniformParameter(MaterialBuilder.UniformType.FLOAT2, "uvScale")
                     uniformParameter(MaterialBuilder.UniformType.FLOAT, "useArtwork")
+                    // 1 when this book is a pick for the reader, so the spine carries a ribbon.
+                    uniformParameter(MaterialBuilder.UniformType.FLOAT, "useRibbon")
                     samplerParameter(
                         MaterialBuilder.SamplerType.SAMPLER_2D,
                         MaterialBuilder.SamplerFormat.FLOAT,

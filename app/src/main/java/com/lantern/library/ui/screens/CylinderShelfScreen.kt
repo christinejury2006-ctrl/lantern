@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.lantern.library.data.LibraryBook
+import com.lantern.library.data.Recommendations
 import com.lantern.library.shelf3d.CylinderRotationController
 import com.lantern.library.shelf3d.CylinderMath
 import com.lantern.library.shelf3d.CylinderShelfSurfaceView
@@ -121,7 +122,18 @@ fun CylinderShelfScreen(
     }
 
     val ready = materialBytes
+    // Books per tier. The tiers share the drum's slots, so whether a tapped book is the one at
+    // the front is a question about its slot, not about its index.
+    val perRow = remember(books.size, rows) {
+        CylinderMath.perRowFor(books.size, rows).coerceAtLeast(1)
+    }
     val front = books.getOrNull(frontIndex.coerceIn(0, (books.size - 1).coerceAtLeast(0)))
+
+    // Books picked for the reader, marked with a brass ribbon on the spine by the scene.
+    val picks = remember(books) { Recommendations.picks(books) }
+    val pickedIndices = remember(books, picks) {
+        books.indices.filter { books[it].id in picks }.toSet()
+    }
 
     /** Turns the drum to the first book matching the query. */
     fun search() {
@@ -156,12 +168,16 @@ fun CylinderShelfScreen(
                         bookColors = colors,
                         spineAtlas = spineAtlas,
                         rows = rows,
+                        picked = pickedIndices,
                         onError = { message -> failure = message },
                         onFrontBook = { index -> frontIndex = index },
                         onTapBook = { index ->
                             // First tap turns the case to the book; tapping it at the front
-                            // lifts it out, with the shelf softening behind.
-                            if (index == frontIndex) {
+                            // lifts it out, with the shelf softening behind. On any tier: the
+                            // front most book is the one at the front slot, whichever row it
+                            // stands on.
+                            val atFront = index % perRow == frontIndex % perRow
+                            if (atFront) {
                                 books.getOrNull(index)?.let { lifted = it }
                             } else {
                                 controller.revealBook(index)
@@ -274,6 +290,17 @@ fun CylinderShelfScreen(
                             fontSize = 12.sp,
                             maxLines = 1
                         )
+                        // The ribbon on the spine, said in words. Only for the book at the
+                        // front, so the line names the book the reader is looking at.
+                        if (front != null && front.id in picks) {
+                            Text(
+                                "Picked for you",
+                                color = Color(0xFFD9A94F),
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
                     }
                 }
             }

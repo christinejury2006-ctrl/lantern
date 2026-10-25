@@ -22,3 +22,5 @@ captures/
 filament.tgz
 material-compile.log
 material-failure.md
+material-report.txt
+material-missing.md

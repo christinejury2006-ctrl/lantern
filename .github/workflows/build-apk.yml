@@ -189,10 +189,17 @@ jobs:
       # wants book_pbr.filamat looks completely healthy and then refuses to start on the phone,
       # which is exactly what happened — so the file names are checked in the APK itself.
       - name: Check the APK carries the compiled materials
+        id: materials
         run: |
           apk=app/build/outputs/apk/debug/lore-debug.apk
-          echo "Materials in $apk:"
-          unzip -l "$apk" | grep -E 'assets/materials/' || echo "(none)"
+          {
+            echo "workspace: $(pwd)"
+            echo "generated materials on disk:"
+            ls -l app/src/main/assets/materials || echo "(no such directory)"
+            echo "assets in the APK:"
+            unzip -l "$apk" | grep -E 'assets/' | head -20 || echo "(no assets at all)"
+          } > material-report.txt
+          cat material-report.txt
           missing=0
           for name in book_pbr wood_pbr; do
             if unzip -l "$apk" | grep -qE "assets/materials/$name\.filamat"; then
@@ -203,6 +210,20 @@ jobs:
             fi
           done
           if [ "$missing" -ne 0 ]; then exit 1; fi
+
+      - name: Report a missing material
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "The APK did not carry the compiled materials."
+            echo '```'
+            head -c 20000 material-report.txt 2>/dev/null || echo "no report captured"
+            echo '```'
+          } > material-missing.md
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+            -F body=@material-missing.md >/dev/null 2>&1 || true
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4

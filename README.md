@@ -2,6 +2,14 @@
 
 Native Android reader **and** a browser demo. Version **3.5.0**.
 
+## What it does
+
+- **Library** — your books on a shelf, plus daily *For You* picks and a *Continue reading* shelf.
+- **Reader** — EPUB and PDF with a real page turn, bookmarks, themes and reading fonts.
+- **Studio** — paste one web page and turn a serialised story into a proper EPUB you can keep.
+- **Explore** — search Project Gutenberg's public-domain catalogue and download straight into the reader.
+- **You** — appearance, interests and optional Google Drive sync for library, progress and settings.
+
 ## Test in the browser (GitHub Pages)
 
 Open:
@@ -9,9 +17,29 @@ Open:
 **https://christinejury2006-ctrl.github.io/lantern/**
 
 Library, reader, Search/Explore (Project Gutenberg), Light/Dark. No install.
+The browser demo is a cut-down preview: PDFs, Studio and Drive sync are Android only.
+
+> Maintainer note: this link serves `/docs` and needs GitHub Pages switched on once —
+> **Settings → Pages → Source: Deploy from a branch → `main` / `/docs` → Save**.
 
 ## Test on a phone
 
-Install `Lantern-debug.apk` (Android 8+), or open this folder in Android Studio and Run.
+1. Open the **Actions** tab → **Build debug APK** → latest successful run.
+2. Download the **Lore-debug** artifact.
+3. Install `lore-debug.apk` (Android 8+) — you may need to allow installs from your browser or file manager.
+
+Or open this folder in Android Studio and Run.
 
 GitHub itself cannot launch an APK. The Pages link is the web test.
+
+## Building locally
+
+```bash
+./gradlew testDebugUnitTest    # JVM unit tests
+./gradlew assembleDebug        # APK at app/build/outputs/apk/debug/
+```
+
+A Google Books API key is optional (daily *For You* recommendations). Put it in
+`local.properties` as `GOOGLE_BOOKS_API_KEY=...`, or pass `-PGOOGLE_BOOKS_API_KEY=...`.
+Restrict the key to this app's package in Google Cloud Console — it ships inside the APK.
+Never commit a real key. See `local.properties.example`.

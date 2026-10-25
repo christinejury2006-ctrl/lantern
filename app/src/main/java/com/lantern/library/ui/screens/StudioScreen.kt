@@ -26,6 +26,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lantern.library.data.BookFormat
+import com.lantern.library.data.LibraryBook
 import com.lantern.library.data.ReaderTheme
 import com.lantern.library.data.StudioPhase
 import com.lantern.library.data.StudioSession
@@ -36,6 +37,8 @@ import com.lantern.library.studio.WebPhase
 import com.lantern.library.ui.components.AuroraBackdrop
 import com.lantern.library.ui.components.CoverFace
 import com.lantern.library.ui.components.GlassCard
+import com.lantern.library.ui.components.MiniShelf
+import com.lantern.library.ui.components.Spine
 import com.lantern.library.ui.theme.Coral
 import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.InkSoft
@@ -47,6 +50,8 @@ fun StudioScreen(
     theme: ReaderTheme,
     session: StudioSession?,
     web: WebDraft?,
+    studioBooks: List<LibraryBook> = emptyList(),
+    onOpenBook: (LibraryBook) -> Unit = {},
     onAddFile: () -> Unit,
     onSend: (String, String) -> Unit,
     onCancel: () -> Unit,
@@ -98,6 +103,23 @@ fun StudioScreen(
                     GlassCard(Modifier.fillMaxWidth().padding(top = 14.dp).clickable(onClick = onAddFile), dark, 18) {
                         Text("Add EPUB or PDF", color = ink, fontSize = 15.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp))
                     }
+                    // Books this Studio has made live on a little shelf of their own.
+                    Spacer(Modifier.height(18.dp))
+                    MiniShelf(
+                        spines = studioBooks.map { book ->
+                            Spine(
+                                id = book.id,
+                                title = book.title,
+                                author = book.author,
+                                pages = book.pageCount,
+                                progress = book.progress
+                            )
+                        },
+                        dark = dark,
+                        onOpen = { spine ->
+                            studioBooks.firstOrNull { it.id == spine.id }?.let(onOpenBook)
+                        }
+                    )
                 }
             }
         }

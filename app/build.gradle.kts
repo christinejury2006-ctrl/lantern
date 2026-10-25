@@ -71,6 +71,7 @@ dependencies {
     implementation("com.google.android.gms:play-services-auth:20.7.0")
     implementation("io.github.oothp:pdfium-android:1.9.5-beta01")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    testImplementation("junit:junit:4.13.2")
 }
 
 /** Dev: GOOGLE_BOOKS_API_KEY or google.books.api.key in local.properties (gitignored), or env/Gradle property. CI: GitHub secret GOOGLE_BOOKS_API_KEY. Never commit the key. */

@@ -116,6 +116,7 @@ import com.lantern.library.data.ReaderAppearance
 import com.lantern.library.data.ReaderTheme
 import com.lantern.library.data.ReadingPrefs
 import com.lantern.library.ui.components.AppearanceLayer
+import com.lantern.library.ui.components.LeafPager
 import com.lantern.library.ui.components.readerChromeBar
 import com.lantern.library.ui.components.readerChromePanel
 import com.lantern.library.ui.theme.Ink
@@ -274,6 +275,11 @@ fun ReaderScreen(
         initialPage = book.currentPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0)),
         pageCount = { pageCount }
     )
+    // EPUB swipe mode keeps its own page index: the page is turned by a hinged leaf,
+    // not by a pager, so the reader owns the current page here.
+    var epubPage by remember(book.id) {
+        mutableStateOf(book.currentPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0)))
+    }
     val scrollState = rememberScrollState()
     val pdfList = rememberLazyListState(
         initialFirstVisibleItemIndex = book.currentPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
@@ -296,8 +302,12 @@ fun ReaderScreen(
     }
     LaunchedEffect(pager, pageCount, prefs.swipeMode, book.format, ready, epubRestored) {
         if (!prefs.swipeMode) return@LaunchedEffect
-        if (book.format != BookFormat.PDF && (!ready || !epubRestored)) return@LaunchedEffect
+        if (book.format != BookFormat.PDF) return@LaunchedEffect
         snapshotFlow { pager.currentPage }.collect { onProgress(it, pageCount) }
+    }
+    LaunchedEffect(epubPage, pageCount, prefs.swipeMode, book.format, ready) {
+        if (!prefs.swipeMode || book.format == BookFormat.PDF || !ready) return@LaunchedEffect
+        onProgress(epubPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0)), pageCount)
     }
     LaunchedEffect(scrollState, pageCount, prefs.swipeMode, book.format, ready, epubRestored) {
         if (prefs.swipeMode || book.format == BookFormat.PDF || !ready || !epubRestored) return@LaunchedEffect
@@ -318,7 +328,7 @@ fun ReaderScreen(
         if (!prefs.swipeMode) return@LaunchedEffect
         if (!ready || pageCount <= 0) return@LaunchedEffect
         val target = book.currentPage.coerceIn(0, pageCount - 1)
-        if (pager.currentPage != target) pager.scrollToPage(target)
+        if (epubPage != target) epubPage = target
         epubRestored = true
     }
     LaunchedEffect(book.id, ready, prefs.swipeMode, book.format, scrollState.maxValue, pageCount) {
@@ -352,7 +362,7 @@ fun ReaderScreen(
         val target = p.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
         scope.launch {
             if (prefs.swipeMode) {
-                pager.scrollToPage(target)
+                if (book.format == BookFormat.PDF) pager.scrollToPage(target) else epubPage = target
             } else if (book.format == BookFormat.PDF) {
                 pdfList.scrollToItem(target)
             } else if (scrollState.maxValue > 0 && pageCount > 1) {
@@ -448,10 +458,12 @@ fun ReaderScreen(
             }
             else -> key(book.id, epubUsesPager) {
                 if (epubUsesPager) {
-                    HorizontalPager(
-                        state = pager,
-                        modifier = Modifier.fillMaxSize(),
-                        userScrollEnabled = !menuOpen
+                    LeafPager(
+                        pageCount = pageCount,
+                        page = epubPage,
+                        onPage = { epubPage = it },
+                        enabled = !menuOpen,
+                        modifier = Modifier.fillMaxSize()
                     ) { i ->
                         key(prefs.fontSizeSp, i) {
                             PageLeaf(
@@ -570,7 +582,7 @@ fun ReaderScreen(
                 }
                 ColBtn(Icons.Filled.Favorite, "Bookmarks", ink, selected = menu == ReaderMenu.Marks) {
                     val page = when {
-                        prefs.swipeMode -> pager.currentPage
+                        prefs.swipeMode -> if (book.format == BookFormat.PDF) pager.currentPage else epubPage
                         book.format == BookFormat.PDF -> pdfList.firstVisibleItemIndex
                         scrollState.maxValue <= 0 -> 0
                         else -> ((scrollState.value.toFloat() / scrollState.maxValue) * (pageCount - 1).coerceAtLeast(0)).toInt()

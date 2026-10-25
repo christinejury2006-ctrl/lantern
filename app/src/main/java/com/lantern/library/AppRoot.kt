@@ -187,6 +187,12 @@ internal fun LanternRoot(store: LanternStore) {
                     theme = theme,
                     session = store.studio,
                     web = store.web,
+                    studioBooks = store.books.filter { it.id.startsWith("web_") },
+                    onOpenBook = { made ->
+                        store.openForReading(made) { ready ->
+                            if (ready != null) tab = Route.Reader(ready.id, fromStudio = true)
+                        }
+                    },
                     onAddFile = { addFile() },
                     onSend = { title, author -> store.studioSend(title, author) },
                     onCancel = { store.studioCancel() },

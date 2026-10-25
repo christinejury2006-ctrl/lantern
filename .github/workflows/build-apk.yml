@@ -2,6 +2,11 @@ name: Build debug APK
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "arena/**"
+  pull_request:
 
 jobs:
   build:
@@ -25,6 +30,11 @@ jobs:
         run: |
           sdkmanager "platforms;android-34" "build-tools;34.0.0" "build-tools;30.0.3"
 
+      - name: Run unit tests
+        run: |
+          chmod +x gradlew
+          ./gradlew testDebugUnitTest --no-daemon --stacktrace
+
       - name: Build debug APK
         env:
           GOOGLE_BOOKS_API_KEY: ${{ secrets.GOOGLE_BOOKS_API_KEY }}
@@ -43,3 +53,11 @@ jobs:
           name: Lore-debug
           path: app/build/outputs/apk/debug/lore-debug.apk
           if-no-files-found: error
+
+      - name: Upload unit test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lore-unit-tests
+          path: app/build/reports/tests/testDebugUnitTest
+          if-no-files-found: ignore

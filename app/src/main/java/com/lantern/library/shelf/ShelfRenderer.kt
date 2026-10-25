@@ -71,7 +71,8 @@ class ShelfRenderer(
     private val slots: List<ShelfLayout.Slot>,
     private val onStats: (fps: Int, p95Ms: Float, drawCalls: Int, moving: Boolean) -> Unit,
     private val onOpen: (slotIndex: Int) -> Unit,
-    private val onTap: (slotIndex: Int) -> Unit = {}
+    private val onTap: (slotIndex: Int) -> Unit = {},
+    private val onError: (message: String) -> Unit = {}
 ) : TextureView.SurfaceTextureListener {
 
     private companion object {
@@ -309,6 +310,7 @@ class ShelfRenderer(
             requestFrame()
         } catch (t: Throwable) {
             Log.e(TAG, "the shelf could not start", t)
+            reportFailure("The room could not be drawn: ${t.javaClass.simpleName}", t)
         }
     }
 
@@ -389,7 +391,18 @@ class ShelfRenderer(
             }
         } catch (t: Throwable) {
             Log.e(TAG, "frame failed", t)
+            reportFailure("Drawing the room failed: ${t.javaClass.simpleName}", t)
         }
+    }
+
+    private var failureReported = false
+
+    /** Surfaces a problem once, so the screen can say what happened instead of hanging. */
+    private fun reportFailure(message: String, t: Throwable) {
+        if (failureReported) return
+        failureReported = true
+        val detail = t.message?.takeIf { it.isNotBlank() }?.let { "$message ($it)" } ?: message
+        runCatching { onError(detail) }
     }
 
     private fun recordFrameTime(ms: Float) {

@@ -198,10 +198,12 @@ object ShelfGeometry {
      */
     fun roomMesh(segments: Int = 24): Mesh {
         val b = Builder()
-        val a0 = -ShelfLayout.HALF_ARC - 0.42f
-        val a1 = ShelfLayout.HALF_ARC + 0.42f
-        val top = ShelfLayout.caseTopY() + 0.62f
-        val bottom = ShelfLayout.caseBottomY() - 0.78f
+        // Deliberately much larger than the case: the painted room has to cover the whole
+        // window whatever shape it is, or the scene shows black bars above and below it.
+        val a0 = -ShelfLayout.HALF_ARC - 0.70f
+        val a1 = ShelfLayout.HALF_ARC + 0.70f
+        val top = ShelfLayout.caseTopY() + 2.30f
+        val bottom = ShelfLayout.caseBottomY() - 2.60f
         val base = 0
         for (s in 0..segments) {
             val t = s.toFloat() / segments

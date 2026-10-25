@@ -251,11 +251,12 @@ object ShelfLayout {
      */
     fun pickAngle(screenX: Float, screenY: Float, viewW: Float, viewH: Float): Pair<Int, Float>? {
         if (viewW <= 0f || viewH <= 0f) return null
+        val aspect = viewW / viewH
         val nx = (screenX / viewW - 0.5f) * 2f
-        val angle = atan(nx * tan(halfAngleH()))
+        val angle = atan(nx * tanHFor(aspect))
         val ny = (0.5f - screenY / viewH) * 2f
         // where that ray crosses the plane of the books
-        val y = ny * tan(halfAngleV(viewW / viewH)) * RADIUS
+        val y = ny * tanVFor(aspect) * RADIUS
         for (row in 0 until ROWS) {
             if (y >= rowBaseY(row) && y <= rowCeilingY(row) + BOARD) return Pair(row, angle)
         }
@@ -268,13 +269,36 @@ object ShelfLayout {
     /** Half the vertical field of view for a given aspect ratio. */
     fun halfAngleV(aspect: Float): Float = atan(tan(halfAngleH()) / aspect.coerceAtLeast(0.2f))
 
+    /** Half the height of the case, plus a margin of air above and below it. */
+    fun visibleHalfHeight(): Float = (caseTopY() - caseBottomY()) / 2f + 0.10f
+
+    /**
+     * Tangent of the half vertical field of view, for whatever shape of window the scene has
+     * been given.
+     *
+     * The shelf has to work in a tall phone, a short band inside the Library and a wide
+     * landscape window, so the camera fits whichever constraint bites harder: the full height
+     * of the case, or the half width of shelf we want to see. Previously the vertical angle
+     * was derived purely from the width, which cropped the top and bottom rows off any
+     * window that was not tall enough.
+     */
+    fun tanVFor(aspect: Float): Float {
+        val a = aspect.coerceAtLeast(0.2f)
+        val forHeight = visibleHalfHeight() / RADIUS
+        val forWidth = (HALF_WIDTH / RADIUS) / a
+        return maxOf(forHeight, forWidth)
+    }
+
+    /** Tangent of the half horizontal field of view for that same window. */
+    fun tanHFor(aspect: Float): Float = tanVFor(aspect) * aspect.coerceAtLeast(0.2f)
+
     /**
      * Perspective projection terms for Camera.setProjection:
      * left, right, bottom, top, near, far.
      */
     fun projection(aspect: Float, near: Float): FloatArray {
-        val th = tan(halfAngleH()) * near
-        val tv = tan(halfAngleV(aspect)) * near
+        val th = tanHFor(aspect) * near
+        val tv = tanVFor(aspect) * near
         return floatArrayOf(-th, th, -tv, tv, near, 8f)
     }
 

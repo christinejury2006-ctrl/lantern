@@ -107,16 +107,18 @@ fun ShelfPreviewScreen(
                         if (moving) "  ·  moving" else "  ·  idle"
                 },
                 onOpen = { index -> books.getOrNull(index)?.let(onOpenBook) },
-                onLifted = { lifted = it }
+                onLifted = { lifted = it },
+                onError = { message -> failure = message }
             )
         }
 
-        // Whatever is still coming, this covers the surface until the first frame lands.
-        if (coverAlpha > 0f) {
+        // Covers the surface until the first frame lands, and stays if the scene fails:
+        // a failure has to be readable, not hidden behind a half-drawn shelf.
+        if (coverAlpha > 0f || failure != null) {
             Box(
                 Modifier
                     .fillMaxSize()
-                    .alpha(coverAlpha)
+                    .alpha(if (failure != null) 1f else coverAlpha)
                     .background(Brush.verticalGradient(listOf(Ink, Color(0xFF241A13))))
             ) {
                 Column(

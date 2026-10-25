@@ -3,6 +3,7 @@ package com.lantern.library.shelf
 import kotlin.math.abs
 import kotlin.math.atan
 import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.math.hypot
 import kotlin.math.sin
 import org.junit.Assert.assertEquals
@@ -201,6 +202,48 @@ class ShelfLayoutTest {
         assertEquals(-left, right, 1e-6f)
         assertEquals(-bottom, top, 1e-6f)
         assertTrue(top > right / 0.45f * 0.9f)
+    }
+
+    @Test
+    fun `the whole case fits whatever shape the window is`() {
+        // a portrait phone, the wide band the Library shelf sits in, and landscape
+        for (aspect in listOf(0.45f, 0.75f, 1.0f, 1.4f, 2.2f)) {
+            val tanV = ShelfLayout.tanVFor(aspect)
+            val tanH = ShelfLayout.tanHFor(aspect)
+            // every row of the case is inside the view, top and bottom
+            assertTrue(
+                "aspect $aspect crops the case vertically",
+                tanV * ShelfLayout.RADIUS >= ShelfLayout.visibleHalfHeight() - 1e-5f
+            )
+            // and we still see at least the width the shelf is tuned for
+            assertTrue(
+                "aspect $aspect shows too little shelf",
+                tanH * ShelfLayout.RADIUS >= ShelfLayout.HALF_WIDTH - 1e-5f
+            )
+            assertEquals(aspect, tanH / tanV, 1e-4f)
+        }
+    }
+
+    @Test
+    fun `taps land where the camera projects, at any aspect`() {
+        for (aspect in listOf(0.45f, 1.0f, 1.4f, 2.2f)) {
+            val w = 1000f
+            val h = w / aspect
+            val tanH = ShelfLayout.tanHFor(aspect)
+            val tanV = ShelfLayout.tanVFor(aspect)
+            // project a known point on the shelf and tap it
+            for (angle in listOf(-0.3f, 0f, 0.25f)) {
+                val x = ShelfLayout.RADIUS * sin(angle)
+                val z = ShelfLayout.arcZ(angle, ShelfLayout.RADIUS)
+                val y = ShelfLayout.rowBaseY(1) + 0.1f
+                val sx = (x / -z / tanH * 0.5f + 0.5f) * w
+                val sy = (0.5f - y / -z / tanV * 0.5f) * h
+                val pick = ShelfLayout.pickAngle(sx, sy, w, h)
+                assertNotNull("aspect $aspect missed the shelf", pick)
+                assertEquals(1, pick!!.first)
+                assertEquals(angle, pick.second, 0.01f)
+            }
+        }
     }
 
     @Test

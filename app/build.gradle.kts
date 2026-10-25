@@ -24,6 +24,11 @@ android {
         versionCode = resolveVersionCode()
         versionName = "3.5.1"
         vectorDrawables.useSupportLibrary = true
+        // Only the two ABIs phones actually use. The native renderer ships for both;
+        // emulator ABIs would triple the download for nobody's benefit.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
         buildConfigField("String", "GOOGLE_BOOKS_API_KEY", "\"${escapeBuildConfig(resolveGoogleBooksApiKey())}\"")
     }
 
@@ -79,10 +84,11 @@ android {
         compose = true
         buildConfig = true
     }
-    composeOptions { kotlinCompilerExtensionVersion = "1.4.8" }
-    packagingOptions {
+    composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
+    packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
+
 }
 
 dependencies {

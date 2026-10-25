@@ -394,40 +394,68 @@ private fun RecentlyReadShelf(
             Text("Your books", color = mute, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 16.dp).padding(top = 2.dp))
             Spacer(Modifier.height(8.dp))
             val pager = rememberPagerState(pageCount = { books.size })
-            Box(Modifier.fillMaxWidth().height(190.dp)) {
+            Box(Modifier.fillMaxWidth().height(202.dp)) {
                 Canvas(Modifier.fillMaxSize()) {
-                    val shelf = androidx.compose.ui.graphics.Path().apply {
-                        moveTo(0f, size.height * 0.70f)
-                        cubicTo(size.width * 0.25f, size.height * 0.86f, size.width * 0.75f, size.height * 0.86f, size.width, size.height * 0.70f)
-                        lineTo(size.width, size.height * 0.84f)
-                        cubicTo(size.width * 0.75f, size.height * 0.96f, size.width * 0.25f, size.height * 0.96f, 0f, size.height * 0.84f)
+                    val top = size.height * 0.70f
+                    val front = androidx.compose.ui.graphics.Path().apply {
+                        moveTo(-size.width * 0.02f, top)
+                        cubicTo(size.width * 0.24f, top + size.height * 0.10f, size.width * 0.76f, top + size.height * 0.10f, size.width * 1.02f, top)
+                        lineTo(size.width * 1.02f, size.height * 0.91f)
+                        cubicTo(size.width * 0.74f, size.height * 1.02f, size.width * 0.26f, size.height * 1.02f, -size.width * 0.02f, size.height * 0.91f)
                         close()
                     }
-                    drawPath(shelf, if (dark) Color(0xFF49382F) else Color(0xFF6E4B38))
-                    drawLine(if (dark) Color(0xFF7C6557) else Color(0xFFB58A68),
-                        androidx.compose.ui.geometry.Offset(0f, size.height * 0.72f),
-                        androidx.compose.ui.geometry.Offset(size.width, size.height * 0.72f), strokeWidth = 3.dp.toPx())
+                    val woodTop = androidx.compose.ui.graphics.Path().apply {
+                        moveTo(0f, top - 2.dp.toPx())
+                        cubicTo(size.width * 0.24f, top + size.height * 0.09f, size.width * 0.76f, top + size.height * 0.09f, size.width, top - 2.dp.toPx())
+                        cubicTo(size.width * 0.76f, top + size.height * 0.015f, size.width * 0.24f, top + size.height * 0.015f, 0f, top - 2.dp.toPx())
+                        close()
+                    }
+                    drawPath(front, brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                        colors = if (dark) listOf(Color(0xFF5A4032), Color(0xFF2C211D), Color(0xFF191514))
+                        else listOf(Color(0xFFB9855C), Color(0xFF805035), Color(0xFF593722)),
+                        startY = top, endY = size.height
+                    ))
+                    drawPath(woodTop, brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                        colors = if (dark) listOf(Color(0xFF9A765E), Color(0xFF5D4030))
+                        else listOf(Color(0xFFE5B887), Color(0xFFAC7146)),
+                        startY = top - 3.dp.toPx(), endY = top + size.height * 0.12f
+                    ))
+                    val grain = if (dark) Color(0x557F604B) else Color(0x66F1C99C)
+                    for (i in 0..5) {
+                        val y = top + size.height * (0.035f + i * 0.022f)
+                        drawLine(grain, androidx.compose.ui.geometry.Offset(size.width * 0.04f, y),
+                            androidx.compose.ui.geometry.Offset(size.width * 0.96f, y + size.height * 0.018f),
+                            strokeWidth = if (i == 0) 1.4.dp.toPx() else 0.6.dp.toPx())
+                    }
+                    drawLine(if (dark) Color(0xFFB08A6E) else Color(0xFFFFD8A8),
+                        androidx.compose.ui.geometry.Offset(size.width * 0.02f, top + 1.dp.toPx()),
+                        androidx.compose.ui.geometry.Offset(size.width * 0.98f, top + 1.dp.toPx()), strokeWidth = 1.5.dp.toPx())
+                    drawLine(Color(0x33000000),
+                        androidx.compose.ui.geometry.Offset(size.width * 0.04f, size.height * 0.94f),
+                        androidx.compose.ui.geometry.Offset(size.width * 0.96f, size.height * 0.94f), strokeWidth = 2.dp.toPx())
                 }
-                HorizontalPager(state = pager, contentPadding = PaddingValues(horizontal = 14.dp), pageSpacing = 3.dp,
-                    modifier = Modifier.fillMaxSize().padding(bottom = 16.dp)) { page ->
+                HorizontalPager(state = pager, contentPadding = PaddingValues(horizontal = 10.dp), pageSpacing = 1.dp,
+                    modifier = Modifier.fillMaxSize().padding(bottom = 17.dp)) { page ->
                     val book = books[page]
                     val offset = (pager.currentPage - page) + pager.currentPageOffsetFraction
+                    val distance = kotlin.math.abs(offset).coerceAtMost(1f)
                     Column(Modifier.fillMaxSize().graphicsLayer {
-                        val a = kotlin.math.abs(offset).coerceAtMost(1f)
-                        rotationY = offset * -10f
-                        translationY = a * 9.dp.toPx()
-                        cameraDistance = 20f * density
+                        rotationY = offset * -7f
+                        translationY = distance * 7.dp.toPx()
+                        cameraDistance = 24f * density
+                        shadowElevation = (8f - distance * 4f).dp.toPx()
                     }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Bottom) {
-                        Box(Modifier.width((54f - kotlin.math.abs(offset).coerceAtMost(1f) * 8f).dp)
-                            .height((104f - kotlin.math.abs(offset).coerceAtMost(1f) * 12f).dp)
+                        Box(Modifier.width((57f - distance * 7f).dp)
+                            .height((111f - distance * 10f).dp)
                             .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
-                            .background(if (dark) Color(0xFF37302B) else Color(0xFFE7D9C6))
-                            .combinedClickable(onClick = { onOpen(book) }).padding(horizontal = 3.dp, vertical = 6.dp),
+                            .background(if (dark) Color(0xFF2B211C) else Color(0xFFD5B99A))
+                            .combinedClickable(onClick = { onOpen(book) })
+                            .padding(start = 3.dp, end = 2.dp, top = 4.dp, bottom = 3.dp),
                             contentAlignment = Alignment.Center) {
                             BookCover(book, Modifier.fillMaxSize(), dark)
                         }
                         Spacer(Modifier.height(5.dp))
-                        ReadingProgressBar(book.progress, Modifier.width(48.dp))
+                        ReadingProgressBar(book.progress, Modifier.width(49.dp))
                     }
                 }
             }

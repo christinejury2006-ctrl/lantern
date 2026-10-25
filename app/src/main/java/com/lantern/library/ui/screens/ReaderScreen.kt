@@ -123,7 +123,9 @@ import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.LoreMint
 import com.lantern.library.ui.theme.LoreOnMint
 import com.lantern.library.ui.theme.NightText
+import com.lantern.library.ui.theme.Paper
 import com.lantern.library.ui.theme.Playfair
+import com.lantern.library.ui.theme.SlatePage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
@@ -463,6 +465,7 @@ fun ReaderScreen(
                         page = epubPage,
                         onPage = { epubPage = it },
                         enabled = !menuOpen,
+                        paper = if (dark) SlatePage else Paper,
                         modifier = Modifier.fillMaxSize()
                     ) { i ->
                         key(prefs.fontSizeSp, i) {

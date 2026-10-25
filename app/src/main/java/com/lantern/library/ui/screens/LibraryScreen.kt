@@ -289,10 +289,26 @@ fun LibraryScreen(
 }
 
 private fun LibraryBook.toSpine(): Spine =
-    Spine(id = id, title = title, author = author, pages = pageCount, progress = progress)
+    Spine(
+        id = id,
+        title = title,
+        author = author,
+        pages = pageCount,
+        progress = progress,
+        coverRes = localCover,
+        coverUrl = remoteCover
+    )
 
 private fun DiscoveryBook.toSpine(): Spine =
-    Spine(id = volumeId, title = title, author = authorLine, pages = 260, progress = 0f)
+    Spine(
+        id = volumeId,
+        title = title,
+        author = authorLine,
+        pages = 260,
+        progress = 0f,
+        coverUrl = coverUrl,
+        coverFallbacks = coverUrls
+    )
 
 private fun recentlyRead(books: List<LibraryBook>): List<LibraryBook> {
     val current = books.filter { it.shelf == Shelf.CURRENT }.sortedByDescending { it.lastReadAt }

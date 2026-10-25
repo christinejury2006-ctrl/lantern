@@ -112,7 +112,9 @@ fun StudioScreen(
                                 title = book.title,
                                 author = book.author,
                                 pages = book.pageCount,
-                                progress = book.progress
+                                progress = book.progress,
+                                coverRes = book.localCover,
+                                coverUrl = book.remoteCover
                             )
                         },
                         dark = dark,

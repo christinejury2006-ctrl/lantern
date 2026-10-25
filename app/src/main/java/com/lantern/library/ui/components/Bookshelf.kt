@@ -1,74 +1,101 @@
 package com.lantern.library.ui.components
 
+import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.lantern.library.data.CoverCache
 import com.lantern.library.data.ShelfMath
 import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.Playfair
+import kotlin.math.abs
 
-/** One book as it appears on the shelf. Primitives only, so discovery books fit too. */
+/**
+ * One book as it stands on the shelf. It carries the real cover so the spine is drawn from
+ * the book's own artwork — that is what makes a shelf readable at a glance instead of a row
+ * of anonymous coloured blocks.
+ */
 data class Spine(
     val id: String,
     val title: String,
     val author: String,
     val pages: Int = 240,
-    val progress: Float = 0f
+    val progress: Float = 0f,
+    val coverRes: Int? = null,
+    val coverUrl: String? = null,
+    val coverFallbacks: List<String> = emptyList()
 )
 
-/** Warm, low-contrast wood and wall tones. Shared by every shelf surface. */
+/** Warm wood and plaster. These are the colours that carry the whole "cozy library" read. */
 private object Wood {
-    val wallLightTop = Color(0xFFF3E7D6)
-    val wallLightBottom = Color(0xFFDFCDB2)
-    val wallDarkTop = Color(0xFF251B14)
-    val wallDarkBottom = Color(0xFF15100B)
-    val boardLight = Color(0xFF9A6E46)
-    val boardMid = Color(0xFF6B472C)
-    val boardDeep = Color(0xFF3A2418)
-    val boardDark = Color(0xFF5E4029)
-    val boardDarkMid = Color(0xFF3B2718)
-    val boardDarkDeep = Color(0xFF1D130C)
+    val wallTop = Color(0xFFF1E3D0)
+    val wallBottom = Color(0xFFD9C3A5)
+    val wallTopDark = Color(0xFF22180F)
+    val wallBottomDark = Color(0xFF120C07)
+
+    val cavityLight = Color(0xFF2C1C11)
+    val cavityDark = Color(0xFF140C06)
+
+    val boardFace = Color(0xFF6E4527)
+    val boardFaceDeep = Color(0xFF3E2413)
+    val boardTop = Color(0xFF9C6C42)
+    val boardTopHi = Color(0xFFC08F5E)
+    val boardLip = Color(0xFFD8AE7C)
+    val boardDark = Color(0xFF4A2E1B)
+    val boardDarkDeep = Color(0xFF22140B)
+    val boardDarkTop = Color(0xFF6B4527)
+
     val gold = Color(0xFFC8A96B)
-    val grain = Color(0xFF2A1A10)
+    val pagesTop = Color(0xFFE9DCC0)
+    val pagesTopDeep = Color(0xFFCDBB99)
 }
 
 /**
- * The room the shelves live in: a warm plaster wall with a soft lamp glow and a gentle
- * vignette. Deliberately quiet so the books carry the colour.
+ * The room: plaster wall, lamp glow, vignette. Quiet on purpose — the books hold the colour.
  */
 @Composable
 fun ShelfRoom(
@@ -78,27 +105,25 @@ fun ShelfRoom(
     content: @Composable BoxScope.() -> Unit
 ) {
     val a = if (wallAlpha.isFinite()) wallAlpha.coerceIn(0f, 1f) else 1f
-    val top = (if (dark) Wood.wallDarkTop else Wood.wallLightTop).copy(alpha = a)
-    val bottom = (if (dark) Wood.wallDarkBottom else Wood.wallLightBottom).copy(alpha = a)
+    val top = (if (dark) Wood.wallTopDark else Wood.wallTop).copy(alpha = a)
+    val bottom = (if (dark) Wood.wallBottomDark else Wood.wallBottom).copy(alpha = a)
     Box(modifier.fillMaxSize().background(Brush.verticalGradient(listOf(top, bottom)))) {
         Canvas(Modifier.fillMaxSize()) {
-            // lamp glow from the top left, like a reading lamp just off screen
             drawRect(
                 Brush.radialGradient(
                     colors = listOf(
-                        (if (dark) Color(0xFF6B4E33) else Color(0xFFFFF6E6)).copy(alpha = 0.55f),
+                        (if (dark) Color(0xFF7A5836) else Color(0xFFFFF8EA)).copy(alpha = 0.5f),
                         Color.Transparent
                     ),
-                    center = Offset(size.width * 0.18f, -size.height * 0.05f),
-                    radius = size.width * 0.95f
+                    center = Offset(size.width * 0.15f, -size.height * 0.08f),
+                    radius = size.width
                 )
             )
-            // corner vignette keeps the eye on the shelf
             drawRect(
                 Brush.radialGradient(
-                    colors = listOf(Color.Transparent, Color(0x66000000)),
-                    center = Offset(size.width * 0.5f, size.height * 0.42f),
-                    radius = size.maxDimension * 0.85f
+                    colors = listOf(Color.Transparent, Color(0x59000000)),
+                    center = Offset(size.width * 0.5f, size.height * 0.40f),
+                    radius = size.maxDimension * 0.8f
                 )
             )
         }
@@ -107,187 +132,312 @@ fun ShelfRoom(
 }
 
 /**
- * A single curved shelf board seen slightly from above. The top edge bows down in the
- * middle exactly like a real board under load, which is what sells the curve.
+ * The wooden case behind the books: a deep recess so the books sit *inside* a shelf rather
+ * than floating on a line, with a shadowed back panel and a lit upper lip.
  */
 @Composable
-fun ShelfBoard(
-    dark: Boolean,
-    modifier: Modifier = Modifier,
-    height: Dp = 24.dp
-) {
-    val top = if (dark) Wood.boardDark else Wood.boardLight
-    val mid = if (dark) Wood.boardDarkMid else Wood.boardMid
-    val deep = if (dark) Wood.boardDarkDeep else Wood.boardDeep
-    Canvas(modifier.fillMaxWidth().height(height)) {
-        val w = size.width
-        val h = size.height
-
-        val face = Path().apply {
-            moveTo(0f, 0f)
-            quadraticBezierTo(w / 2f, h * 0.30f, w, 0f)
-            lineTo(w, h * 0.62f)
-            quadraticBezierTo(w / 2f, h * 1.04f, 0f, h * 0.62f)
-            close()
-        }
-        drawPath(face, Brush.verticalGradient(listOf(top, mid, deep)))
-
-        // Lit top lip, then a shadow line underneath it: this is the "edge" of the wood.
-        val lip = Path().apply {
-            moveTo(0f, 0f)
-            quadraticBezierTo(w / 2f, h * 0.30f, w, 0f)
-        }
-        drawPath(
-            lip,
-            Color(0xFFFFE9C8).copy(alpha = if (dark) 0.22f else 0.5f),
-            style = Stroke(width = 1.6.dp.toPx())
-        )
-        drawPath(
-            Path().apply {
-                moveTo(0f, 2.5.dp.toPx())
-                quadraticBezierTo(w / 2f, h * 0.30f + 2.5.dp.toPx(), w, 2.5.dp.toPx())
-            },
-            Color.Black.copy(alpha = 0.20f),
-            style = Stroke(width = 1.dp.toPx())
-        )
-
-        // Long, uneven grain lines.
-        var y = h * 0.20f
-        var i = 0
-        while (y < h * 0.92f) {
-            val drift = h * 0.10f
-            drawLine(
-                color = Wood.grain,
-                start = Offset(0f, y),
-                end = Offset(w, y - drift),
-                strokeWidth = 0.8.dp.toPx(),
-                alpha = if (i % 3 == 0) 0.10f else 0.05f
+private fun ShelfCavity(dark: Boolean, modifier: Modifier = Modifier) {
+    Canvas(modifier.fillMaxSize()) {
+        val light = if (dark) Wood.cavityLight else Color(0xFF3B2718)
+        val darkC = if (dark) Wood.cavityDark else Color(0xFF1E120A)
+        drawRect(
+            Brush.verticalGradient(
+                0f to darkC,
+                0.35f to light,
+                1f to Color(0xFF120B06)
             )
-            y += 3.2.dp.toPx()
-            i++
+        )
+        // wood grain on the back panel
+        var y = size.height * 0.1f
+        while (y < size.height) {
+            drawLine(
+                Color.Black,
+                Offset(0f, y),
+                Offset(size.width, y - 3f),
+                strokeWidth = 1.2f,
+                alpha = 0.06f
+            )
+            y += 9f
         }
     }
 }
 
 /**
- * A single book seen spine-on: cloth or leather boards, gilt bands, a lean, and a ribbon
- * for books in progress. Title runs down the spine the way a real one does.
+ * The shelf board, in three faces: the top surface you look down onto, the lit front lip,
+ * and the deep front face. The front edge arcs upward in the middle the way a long board
+ * reads in perspective, and the books are laid on the same arc.
+ */
+@Composable
+private fun ShelfBoard3D(
+    dark: Boolean,
+    modifier: Modifier = Modifier,
+    height: Dp = 30.dp
+) {
+    Canvas(modifier.fillMaxWidth().height(height)) {
+        val w = size.width
+        val h = size.height
+        val rise = h * 0.34f
+
+        // front face
+        val face = androidx.compose.ui.graphics.Path().apply {
+            moveTo(0f, rise)
+            quadraticBezierTo(w / 2f, 0f, w, rise)
+            lineTo(w, h - 4f)
+            quadraticBezierTo(w / 2f, h - rise * 0.55f, 0f, h - 4f)
+            close()
+        }
+        drawPath(
+            face,
+            Brush.verticalGradient(
+                listOf(
+                    if (dark) Wood.boardDark else Wood.boardFace,
+                    if (dark) Wood.boardDarkDeep else Wood.boardFaceDeep
+                )
+            )
+        )
+        // the top surface the books rest on
+        val top = androidx.compose.ui.graphics.Path().apply {
+            moveTo(0f, rise)
+            quadraticBezierTo(w / 2f, 0f, w, rise)
+            lineTo(w, rise + h * 0.16f)
+            quadraticBezierTo(w / 2f, h * 0.16f, 0f, rise + h * 0.16f)
+            close()
+        }
+        drawPath(
+            top,
+            Brush.verticalGradient(
+                listOf(
+                    if (dark) Wood.boardDarkTop else Wood.boardTopHi,
+                    if (dark) Wood.boardDark else Wood.boardTop
+                )
+            )
+        )
+        // bright lip where the top surface turns into the front face
+        drawPath(
+            androidx.compose.ui.graphics.Path().apply {
+                moveTo(0f, rise)
+                quadraticBezierTo(w / 2f, 0f, w, rise)
+            },
+            if (dark) Wood.boardLip.copy(alpha = 0.55f) else Wood.boardLip,
+            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2f)
+        )
+        // grain following the arc
+        var y = h * 0.42f
+        while (y < h) {
+            drawPath(
+                androidx.compose.ui.graphics.Path().apply {
+                    moveTo(0f, y + rise * 0.2f)
+                    quadraticBezierTo(w / 2f, y - rise * 0.8f, w, y + rise * 0.2f)
+                },
+                Color.Black.copy(alpha = 0.07f),
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.4f)
+            )
+            y += 6f
+        }
+    }
+}
+
+/** Where a book sits in the arc, worked out from the live scroll offset. */
+private data class Placement(val liftPx: Float, val dim: Float)
+
+/**
+ * A book standing on the shelf, seen from the front: cover art wrapped around the spine,
+ * a cream page block along the top edge, the binding shaded as a cylinder, and the title
+ * running down it.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun BookSpine(
+private fun BookSpine3D(
     spine: Spine,
     shelfHeight: Dp,
     dark: Boolean,
+    place: () -> Placement,
     modifier: Modifier = Modifier,
     onOpen: () -> Unit,
     onLongPress: (() -> Unit)? = null
 ) {
     val widthDp = ShelfMath.spineWidthDp(spine.id, spine.pages)
-    val spineHeight = shelfHeight * ShelfMath.spineHeightFraction(spine.id)
-    val tint = Color(ShelfMath.spineTintArgb(spine.id))
+    val bodyHeight = shelfHeight * ShelfMath.spineHeightFraction(spine.id)
     val lean = ShelfMath.leanDegrees(spine.id)
-    val pale = tint.luminance() > 0.42f
-    val labelColor = if (pale) Color(0xFF2B1E14) else Color(0xFFF2E3C6)
-    val ribbonDp = ShelfMath.ribbonHeightDp(spine.id, spine.progress, spineHeight.value)
+    val tint = Color(ShelfMath.spineTintArgb(spine.id))
+    val pale = tint.luminance() > 0.45f
+    val labelColor = if (pale) Color(0xFF20150E) else Color(0xFFF6EBD6)
+    val ribbon = ShelfMath.ribbonHeightDp(spine.id, spine.progress, bodyHeight.value)
 
     Box(
         modifier
             .width(widthDp.dp)
-            .height(spineHeight)
+            .height(bodyHeight)
             .graphicsLayer {
+                // Read while drawing, not while composing: the arc follows the scroll
+                // without recomposing every spine on every frame.
+                val spot = place()
+                translationY = spot.liftPx
                 rotationZ = lean
-                shadowElevation = 2.5.dp.toPx()
+                // books toward the edges of the screen turn slightly away from us
+                scaleY = 1f - spot.dim * 0.05f
+                alpha = 1f - spot.dim * 0.10f
+                shadowElevation = (2f + 3f * (1f - spot.dim)).dp.toPx()
                 ambientShadowColor = Color.Black
                 spotShadowColor = Color.Black
             }
-            .clip(RoundedCornerShape(topStart = 2.5.dp, topEnd = 2.5.dp, bottomStart = 1.dp, bottomEnd = 1.dp))
-            .combinedClickable(
-                onClick = onOpen,
-                onLongClick = { onLongPress?.invoke() }
+            .combinedClickable(onClick = onOpen, onLongClick = { onLongPress?.invoke() })
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            // cream page block visible along the top of the book
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(Wood.pagesTopDeep, Wood.pagesTop, Wood.pagesTopDeep)
+                        )
+                    )
+            )
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .clip(RoundedCornerShape(bottomStart = 1.5.dp, bottomEnd = 1.5.dp))
+                    .background(tint)
+            ) {
+                SpineArt(spine, tint)
+
+                // Cylindrical binding: both edges fall into shadow, the middle catches light.
+                Canvas(Modifier.fillMaxSize()) {
+                    drawRect(
+                        Brush.horizontalGradient(
+                            0f to Color.Black.copy(alpha = 0.55f),
+                            0.14f to Color.Black.copy(alpha = 0.18f),
+                            0.42f to Color.White.copy(alpha = 0.16f),
+                            0.62f to Color.Transparent,
+                            0.88f to Color.Black.copy(alpha = 0.26f),
+                            1f to Color.Black.copy(alpha = 0.60f)
+                        )
+                    )
+                    // gilt rules at head and tail
+                    drawRect(
+                        Wood.gold.copy(alpha = 0.50f),
+                        Offset(0f, 5.dp.toPx()),
+                        Size(size.width, 1.6.dp.toPx())
+                    )
+                    drawRect(
+                        Wood.gold.copy(alpha = 0.38f),
+                        Offset(0f, size.height - 6.dp.toPx()),
+                        Size(size.width, 1.6.dp.toPx())
+                    )
+                }
+
+                Text(
+                    text = spine.title.uppercase(),
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .graphicsLayer { rotationZ = -90f }
+                        .width((bodyHeight.value - 16f).coerceAtLeast(20f).dp)
+                        .padding(horizontal = 1.dp),
+                    color = labelColor,
+                    fontFamily = Playfair,
+                    fontSize = 9.sp,
+                    letterSpacing = 0.7.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
+                    style = TextStyle(
+                        shadow = Shadow(
+                            color = if (pale) Color.White.copy(alpha = 0.5f) else Color.Black.copy(alpha = 0.75f),
+                            offset = Offset(0f, 1f),
+                            blurRadius = 3f
+                        )
+                    )
+                )
+
+                // bookmark ribbon for anything part-read
+                if (ribbon > 6f) {
+                    Box(
+                        Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 2.dp, bottom = 4.dp)
+                            .width(3.dp)
+                            .height(ribbon.dp)
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(Color(0xFFE9C67A), Color(0xFFB8903F))
+                                )
+                            )
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Cover art stretched around the spine; falls back to bookbinding cloth. */
+@Composable
+private fun SpineArt(spine: Spine, tint: Color) {
+    val res = spine.coverRes
+    val hasUrl = !spine.coverUrl.isNullOrBlank() || spine.coverFallbacks.isNotEmpty()
+    when {
+        res != null -> Image(
+            painterResource(res),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop
+        )
+        hasUrl -> {
+            var bmp by remember(spine.coverUrl) { mutableStateOf<Bitmap?>(null) }
+            LaunchedEffect(spine.coverUrl) {
+                bmp = CoverCache.load(spine.coverUrl, spine.coverFallbacks)
+            }
+            val image = bmp
+            if (image != null && !image.isRecycled) {
+                Image(
+                    image.asImageBitmap(),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                ClothFill(tint)
+            }
+        }
+        else -> ClothFill(tint)
+    }
+}
+
+@Composable
+private fun ClothFill(tint: Color) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(
+                Brush.horizontalGradient(
+                    listOf(tint.copy(alpha = 0.92f), tint, tint.copy(alpha = 0.85f))
+                )
             )
     ) {
         Canvas(Modifier.fillMaxSize()) {
-            val w = size.width
-            val h = size.height
-            val light = tint.copy(
-                red = (tint.red + 0.20f).coerceAtMost(1f),
-                green = (tint.green + 0.18f).coerceAtMost(1f),
-                blue = (tint.blue + 0.16f).coerceAtMost(1f)
-            )
-            val shadow = Color(
-                red = tint.red * 0.55f,
-                green = tint.green * 0.55f,
-                blue = tint.blue * 0.55f
-            )
-            // curved spine: light catches the middle, both edges fall away
-            drawRect(
-                Brush.horizontalGradient(
-                    0f to shadow,
-                    0.30f to light,
-                    0.55f to tint,
-                    1f to shadow
-                )
-            )
-            // cloth grain
             var x = 2.dp.toPx()
-            while (x < w) {
+            while (x < size.width) {
                 drawLine(
                     Color.White,
                     Offset(x, 0f),
-                    Offset(x, h),
+                    Offset(x, size.height),
                     strokeWidth = 0.6.dp.toPx(),
-                    alpha = 0.035f
+                    alpha = 0.04f
                 )
-                x += 3.dp.toPx()
+                x += 2.5.dp.toPx()
             }
-            // gilt bands top and bottom
-            val band = 3.2.dp.toPx()
-            drawRect(Wood.gold.copy(alpha = 0.55f), Offset(0f, 2.dp.toPx()), size = androidx.compose.ui.geometry.Size(w, band))
-            drawRect(Wood.gold.copy(alpha = 0.40f), Offset(0f, h - band - 2.dp.toPx()), size = androidx.compose.ui.geometry.Size(w, band))
-            // head and tail shadow, plus the board edges of the binding
-            drawRect(Color.Black.copy(alpha = 0.30f), Offset(0f, 0f), size = androidx.compose.ui.geometry.Size(w, 1.5.dp.toPx()))
-            drawRect(
-                Color.Black.copy(alpha = 0.42f),
-                Offset(0f, h - 2.dp.toPx()),
-                size = androidx.compose.ui.geometry.Size(w, 2.dp.toPx())
-            )
-            drawRect(Color.White.copy(alpha = 0.12f), Offset(0f, 0f), size = androidx.compose.ui.geometry.Size(1.dp.toPx(), h))
-        }
-
-        Text(
-            text = spine.title.uppercase(),
-            modifier = Modifier
-                .align(Alignment.Center)
-                .rotate(-90f)
-                .width((spineHeight.value - 20f).coerceAtLeast(24f).dp)
-                .padding(horizontal = 2.dp),
-            color = labelColor,
-            fontFamily = Playfair,
-            fontSize = 8.5.sp,
-            letterSpacing = 0.5.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center
-        )
-
-        // bookmark ribbon for anything part-read
-        if (ribbonDp > 6f) {
-            Box(
-                Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 3.dp, bottom = 1.dp)
-                    .width(3.dp)
-                    .height(ribbonDp.dp)
-                    .background(Brush.verticalGradient(listOf(Color(0xFFE8C36A), Color(0xFFC7A24A))))
-            )
         }
     }
 }
 
 /**
- * One horizontal shelf of books. Books loop continuously: after the last spine the row
- * starts again, so a short library still feels like a full bookcase.
+ * One shelf of books, sitting inside a wooden case.
+ *
+ * The row is drawn straight but laid on an arc: books near the middle of the screen stand
+ * slightly taller and closer, books toward the edges sit lower and turn away — the same
+ * cue a photograph of a bowed shelf gives. Rows loop so a short library still fills a case.
  */
 @Composable
 fun ShelfRow(
@@ -300,58 +450,110 @@ fun ShelfRow(
     onOpen: (Spine) -> Unit,
     onLongPress: ((Spine) -> Unit)? = null
 ) {
+    val density = LocalDensity.current
+    val gap = 2.dp
+    val sidePad = 18.dp
+
+    // Every spine's width is deterministic, so the row's arc can be worked out analytically
+    // from the scroll position instead of measuring each child.
+    val widthsPx = remember(spines) {
+        spines.map { with(density) { ShelfMath.spineWidthDp(it.id, it.pages).dp.toPx() } }
+    }
+    val gapPx = with(density) { gap.toPx() }
+    val padPx = with(density) { sidePad.toPx() }
+    val prefix = remember(widthsPx, gapPx) {
+        IntArray(widthsPx.size + 1).also { acc ->
+            for (i in widthsPx.indices) acc[i + 1] = (acc[i] + widthsPx[i] + gapPx).toInt()
+        }
+    }
+    val oneCopy = prefix.lastOrNull() ?: 0
+    val loop = looping && spines.size > 2
+    val copies = if (loop) 3 else 1
+    val scroll = rememberScrollState(
+        initial = if (loop) (padPx + oneCopy).toInt() else 0
+    )
+
     Column(modifier.fillMaxWidth()) {
-        Box(Modifier.fillMaxWidth().height(shelfHeight), contentAlignment = Alignment.BottomStart) {
-            // contact shadow where the books meet the board
+        BoxWithConstraints(Modifier.fillMaxWidth().height(shelfHeight)) {
+            val screenPx = with(density) { maxWidth.toPx() }
+            val half = screenPx / 2f
+            val arc = with(density) { 13.dp.toPx() }
+
+            ShelfCavity(dark, Modifier.fillMaxSize())
+
+            Row(Modifier.fillMaxSize().horizontalScroll(scroll), verticalAlignment = Alignment.Bottom) {
+                if (spines.isEmpty()) {
+                    Box(
+                        Modifier.fillMaxWidth().padding(start = sidePad, bottom = 10.dp),
+                        contentAlignment = Alignment.BottomStart
+                    ) {
+                        Text(
+                            emptyLabel,
+                            color = if (dark) Color(0xFFD6C5AE) else Color(0xFF5E4A36),
+                            fontSize = 12.sp
+                        )
+                    }
+                } else {
+                    for (copy in 0 until copies) {
+                        for (i in spines.indices) {
+                            val spine = spines[i]
+                            // x of this book within the whole row, before scrolling
+                            val rowX = padPx + copy * oneCopy + prefix[i]
+                            val width = widthsPx[i]
+                            BookSpine3D(
+                                spine = spine,
+                                shelfHeight = shelfHeight,
+                                dark = dark,
+                                place = {
+                                    val x = rowX - scroll.value
+                                    // 0 in the middle of the screen, 1 at either edge
+                                    val t = ((x + width / 2f - half) / half)
+                                        .coerceIn(-1.35f, 1.35f)
+                                    val closeness = (1f - t * t).coerceIn(0f, 1f)
+                                    Placement(
+                                        liftPx = -arc * closeness,
+                                        dim = (abs(t) * 0.9f).coerceIn(0f, 1f)
+                                    )
+                                },
+                                modifier = Modifier.padding(end = gap),
+                                onOpen = { onOpen(spine) },
+                                onLongPress = onLongPress?.let { press -> { press(spine) } }
+                            )
+                        }
+                    }
+                }
+            }
+
+            // books sit into the board: this shadow is what makes them look placed, not pasted
             Box(
                 Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .height(14.dp)
+                    .height(10.dp)
                     .background(
                         Brush.verticalGradient(
-                            listOf(Color.Transparent, Color.Black.copy(alpha = if (dark) 0.38f else 0.22f))
+                            listOf(Color.Transparent, Color.Black.copy(alpha = if (dark) 0.45f else 0.30f))
                         )
                     )
             )
-            if (spines.isEmpty()) {
-                Text(
-                    emptyLabel,
-                    Modifier.align(Alignment.BottomStart).padding(start = 20.dp, bottom = 10.dp),
-                    color = if (dark) Color(0xFFD8CBBA) else Color(0xFF6B5641),
-                    fontSize = 12.sp
-                )
-            } else {
-                val loop = looping && spines.size > 2
-                val total = if (loop) spines.size * 60 else spines.size
-                val state = rememberLazyListState(
-                    initialFirstVisibleItemIndex = if (loop) spines.size * 30 else 0
-                )
-                LazyRow(
-                    state = state,
-                    modifier = Modifier.fillMaxWidth().height(shelfHeight),
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(3.dp),
-                    verticalAlignment = Alignment.Bottom
-                ) {
-                    items(count = total) { index ->
-                        val spine = spines[ShelfMath.wrapIndex(index, spines.size)]
-                        BookSpine(
-                            spine = spine,
-                            shelfHeight = shelfHeight,
-                            dark = dark,
-                            onOpen = { onOpen(spine) },
-                            onLongPress = onLongPress?.let { press -> { press(spine) } }
-                        )
-                    }
+        }
+        ShelfBoard3D(dark, height = 30.dp)
+    }
+
+    // keep the loop seamless by hopping a copy when the row drifts too far
+    if (loop && oneCopy > 0) {
+        LaunchedEffect(scroll, oneCopy) {
+            snapshotFlow { scroll.value }.collect { v ->
+                when {
+                    v < oneCopy * 0.45f -> scroll.scrollTo(v + oneCopy)
+                    v > oneCopy * 1.55f -> scroll.scrollTo(v - oneCopy)
                 }
             }
         }
-        ShelfBoard(dark, height = 22.dp)
     }
 }
 
-/** A titled shelf: heading, the row of spines, then the board. */
+/** A titled shelf: heading, the row, then the board. */
 @Composable
 fun TitledShelf(
     title: String,
@@ -366,27 +568,29 @@ fun TitledShelf(
     onLongPress: ((Spine) -> Unit)? = null
 ) {
     Column(modifier.fillMaxWidth()) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 20.dp, end = 16.dp, top = 14.dp, bottom = 2.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    title,
-                    color = if (dark) Color(0xFFF3E8D8) else Ink,
-                    fontFamily = Playfair,
-                    fontSize = 17.sp
-                )
-                if (!subtitle.isNullOrBlank()) {
+        if (title.isNotBlank()) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 20.dp, end = 16.dp, top = 14.dp, bottom = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
                     Text(
-                        subtitle,
-                        color = if (dark) Color(0xFFC9BCA9) else Color(0xFF6B5641),
-                        fontSize = 11.sp,
-                        modifier = Modifier.padding(top = 1.dp)
+                        title,
+                        color = if (dark) Color(0xFFF4EADB) else Ink,
+                        fontFamily = Playfair,
+                        fontSize = 17.sp
                     )
+                    if (!subtitle.isNullOrBlank()) {
+                        Text(
+                            subtitle,
+                            color = if (dark) Color(0xFFC9B79F) else Color(0xFF6B5641),
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(top = 1.dp)
+                        )
+                    }
                 }
+                trailing?.invoke()
             }
-            trailing?.invoke()
         }
         ShelfRow(
             spines = spines,
@@ -399,7 +603,7 @@ fun TitledShelf(
     }
 }
 
-/** Compact shelf used inside Studio, so generated books sit on their own little bookcase. */
+/** Compact case for Studio, so the books it generates live on a shelf of their own. */
 @Composable
 fun MiniShelf(
     spines: List<Spine>,
@@ -412,34 +616,35 @@ fun MiniShelf(
         Text(
             title,
             Modifier.padding(start = 18.dp, top = 10.dp, bottom = 2.dp),
-            color = if (dark) Color(0xFFF3E8D8) else Ink,
+            color = if (dark) Color(0xFFF4EADB) else Ink,
             fontFamily = Playfair,
             fontSize = 15.sp
         )
         ShelfRow(
             spines = spines,
             dark = dark,
-            shelfHeight = 86.dp,
+            shelfHeight = 92.dp,
             emptyLabel = "Books you make will stand here",
             onOpen = onOpen
         )
     }
 }
 
-/** Small helper for a shelf-sized loading state that still looks like furniture. */
+/** Loading / empty state that still looks like furniture. */
 @Composable
 fun EmptyShelf(dark: Boolean, modifier: Modifier = Modifier, label: String = "") {
     Column(modifier.fillMaxWidth()) {
-        Box(Modifier.fillMaxWidth().height(84.dp), contentAlignment = Alignment.BottomStart) {
+        Box(Modifier.fillMaxWidth().height(92.dp), contentAlignment = Alignment.BottomStart) {
+            ShelfCavity(dark, Modifier.fillMaxSize())
             if (label.isNotBlank()) {
                 Text(
                     label,
                     Modifier.padding(start = 20.dp, bottom = 10.dp),
-                    color = if (dark) Color(0xFFC9BCA9) else Color(0xFF6B5641),
+                    color = if (dark) Color(0xFFC9B79F) else Color(0xFF5E4A36),
                     fontSize = 12.sp
                 )
             }
         }
-        ShelfBoard(dark, height = 22.dp)
+        ShelfBoard3D(dark, height = 30.dp)
     }
 }

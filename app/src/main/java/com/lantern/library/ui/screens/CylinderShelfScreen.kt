@@ -46,7 +46,6 @@ import com.lantern.library.shelf3d.ShelfMaterials
 import com.lantern.library.shelf3d.SpineAtlas
 import com.lantern.library.ui.components.BookLiftOverlay
 import com.lantern.library.ui.components.LorePillButton
-import com.lantern.library.ui.components.ShelfTopStack
 import com.lantern.library.ui.components.spineColorFor
 import com.lantern.library.ui.theme.Parchment
 import com.lantern.library.ui.theme.Playfair
@@ -174,20 +173,6 @@ fun CylinderShelfScreen(
                         }
                     ).also { it.start() }
                 }
-            )
-        }
-
-        // A small pile of books left on top of the case, with an apple on it. It drops in when
-        // the shelf appears and opens its top book through the same lift. This sits in the
-        // outer box, not the column, so it can pin itself to a corner without taking a slot in
-        // the layout.
-        if (books.isNotEmpty() && failure == null && !searching) {
-            ShelfTopStack(
-                books = books.takeLast(3).reversed(),
-                onOpen = { book -> lifted = book },
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(start = 14.dp, bottom = 116.dp)
             )
         }
 

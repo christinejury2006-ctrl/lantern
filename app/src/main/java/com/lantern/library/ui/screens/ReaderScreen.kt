@@ -356,10 +356,10 @@ fun ReaderScreen(
             if (prefs.swipeMode) {
                 pager.animateScrollToPage(target)
             } else if (book.format == BookFormat.PDF) {
-                pdfList.scrollToItem(target)
+                pdfList.animateScrollToItem(target)
             } else if (scrollState.maxValue > 0 && pageCount > 1) {
                 val dest = ((target.toFloat() / (pageCount - 1)) * scrollState.maxValue).toInt()
-                scrollState.scrollTo(dest.coerceIn(0, scrollState.maxValue))
+                scrollState.animateScrollTo(dest.coerceIn(0, scrollState.maxValue))
             }
             onProgress(target, pageCount)
         }

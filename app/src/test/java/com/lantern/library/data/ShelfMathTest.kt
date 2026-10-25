@@ -38,8 +38,8 @@ class ShelfMathTest {
     @Test
     fun spineHeightsVaryButStayPlausible() {
         val heights = (0 until 40).map { ShelfMath.spineHeightFraction("spine-$it") }
-        assertTrue(heights.all { it in 0.82f..0.97f })
-        assertTrue("books should not all be the same height", heights.distinct().size > 3)
+        assertTrue(heights.all { it in 0.94f..1.00f })
+        assertTrue("books should not all be the same height", heights.distinct().size > 2)
     }
 
     @Test

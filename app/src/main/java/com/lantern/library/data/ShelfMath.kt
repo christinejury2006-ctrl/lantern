@@ -27,8 +27,9 @@ object ShelfMath {
 
     /** Spine height as a fraction of the shelf's usable height. Books are never all equal. */
     fun spineHeightFraction(key: String): Float {
-        val step = hash("$key:h") % 15
-        return 0.82f + step / 100f
+        // A real shelf is only gently uneven: 3% either way, not 18%.
+        val step = hash("$key:h") % 7
+        return 0.94f + step / 100f
     }
 
     /** A tiny lean in degrees, so the row is not mechanically straight. */

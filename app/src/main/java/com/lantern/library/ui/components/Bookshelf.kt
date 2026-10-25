@@ -196,7 +196,7 @@ fun ShelfRow(
         val widths = remember(spines, k, wPx) {
             FloatArray(spines.size) { i ->
                 val sp = spines[i]
-                wPx * (0.058f + (ShelfMath.spineWidthDp(sp.id, sp.pages) - 15) * 0.0045f) * k
+                wPx * (0.074f + (ShelfMath.spineWidthDp(sp.id, sp.pages) - 15) * 0.0055f) * k
             }
         }
         val starts = remember(widths, gapWorld) { Shelf3D.startAngles(widths, gapWorld, cam.radius) }
@@ -204,11 +204,12 @@ fun ShelfRow(
         val halfVisible = Shelf3D.halfVisibleAngle(wPx, cam)
         val fits = total <= halfVisible * 2f * 0.98f
         val wrap = looping && !fits && total > 0f
-        val baseAngle = if (fits) -total / 2f else -halfVisible
+        // a partly-filled shelf starts at the left, the way books actually sit
+        val baseAngle = if (fits) -halfVisible * 0.92f else -halfVisible
         val minScroll = if (fits) 0f else -(total - halfVisible * 2f)
 
         fun heightScreen(index: Int): Float =
-            hPx * 0.50f * ShelfMath.spineHeightFraction(spines[index].id)
+            hPx * 0.66f * ShelfMath.spineHeightFraction(spines[index].id)
 
         fun hitTest(x: Float, y: Float): Int {
             if (spines.isEmpty()) return -1
@@ -337,6 +338,39 @@ fun ShelfRow(
                 grainAlpha = 0.55f
             )
 
+            // ---- the case frames the row: a stile either side, a rail above ----
+            val frameTop = shelfY - hPx * 0.80f * k
+            val stileFront = cam.radius + bookDepth * 0.70f
+            val stileBack = cam.radius - boardDepth * 0.85f
+            listOf(-halfVisible * 1.02f, halfVisible * 1.02f).forEach { a ->
+                val stile = Shelf3D.side(a, stileFront, stileBack, frameTop, shelfY + boardFace, cam)
+                fillQuad(stile, if (dark) Color(0xFF3A2315) else Color(0xFF6D4626))
+                fillQuad(stile, Color.Black.copy(alpha = 0.22f))
+            }
+            drawFlatBand(
+                cam = cam,
+                a0 = -halfVisible * 1.45f,
+                a1 = halfVisible * 1.45f,
+                radiusFront = stileFront,
+                radiusBack = stileBack,
+                y = frameTop,
+                color = if (dark) Color(0xFF4B2F1C) else Color(0xFF8A5C36),
+                grain = grain,
+                grainAlpha = 0.8f
+            )
+            drawCurvedPanel(
+                cam = cam,
+                a0 = -halfVisible * 1.45f,
+                a1 = halfVisible * 1.45f,
+                radius = stileFront,
+                yTop = frameTop,
+                yBottom = frameTop + hPx * 0.085f * k,
+                top = if (dark) Color(0xFF5A3820) else Color(0xFFA0713F),
+                bottom = if (dark) Color(0xFF20130A) else Color(0xFF3E2413),
+                grain = grain,
+                grainAlpha = 0.5f
+            )
+
             // ---- books, farthest first -------------------------------------------
             if (spines.isNotEmpty()) {
                 class Placed(val index: Int, val a0: Float, val a1: Float, val depth: Float)
@@ -413,7 +447,7 @@ fun ShelfRow(
                     // lamp light falling across the binding
                     fillQuad(quad, Color.Black.copy(alpha = ((1f - shade) * 0.55f).coerceIn(0f, 0.55f)))
                     // the title, reading down the spine
-                    drawSpineTitle(spine.title, quad)
+                    drawSpineTitle(spine.title, quad, withLabel = strip != null)
                     if (picked) {
                         // lifted out of the shelf: a shadow underneath and a bright rim
                         val gap = Shelf3D.flat(
@@ -503,33 +537,71 @@ private fun rotatedCover(bmp: Bitmap): Bitmap = runCatching {
     Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
 }.getOrDefault(bmp)
 
-/** Title running down a cloth spine. */
-private fun DrawScope.drawSpineTitle(title: String, quad: Shelf3D.Quad) {
+/**
+ * Title running down the spine, sized to fit it.
+ *
+ * The old version drew the full title at a fixed size, so long titles ran off the ends of
+ * the book. This measures first, shrinks to fit, then truncates with an ellipsis, and keeps
+ * everything inside 88% of the spine's length.
+ */
+private fun DrawScope.drawSpineTitle(title: String, quad: Shelf3D.Quad, withLabel: Boolean) {
     val width = kotlin.math.hypot(quad.tr.x - quad.tl.x, quad.tr.y - quad.tl.y)
-    if (width < 10f) return
+    val length = kotlin.math.hypot(quad.bl.x - quad.tl.x, quad.bl.y - quad.tl.y)
+    if (width < 8f || length < 30f) return
+
+    val maxText = length * 0.88f
+    val text = title.uppercase()
+    val typeface = android.graphics.Typeface.create("serif", android.graphics.Typeface.NORMAL)
+    val probe = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.typeface = typeface }
+
+    var size = (width * 0.60f).coerceIn(6f, 13f)
+    probe.textSize = size
+    while (size > 5f && probe.measureText(text) > maxText) {
+        size -= 0.5f
+        probe.textSize = size
+    }
+    var shown = text
+    if (probe.measureText(shown) > maxText) {
+        while (shown.length > 2 && probe.measureText("$shown…") > maxText) {
+            shown = shown.dropLast(1)
+        }
+        shown = "$shown…"
+    }
+
     val cx = (quad.tl.x + quad.tr.x + quad.br.x + quad.bl.x) / 4f
     val cy = (quad.tl.y + quad.tr.y + quad.br.y + quad.bl.y) / 4f
-    val length = kotlin.math.hypot(quad.bl.x - quad.tl.x, quad.bl.y - quad.tl.y)
+    val textWidth = probe.measureText(shown)
+
     drawIntoCanvas { canvas ->
         val native = canvas.nativeCanvas
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = android.graphics.Color.argb(215, 246, 236, 216)
-            textSize = (width * 0.66f).coerceIn(6f, 15f)
-            textAlign = Paint.Align.CENTER
-            typeface = android.graphics.Typeface.create("serif", android.graphics.Typeface.NORMAL)
-        }
         native.save()
         native.rotate(-90f, cx, cy)
-        native.drawText(title.uppercase().take(30), cx, cy + paint.textSize * 0.34f, paint)
+        if (withLabel) {
+            // a printed label panel, so the title reads over busy cover art
+            val padX = size * 0.34f
+            val padY = size * 0.22f
+            val label = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.argb(150, 20, 13, 8)
+            }
+            native.drawRoundRect(
+                android.graphics.RectF(
+                    cx - textWidth / 2f - padX,
+                    cy - size / 2f - padY,
+                    cx + textWidth / 2f + padX,
+                    cy + size / 2f + padY
+                ),
+                size * 0.3f, size * 0.3f, label
+            )
+        }
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.argb(232, 246, 236, 216)
+            textSize = size
+            textAlign = Paint.Align.CENTER
+            this.typeface = typeface
+        }
+        native.drawText(shown, cx, cy + size * 0.34f, paint)
         native.restore()
     }
-    // a hairline under the gilt so the title reads on a busy cloth
-    drawLine(
-        Color.Black.copy(alpha = 0.25f),
-        androidx.compose.ui.geometry.Offset(cx - length * 0.02f, cy),
-        androidx.compose.ui.geometry.Offset(cx + length * 0.02f, cy),
-        strokeWidth = 1f
-    )
 }
 
 /** A vertical surface following the curve of the case. */

@@ -456,7 +456,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 RecDiag.log(RecDiag.summary())
                 StartupTrace.mark("ensureRecommendations done n=${list.size} failed=${list.isEmpty()}")
                 if (list.isEmpty()) forYouFailed = true
-                if (com.lantern.library.BuildConfig.DEBUG) toast(RecDiag.summary())
+                // Diagnostics stay in logcat: a debug build used to show this as a toast,
+                // which landed on top of the shelf as a grey card full of HTTP codes.
             } finally {
                 forYouBusy = false
             }

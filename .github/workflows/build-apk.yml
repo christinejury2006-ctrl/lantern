@@ -73,8 +73,16 @@ jobs:
             {
               echo "Gradle unit test run failed."
               echo '```'
-              grep -E "app/src.*\.kt|\.kts:.*error|^e: |error:|What went wrong|Caused by|Exception|Detail:|requires|minCompileSdk|Dependency" gradle-tests.log | head -n 70
+              grep -E "app/src.*\.kt|\.kts:.*error|^e: |error:|What went wrong|Caused by|Exception|Detail:|requires|minCompileSdk|Dependency|FAILED|AssertionError|expected:|but was:" gradle-tests.log | head -n 70
               echo '```'
+              # The JUnit XML carries the assertion text that the log only name-checks.
+              if ls app/build/test-results/testDebugUnitTest/*.xml >/dev/null 2>&1; then
+                echo "Failing assertions:"
+                echo '```'
+                grep -h -A4 "<failure" app/build/test-results/testDebugUnitTest/*.xml \
+                  | sed -E 's/<[^>]+>//g' | grep -v '^[[:space:]]*$' | head -n 60
+                echo '```'
+              fi
               echo "Last 30 lines:"
               echo '```'
               tail -n 30 gradle-tests.log

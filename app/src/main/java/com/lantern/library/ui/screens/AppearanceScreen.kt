@@ -125,7 +125,7 @@ fun AppearanceEditor(
                         SafeWallpaperThumb(
                             id = item.id,
                             selected = on,
-                            onClick = { onChange(look.copy(wallpaperId = item.id, wallpaperUrl = null)) }
+                            onClick = { onChange(look.copy(wallpaperId = item.id, wallpaperUrl = null, wallpaperOpacity = maxOf(look.wallpaperOpacity, 0.72f), overlay = minOf(look.overlay, 0.18f))) }
                         )
                         Text(item.label, color = if (on) Coral else mute, fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
                     }

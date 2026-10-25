@@ -48,14 +48,30 @@ class CylinderMathTest {
 
     @Test
     fun `the front book stands nearest the reader`() {
+        // The camera sits at the origin looking down -z, so a book's depth is -z: the further
+        // away it is, the MORE NEGATIVE its z. The book at zero degrees therefore has the
+        // largest z on the drum, not the smallest.
         val nearest = CylinderMath.positionZ(0f)
+        assertEquals(
+            "the front book should be the closest thing on the drum",
+            -CylinderMath.AXIS_DISTANCE + CylinderMath.DRUM_RADIUS,
+            nearest,
+            1e-4f
+        )
         for (degrees in listOf(10, 45, 90, 150, 180)) {
             val angle = Math.toRadians(degrees.toDouble()).toFloat()
             assertTrue(
-                "a book at $degrees degrees must be further away",
-                CylinderMath.positionZ(angle) > nearest
+                "a book at $degrees degrees must be further away, i.e. deeper: " +
+                    "z ${CylinderMath.positionZ(angle)} vs front $nearest",
+                CylinderMath.positionZ(angle) < nearest
             )
         }
+        // and the back of the drum is the furthest thing of all
+        assertEquals(
+            -CylinderMath.AXIS_DISTANCE - CylinderMath.DRUM_RADIUS,
+            CylinderMath.positionZ(Math.PI.toFloat()),
+            1e-4f
+        )
     }
 
     @Test
@@ -131,7 +147,13 @@ class CylinderMathTest {
         // from a standing start, book 4 is one step anticlockwise, not four clockwise
         val target = CylinderMath.rotationToReveal(4, count, 0f)
         val delta = abs(CylinderMath.wrapSigned(target - 0f))
-        assertTrue("reveal took $delta rad, expected a step", delta < CylinderMath.angleStep(count))
+        // exactly one step: book 4 of 5 is one place anticlockwise from the front
+        assertEquals(
+            "reveal should be a single step",
+            CylinderMath.angleStep(count),
+            delta,
+            1e-4f
+        )
         // the revealed book really is at the front afterwards
         assertEquals(4, CylinderMath.frontIndex(count, CylinderMath.wrapSigned(target)))
         // and from anywhere else it still lands on the book

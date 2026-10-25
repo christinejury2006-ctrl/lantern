@@ -127,16 +127,18 @@ fun escapeBuildConfig(value: String): String =
 // 10 is the first code that can update over the old 3.5.0 (versionCode 9) builds.
 val baseVersionCode = 10
 
-fun resolveVersionCode(): Int {
-    val raw = System.getenv("LORE_VERSION_CODE")?.trim().orEmpty()
-        .ifEmpty { (project.findProperty("LORE_VERSION_CODE") as? String)?.trim().orEmpty() }
-    return raw.toIntOrNull()?.takeIf { it > 0 } ?: baseVersionCode
-}
-
 fun signingValue(name: String): String? =
     System.getenv(name)?.trim().orEmpty()
         .ifEmpty { (project.findProperty(name) as? String)?.trim().orEmpty() }
         .takeIf { it.isNotEmpty() }
+
+fun resolveVersionCode(): Int {
+    // Absolute override wins (used by a release built for a specific version).
+    signingValue("LORE_VERSION_CODE")?.toIntOrNull()?.takeIf { it > 0 }?.let { return it }
+    // Otherwise CI adds the workflow run number, so every build is newer than the last.
+    val build = signingValue("LORE_BUILD_NUMBER")?.toIntOrNull() ?: 0
+    return baseVersionCode + build.coerceAtLeast(0)
+}
 
 fun resolveSigningFile(): File? {
     val path = signingValue("LORE_KEYSTORE_PATH") ?: return null

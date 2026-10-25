@@ -61,16 +61,33 @@ jobs:
       - name: Run unit tests
         run: |
           chmod +x gradlew
-          ./gradlew testDebugUnitTest --no-daemon --stacktrace
+          set +e
+          ./gradlew testDebugUnitTest --no-daemon --stacktrace > gradle-tests.log 2>&1
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            # Surface the reason as an annotation: artifact/log blobs are not always reachable.
+            msg=$(tail -n 25 gradle-tests.log | sed 's/\r$//' | tr '\n' '|' | cut -c1-3000)
+            echo "::error title=Unit tests failed::$msg"
+          fi
+          tail -n 40 gradle-tests.log
+          exit "$code"
 
       - name: Build debug APK
         env:
           GOOGLE_BOOKS_API_KEY: ${{ secrets.GOOGLE_BOOKS_API_KEY }}
           # Monotonic across runs: a newer build always has a higher versionCode.
-          LORE_VERSION_CODE: ${{ format('{0}{1}', 100, github.run_number) }}
+          LORE_BUILD_NUMBER: ${{ github.run_number }}
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          set +e
+          ./gradlew assembleDebug --no-daemon --stacktrace > gradle-build.log 2>&1
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            msg=$(tail -n 25 gradle-build.log | sed 's/\r$//' | tr '\n' '|' | cut -c1-3000)
+            echo "::error title=APK build failed::$msg"
+          fi
+          tail -n 40 gradle-build.log
+          exit "$code"
 
       - name: Rename APK
         run: |

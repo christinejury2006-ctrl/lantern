@@ -185,8 +185,27 @@ object CylinderMath {
     fun radiusFor(count: Int): Float {
         if (count <= 0) return DRUM_RADIUS
         val needed = count * BOOK_WIDTH * BOOK_GAP / TWO_PI
-        return if (needed > DRUM_RADIUS) needed else DRUM_RADIUS
+        // The floor only stops the drum collapsing to a point, where the carcass would have no
+        // radius left to stand on. It is deliberately small: a drum whose slots are barely wider
+        // than its books is a bookcase. One whose slots are three times wider than its books is a
+        // carousel, and two books on it read as flat cards rather than a shelf.
+        return if (needed > MIN_DRUM_RADIUS) needed else MIN_DRUM_RADIUS
     }
+
+    /**
+     * The narrowest drum that can be built: the wall behind the books has to keep a positive
+     * radius, and the camera has to stay outside the drum.
+     */
+    const val MIN_DRUM_RADIUS = 0.16f
+
+    /**
+     * The fewest slots a tier is given, however few books there are.
+     *
+     * Slots come from the library, but a tier with two slots is two books half a turn apart: the
+     * front one fills the middle of the screen and the case has no curve to show. Nine slots keep
+     * three or four spines in view at once, which is what makes it read as a drum.
+     */
+    const val MIN_SLOTS_PER_ROW = 8
 
     /** The camera's vertical field of view, in degrees. A phone-camera-like lens. */
     const val FOV_VERTICAL_DEGREES = 55f
@@ -375,33 +394,54 @@ object CylinderMath {
     }
 
     /**
-     * What stands at each position on the drum, in reading order.
+     * What stands at each position on the drum.
      *
-     * Position `p` is slot `p % slots` of row `p / slots`, so this one array drives the whole
-     * case: the geometry, the hit test, and the caption. A -1 is the empty gap that separates
-     * the picks' bay from the rest of the library.
+     * Position `p` is slot `p % slots` of row `p / slots`, so one array drives the whole case:
+     * the geometry, the hit test and the caption. Three values per position:
      *
-     * The bay goes first, which puts it at the front of the bottom tier whenever the drum is at
-     * rest, and gets one empty slot after it so it reads as a shelf of its own rather than as
-     * three books that happen to come first. Picks are capped at one less than a row, so the bay
-     * and its gap can never fill a whole row and leave the library nowhere to start.
+     *  - a book index: a book stands there;
+     *  - [GAP]: nothing, and the niche's tile is drawn there;
+     *  - [EMPTY]: nothing at all.
+     *
+     * Positions are filled a column at a time — all the tiers at slot 0, then all the tiers at
+     * slot 1 — so a small library stands as a few vertical runs of books, the way a case with
+     * room to spare actually looks, instead of a single book per tier adrift in the middle of the
+     * screen.
+     *
+     * The picks go first, which puts them at the front of the case, then the niche, then the rest
+     * of the library in order. Picks are capped at one less than a tier, so the picks and the
+     * niche can never fill a tier and leave the library nowhere to start.
      */
-    fun placementFor(count: Int, slots: Int, picks: List<Int>): IntArray {
-        if (count <= 0) return IntArray(0)
+    fun placementFor(count: Int, slots: Int, rows: Int, picks: List<Int>): IntArray {
         val width = slots.coerceAtLeast(1)
+        if (count <= 0) return IntArray(width * rows.coerceAtLeast(1)) { EMPTY }
+
         val picked = picks.filter { it in 0 until count }.distinct().take((width - 1).coerceAtLeast(0))
-        val out = IntArray(count + if (picked.isEmpty()) 0 else 1) { -1 }
-        var next = 0
-        picked.forEach { out[next++] = it }
-        if (picked.isNotEmpty()) next++ // the gap
+        val order = ArrayList<Int>(count + 1)
+        order.addAll(picked)
+        if (picked.isNotEmpty()) order.add(GAP)
         val taken = picked.toHashSet()
-        for (book in 0 until count) {
-            if (book in taken) continue
-            if (next >= out.size) break
-            out[next++] = book
+        for (book in 0 until count) if (book !in taken) order.add(book)
+
+        // However many tiers the caller asked for, every book has to end up somewhere: a book
+        // that is in the library but not on the drum is a book the reader cannot reach.
+        val tiers = maxOf(rows.coerceAtLeast(1), ceil(order.size / width.toFloat()).toInt())
+        val out = IntArray(width * tiers) { EMPTY }
+        var next = 0
+        for (slot in 0 until width) {
+            for (row in 0 until tiers) {
+                if (next >= order.size) return out
+                out[row * width + slot] = order[next++]
+            }
         }
         return out
     }
+
+    /** An empty position that the niche stands in. */
+    const val GAP = -2
+
+    /** An empty position with nothing in it. */
+    const val EMPTY = -1
 
     /** The slot a book stands in, or -1 when it is not on the drum. */
     fun slotOfBook(book: Int, placement: IntArray, slots: Int): Int {

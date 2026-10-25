@@ -121,14 +121,20 @@ class CylinderShelfScene(
 
         // The drum's size comes first: everything below is built around it.
         val count = bookCount()
-        // One extra position when there is a bay, for the gap between the picks and the library.
+        // One extra position when there is a bay, for the niche between the picks and the rest of
+        // the library.
         val bay = if (picks.isEmpty()) 0 else 1
-        perRow = CylinderMath.perRowFor(count + bay, rows).coerceAtLeast(1)
+        // Never fewer slots than it takes to see a curve. Two books on a drum are two flat cards
+        // half a turn apart, which is what a small library used to look like.
+        perRow = maxOf(
+            CylinderMath.perRowFor(count + bay, rows),
+            CylinderMath.MIN_SLOTS_PER_ROW
+        ).coerceAtLeast(1)
         // The drum is sized by the books on ONE row, not by the whole library: the tiers share
         // the same slots, so a tall case holds more books without widening.
         radius = CylinderMath.radiusFor(perRow)
         axis = CylinderMath.axisForCase(perRow, rows)
-        placement = CylinderMath.placementFor(count, perRow, picks)
+        placement = CylinderMath.placementFor(count, perRow, rows, picks)
 
         try {
             val boxMesh = ShelfGeometry.box()
@@ -314,18 +320,16 @@ class CylinderShelfScene(
         material: Material,
         artwork: Texture
     ) {
-        // Where the gap in the placement is. It is the one empty slot in the case, and the niche
-        // is set into it.
-        val nookPosition = placement.indexOf(-1)
+        // The niche stands in the gap between the picks and the rest of the library.
+        val nookPosition = placement.indexOf(CylinderMath.GAP)
         val nookTile = spineAtlas?.nookTile
 
         for (position in placement.indices) {
             val book = placement[position]
             if (book < 0) {
-                // The gap between the picks and the rest of the library. Empty, except for the
-                // niche: a lit alcove is more inviting to look at than a blank slot, and it is
-                // what gives the case its character.
-                if (position == nookPosition && nookTile != null) {
+                // An empty position. The gap is the one exception: a lit alcove is more inviting
+                // than a blank slot, and it is what gives the case its character.
+                if (book == CylinderMath.GAP && position == nookPosition && nookTile != null) {
                     addPanel(
                         engine, scene, res, vertices, indices, material, artwork,
                         tile = nookTile,

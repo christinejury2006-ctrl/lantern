@@ -92,6 +92,23 @@ class CylinderRotationController(
         isMoving = false
     }
 
+    /**
+     * Which slots of the drum actually hold a book.
+     *
+     * The drum has more slots than a small library has books — that is what makes it read as a
+     * drum rather than as two cards half a turn apart — so some slots are empty. Settling onto an
+     * empty slot would stop the case with a gap in front of the reader and a caption naming a
+     * book that is not there. With this list, the drum only ever rests on a book.
+     */
+    fun setSnapSlots(slots: IntArray) {
+        val copy = slots.filter { it in 0 until totalBooks }.distinct().sorted().toIntArray()
+        if (copy.contentEquals(snapSlots)) return
+        snapSlots = copy
+        snapTarget = null
+    }
+
+    private var snapSlots: IntArray = IntArray(0)
+
     /** A drag by [dx] pixels. Returns true if the drum moved, i.e. a frame is needed. */
     fun onDrag(dx: Float): Boolean {
         if (dx.isNaN() || dx == 0f) return false
@@ -195,7 +212,23 @@ class CylinderRotationController(
     private fun nearestBookRotation(): Float {
         val step = CylinderMath.angleStep(totalBooks)
         val indexAtFront = -rotation / step
-        val nearest = Math.round(indexAtFront).toFloat()
+        var nearest = Math.round(indexAtFront).toFloat()
+        if (snapSlots.isNotEmpty()) {
+            // Round to the nearest slot that holds a book, not merely the nearest slot.
+            val wrapped = ((nearest % totalBooks) + totalBooks) % totalBooks
+            var best = snapSlots[0]
+            var bestDistance = Float.MAX_VALUE
+            for (slot in snapSlots) {
+                val distance = kotlin.math.abs(slot - wrapped)
+                val around = totalBooks - distance
+                val shorter = if (around < distance) around else distance
+                if (shorter < bestDistance) {
+                    bestDistance = shorter
+                    best = slot
+                }
+            }
+            nearest = nearest - wrapped + best
+        }
         // Rotating to `-nearest * step` lines that book up with the front; take the short way.
         val candidate = CylinderMath.wrapSigned(-nearest * step)
         val current = CylinderMath.wrapSigned(rotation)

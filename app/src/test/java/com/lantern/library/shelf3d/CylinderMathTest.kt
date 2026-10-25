@@ -360,10 +360,13 @@ class CylinderMathTest {
                 arc <= slot + 1e-5f
             )
             assertTrue("radius must never shrink below the smallest drum",
-                radius >= CylinderMath.DRUM_RADIUS - 1e-6f)
+                radius >= CylinderMath.MIN_DRUM_RADIUS - 1e-6f)
         }
-        // a small library does not need a bigger drum
-        assertEquals(CylinderMath.DRUM_RADIUS, CylinderMath.radiusFor(10), 1e-6f)
+        // A small drum is a small drum. Holding every library on the old 0.6 m minimum left a
+        // nine-slot tier with three times more empty arc than book on it, and the books read as
+        // flat cards rather than a shelf.
+        assertEquals(10 * CylinderMath.BOOK_WIDTH * CylinderMath.BOOK_GAP /
+            (2f * Math.PI.toFloat()), CylinderMath.radiusFor(10), 1e-5f)
         // a large one does
         assertTrue(CylinderMath.radiusFor(100) > 1.9f)
     }
@@ -428,37 +431,93 @@ class CylinderMathTest {
     }
 
     @Test
-    fun `the picks stand in a bay at the front of the bottom tier`() {
-        val placement = CylinderMath.placementFor(count = 5, slots = 4, picks = listOf(2))
-        // The pick first, then the gap, then the library in order.
-        assertEquals(listOf(2, -1, 0, 1, 3, 4), placement.toList())
+    fun `the picks stand first, then the niche, then the library`() {
+        val placement = CylinderMath.placementFor(count = 5, slots = 8, rows = 1, picks = listOf(2))
+        assertEquals(
+            listOf(2, CylinderMath.GAP, 0, 1, 3, 4, CylinderMath.EMPTY, CylinderMath.EMPTY),
+            placement.toList()
+        )
     }
 
     @Test
-    fun `the bay never swallows the whole row`() {
+    fun `the picks and the niche never fill a tier`() {
         val slots = 4
-        val placement = CylinderMath.placementFor(count = 6, slots = slots, picks = listOf(0, 1, 2, 3, 4))
-        // At most slots-1 picks, one gap, and every book still somewhere on the drum.
+        val placement = CylinderMath.placementFor(
+            count = 6, slots = slots, rows = 1, picks = listOf(0, 1, 2, 3, 4)
+        )
+        // At most slots-1 picks, then the niche, and every book still somewhere on the drum.
         assertEquals(listOf(0, 1, 2), placement.take(slots - 1).toList())
-        val books = placement.filter { it >= 0 }.sorted()
-        assertEquals(listOf(0, 1, 2, 3, 4, 5), books)
-        assertEquals(-1, placement[slots - 1])
+        assertEquals(CylinderMath.GAP, placement[slots - 1])
+        assertEquals(listOf(0, 1, 2, 3, 4, 5), placement.filter { it >= 0 }.sorted())
+    }
+
+    @Test
+    fun `a small library stands in runs down the tiers`() {
+        // Six books over four tiers used to be one book per tier, adrift in the middle of the
+        // screen. Filling a column at a time, the same six books stand two deep on three slots,
+        // which is a case with room to spare rather than a carousel.
+        val slots = CylinderMath.MIN_SLOTS_PER_ROW
+        val rows = 4
+        val placement = CylinderMath.placementFor(count = 6, slots = slots, rows = rows, picks = emptyList())
+        // Books are in the first six positions of the fill order: slot 0 rows 0..3, then slot 1
+        // rows 0..1.
+        assertEquals(0, placement[0 * slots + 0])
+        assertEquals(3, placement[3 * slots + 0])
+        assertEquals(4, placement[0 * slots + 1])
+        assertEquals(5, placement[1 * slots + 1])
+        // and the rest of the drum is empty rather than full of books stacked on top of each other
+        assertEquals(CylinderMath.EMPTY, placement[0 * slots + 2])
+        assertEquals(6, placement.count { it >= 0 })
+    }
+
+    @Test
+    fun `every book is placed exactly once`() {
+        for (count in listOf(1, 3, 6, 12, 40, 100)) {
+            for (rows in 1..4) {
+                val slots = maxOf(CylinderMath.perRowFor(count, rows), CylinderMath.MIN_SLOTS_PER_ROW)
+                val placement = CylinderMath.placementFor(count, slots, rows, picks = listOf(0))
+                val books = placement.filter { it >= 0 }.sorted()
+                assertEquals("count $count rows $rows", (0 until count).toList(), books)
+                assertTrue(placement.size >= slots * rows)
+            }
+        }
+    }
+
+    @Test
+    fun `a tier that is too small borrows another rather than losing books`() {
+        // The bay, the niche and the picks all take positions; if a caller under-counts the slots,
+        // books must not quietly fall off the end of the drum.
+        val placement = CylinderMath.placementFor(count = 6, slots = 4, rows = 1, picks = emptyList())
+        assertEquals((0..5).toList(), placement.filter { it >= 0 }.sorted())
+        assertEquals(8, placement.size)
+    }
+
+    @Test
+    fun `a tier never has fewer slots than it takes to see a curve`() {
+        for (count in 1..30) {
+            for (rows in 1..4) {
+                val slots = maxOf(CylinderMath.perRowFor(count, rows), CylinderMath.MIN_SLOTS_PER_ROW)
+                assertTrue("count $count rows $rows gave $slots slots",
+                    slots >= CylinderMath.MIN_SLOTS_PER_ROW)
+                // and the drum is packed: a slot is never much wider than a book
+                val arc = CylinderMath.bookArcRadians(CylinderMath.radiusFor(slots))
+                assertTrue(arc <= CylinderMath.angleStep(slots) + 1e-5f)
+            }
+        }
     }
 
     @Test
     fun `a book's slot is where it stands, not where it sits in the library`() {
         val slots = 4
-        val placement = CylinderMath.placementFor(count = 9, slots = slots, picks = listOf(7))
-        val slot = CylinderMath.slotOfBook(7, placement, slots)
-        assertEquals(0, slot)
-        // Position 4 is row 1 slot 0, and holds whatever the placement put there.
-        assertEquals(0, CylinderMath.slotOfBook(placement[4], placement, slots))
+        val placement = CylinderMath.placementFor(count = 9, slots = slots, rows = 3, picks = listOf(7))
+        assertEquals(0, CylinderMath.slotOfBook(7, placement, slots))
         assertEquals(-1, CylinderMath.slotOfBook(99, placement, slots))
     }
 
     @Test
-    fun `without picks the drum is untouched`() {
-        val placement = CylinderMath.placementFor(count = 6, slots = 3, picks = emptyList())
-        assertEquals((0..5).toList(), placement.toList())
+    fun `without picks the nib there is no niche`() {
+        val placement = CylinderMath.placementFor(count = 6, slots = 3, rows = 1, picks = emptyList())
+        assertTrue(placement.none { it == CylinderMath.GAP })
+        assertEquals((0..5).toList(), placement.take(6).toList())
     }
 }

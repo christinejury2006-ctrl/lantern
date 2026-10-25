@@ -216,4 +216,21 @@ class CylinderRotationControllerTest {
         val moved = abs(CylinderMath.wrapSigned(c.rotation - before))
         assertTrue("one frame moved $moved rad", moved < 0.35f)
     }
+
+    @Test
+    fun `the drum settles on a book, not on an empty slot`() {
+        // Six books on eight slots: two slots are empty, and resting on one of them would leave
+        // the case showing a gap and a caption for a book that is not in front of the reader.
+        val c = controller(books = 8)
+        c.setSnapSlots(intArrayOf(0, 1, 2, 3, 5, 6))
+        // Nudge the drum towards the empty slot 4 (and slot 7) and let it settle.
+        c.onDrag(CylinderMath.angleStep(8) * 4f / c.radiansPerPixel())
+        c.onRelease(0f)
+        repeat(600) { c.tick(1f / 60f) }
+
+        val step = CylinderMath.angleStep(8)
+        val slotAtFront = Math.round(-c.rotation / step)
+        val wrapped = ((slotAtFront % 8) + 8) % 8
+        assertTrue("settled on empty slot $wrapped", wrapped in intArrayOf(0, 1, 2, 3, 5, 6))
+    }
 }

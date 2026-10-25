@@ -235,7 +235,7 @@ fun ShelfRow(
                             scope.launch {
                                 scroll.animateTo(
                                     target,
-                                    exponentialDecay(frictionMultiplier = 2.4f)
+                                    animationSpec = exponentialDecay<Float>(frictionMultiplier = 2.4f)
                                 )
                                 scroll.snapTo(scroll.value.coerceIn(minScroll, 0f))
                             }

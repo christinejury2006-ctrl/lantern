@@ -124,13 +124,13 @@ fun resolveGoogleBooksApiKey(): String {
 fun escapeBuildConfig(value: String): String =
     value.replace("\\", "\\\\").replace("\"", "\\\"")
 
-/** 10 is the first code that can update over the old 3.5.0 (versionCode 9) builds. */
-private const val BASE_VERSION_CODE = 10
+// 10 is the first code that can update over the old 3.5.0 (versionCode 9) builds.
+val baseVersionCode = 10
 
 fun resolveVersionCode(): Int {
     val raw = System.getenv("LORE_VERSION_CODE")?.trim().orEmpty()
         .ifEmpty { (project.findProperty("LORE_VERSION_CODE") as? String)?.trim().orEmpty() }
-    return raw.toIntOrNull()?.takeIf { it > 0 } ?: BASE_VERSION_CODE
+    return raw.toIntOrNull()?.takeIf { it > 0 } ?: baseVersionCode
 }
 
 fun signingValue(name: String): String? =

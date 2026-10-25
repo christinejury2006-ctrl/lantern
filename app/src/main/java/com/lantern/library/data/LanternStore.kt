@@ -1255,15 +1255,14 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         }
         uploadCandidates.forEach { candidate ->
             val localFile = candidate.filePath?.let { File(it) } ?: return@forEach
-            val uploadedId = withDrive { token, owner ->
+            val uploadedResult = withDriveOutcome { token, owner ->
                 when (val folder = DriveLibrary.ensureFolder(token, owner)) {
-                    is DriveOutcome.Ok -> when (val uploaded = DriveLibrary.upload(token, folder.value, candidate, localFile)) {
-                        is DriveOutcome.Ok -> uploaded.value
-                        else -> null
-                    }
-                    else -> null
+                    is DriveOutcome.Ok -> DriveLibrary.upload(token, folder.value, candidate, localFile)
+                    DriveOutcome.Unauthorized -> DriveOutcome.Unauthorized
+                    DriveOutcome.Failed -> DriveOutcome.Failed
                 }
             }
+            val uploadedId = (uploadedResult as? DriveOutcome.Ok)?.value
             if (!uploadedId.isNullOrBlank()) {
                 withContext(Dispatchers.Main) {
                     val latest = book(candidate.id)

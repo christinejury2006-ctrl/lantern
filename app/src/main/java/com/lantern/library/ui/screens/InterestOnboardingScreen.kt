@@ -27,11 +27,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lantern.library.data.InterestCatalog
 import com.lantern.library.data.ReaderTheme
-import com.lantern.library.ui.components.AuroraBackdrop
+import com.lantern.library.ui.components.RoomBackdrop
 import com.lantern.library.ui.theme.Coral
 import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.InkSoft
 import com.lantern.library.ui.theme.NightText
+import com.lantern.library.ui.theme.Parchment
 import com.lantern.library.ui.theme.Playfair
 
 @Composable
@@ -43,10 +44,11 @@ fun InterestOnboardingScreen(
     onCancel: () -> Unit
 ) {
     val dark = theme == ReaderTheme.DARK
-    val ink = if (dark) NightText else Ink
-    val mute = if (dark) Color(0xFFD0D6DE) else InkSoft
+    // the backdrop is now a warm room, so text is parchment either way
+    val ink = Parchment
+    val mute = Color(0xFFC9B79F)
     val selected = remember(initial) { mutableStateListOf<String>().also { it.addAll(initial) } }
-    AuroraBackdrop(theme) {
+    RoomBackdrop(dark) {
         Column(
             Modifier
                 .fillMaxSize()

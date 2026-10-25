@@ -45,13 +45,14 @@ import androidx.compose.ui.unit.sp
 import com.lantern.library.data.CatalogBook
 import com.lantern.library.data.Gutendex
 import com.lantern.library.data.ReaderTheme
-import com.lantern.library.ui.components.AuroraBackdrop
+import com.lantern.library.ui.components.RoomBackdrop
 import com.lantern.library.ui.components.CoverFace
 import com.lantern.library.ui.components.GlassCard
 import com.lantern.library.ui.theme.Coral
 import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.InkSoft
 import com.lantern.library.ui.theme.NightText
+import com.lantern.library.ui.theme.Parchment
 import com.lantern.library.ui.theme.Playfair
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -69,8 +70,9 @@ fun SearchScreen(theme: ReaderTheme, onOpen: (CatalogBook) -> Unit) {
 @Composable
 private fun CatalogBrowser(title: String, subtitle: String, theme: ReaderTheme, initialTopic: String?, onOpen: (CatalogBook) -> Unit) {
     val dark = theme == ReaderTheme.DARK
-    val ink = if (dark) NightText else Ink
-    val mute = if (dark) Color(0xFFD0D6DE) else InkSoft
+    // the backdrop is now a warm room, so text is parchment either way
+    val ink = Parchment
+    val mute = Color(0xFFC9B79F)
     var query by remember { mutableStateOf("") }
     var topic by remember { mutableStateOf(initialTopic) }
     var results by remember { mutableStateOf<List<CatalogBook>>(emptyList()) }
@@ -80,7 +82,7 @@ private fun CatalogBrowser(title: String, subtitle: String, theme: ReaderTheme, 
         results = withContext(Dispatchers.IO) { runCatching { Gutendex.search(query, topic) }.getOrDefault(emptyList()) }
         loading = false
     }
-    AuroraBackdrop(theme) {
+    RoomBackdrop(dark) {
         LazyVerticalGrid(columns = GridCells.Fixed(2), modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp, 18.dp, 18.dp, 96.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item(span = { GridItemSpan(2) }) {
                 Column {

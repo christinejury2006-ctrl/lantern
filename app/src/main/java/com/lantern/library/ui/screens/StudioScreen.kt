@@ -34,7 +34,7 @@ import com.lantern.library.studio.PageKind
 import com.lantern.library.studio.WebBlockType
 import com.lantern.library.studio.WebDraft
 import com.lantern.library.studio.WebPhase
-import com.lantern.library.ui.components.AuroraBackdrop
+import com.lantern.library.ui.components.RoomBackdrop
 import com.lantern.library.ui.components.CoverFace
 import com.lantern.library.ui.components.GlassCard
 import com.lantern.library.ui.components.MiniShelf
@@ -43,6 +43,7 @@ import com.lantern.library.ui.theme.Coral
 import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.InkSoft
 import com.lantern.library.ui.theme.NightText
+import com.lantern.library.ui.theme.Parchment
 import com.lantern.library.ui.theme.Playfair
 
 @Composable
@@ -74,10 +75,11 @@ fun StudioScreen(
     onFetchCollection: () -> Unit
 ) {
     val dark = theme == ReaderTheme.DARK
-    val ink = if (dark) NightText else Ink
-    val mute = if (dark) Color(0xFFD0D6DE) else InkSoft
+    // the backdrop is now a warm room, so text is parchment either way
+    val ink = Parchment
+    val mute = Color(0xFFC9B79F)
     val filePhase = session?.phase ?: StudioPhase.Idle
-    AuroraBackdrop(theme) {
+    RoomBackdrop(dark) {
         Column(
             Modifier
                 .fillMaxSize()

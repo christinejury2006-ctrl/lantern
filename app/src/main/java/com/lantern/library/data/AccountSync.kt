@@ -241,6 +241,9 @@ object AccountSync {
             .put("category", b.category)
             .put("synopsis", b.synopsis)
             .put("remoteCover", cover)
+            // The Drive file id is what lets a fresh install fetch the book itself, so the
+            // phone never has to keep every file locally.
+            .put("driveFileId", b.driveFileId.orEmpty())
     }
 
     private fun bookFromCloud(o: JSONObject): LibraryBook? {
@@ -266,7 +269,7 @@ object AccountSync {
             lastReadAt = o.optLong("lastReadAt", 0L),
             category = o.optString("category", "Library"),
             synopsis = o.optString("synopsis"),
-            driveFileId = null,
+            driveFileId = o.optString("driveFileId").ifBlank { null },
             pendingUpload = false
         )
     }

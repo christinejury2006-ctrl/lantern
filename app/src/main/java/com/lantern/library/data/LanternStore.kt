@@ -987,13 +987,19 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
 
     fun openForReading(book: LibraryBook, then: (LibraryBook?) -> Unit) {
         viewModelScope.launch {
+            // A book restored onto a new phone has no file yet: pull it from the account
+            // instead of making the user import it again.
             if (!book.localFileAvailable) {
-                toast("Import this book on this phone to read it.")
-                then(null)
-                return@launch
+                toast("Fetching this book from your account…")
             }
             val ready = withContext(Dispatchers.IO) { ensureCached(book) }
-            if (ready == null) toast("Could not open this book")
+            if (ready == null) {
+                toast(
+                    if (book.driveFileId == null)
+                        "This book is not in your account yet. Sign in and sync to store it."
+                    else "Could not fetch this book. Check your connection."
+                )
+            }
             then(ready)
         }
     }
@@ -1260,8 +1266,44 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             is DriveOutcome.Ok -> cloudOutcome.value
         }
         val cloud = AccountSync.fromJson(cloudRaw)
-        val merged = AccountSync.merge(local, cloud)
-        withContext(Dispatchers.Main) { applySnapshot(merged) }
+        var merged = AccountSync.merge(local, cloud)
+        // Put the book files themselves in the account, so the library can be restored on
+        // another phone without keeping every download on this one.
+        val uploads = merged.books.filter {
+            it.origin != BookOrigin.BUNDLED &&
+                it.format != BookFormat.TEXT &&
+                it.driveFileId == null &&
+                it.localFileAvailable
+        }.take(40)
+        if (uploads.isNotEmpty()) {
+            val uploaded = withContext(Dispatchers.IO) {
+                val done = HashMap<String, String>()
+                withDrive { token, owner ->
+                    when (val folder = DriveLibrary.ensureFolder(token, owner)) {
+                        is DriveOutcome.Ok -> {
+                            for (book in uploads) {
+                                val file = book.filePath?.let { File(it) } ?: continue
+                                if (!file.exists() || file.length() <= 0L) continue
+                                val result = DriveLibrary.upload(token, folder.value, book, file)
+                                if (result is DriveOutcome.Ok) done[book.id] = result.value
+                            }
+                            DriveOutcome.Ok(done)
+                        }
+                        DriveOutcome.Unauthorized -> DriveOutcome.Unauthorized
+                        DriveOutcome.Failed -> DriveOutcome.Failed
+                    }
+                }
+                done
+            }
+            if (uploaded.isNotEmpty()) {
+                merged = merged.copy(
+                    books = merged.books.map { b ->
+                        uploaded[b.id]?.let { b.copy(driveFileId = it, pendingUpload = false) } ?: b
+                    }
+                )
+                withContext(Dispatchers.Main) { applySnapshot(merged) }
+            }
+        }
         val written = withDrive { token, owner ->
             when (val folder = DriveLibrary.ensureFolder(token, owner)) {
                 is DriveOutcome.Ok -> DriveLibrary.writeJsonByLoreId(

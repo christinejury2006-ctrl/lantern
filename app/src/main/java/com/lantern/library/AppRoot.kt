@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,6 +36,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -58,7 +60,7 @@ import com.lantern.library.ui.screens.SearchScreen
 import com.lantern.library.ui.screens.StudioScreen
 import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.LanternTheme
-import com.lantern.library.ui.theme.LorePill
+import com.lantern.library.ui.theme.Brass
 import com.lantern.library.ui.theme.NightText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -278,7 +280,9 @@ private fun BottomBar(theme: ReaderTheme, current: Route, onTab: (Route) -> Unit
     val ink = if (dark) NightText else Ink
     Row(
         modifier.fillMaxWidth().navigationBarsPadding().padding(12.dp).clip(RoundedCornerShape(24.dp))
-            .background(if (dark) Color(0xCC3A4454) else Color(0xCCFFFFFF)).padding(vertical = 8.dp),
+            .background(if (dark) Color(0xF21A1109) else Color(0xF2F1E3CC))
+            .border(1.dp, Color(0x66C8A96B), RoundedCornerShape(24.dp))
+            .padding(vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceEvenly
     ) {
         TabIcon(Icons.Filled.Home, "Library", current is Route.Library, ink) { onTab(Route.Library) }
@@ -290,7 +294,7 @@ private fun BottomBar(theme: ReaderTheme, current: Route, onTab: (Route) -> Unit
 
 @Composable
 private fun TabIcon(icon: ImageVector, label: String, on: Boolean, ink: Color, click: () -> Unit) {
-    val tint = if (on) LorePill else ink.copy(0.42f)
+    val tint = if (on) Brass else (if (ink.luminance() > 0.5f) Color(0xFF5E4A36) else ink.copy(0.55f))
     Column(Modifier.clickable(onClick = click).padding(horizontal = 10.dp, vertical = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Icon(icon, label, tint = tint, modifier = Modifier.size(22.dp))
         Text(label, color = tint, fontSize = 10.sp)

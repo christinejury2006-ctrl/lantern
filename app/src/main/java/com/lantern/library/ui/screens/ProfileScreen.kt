@@ -18,7 +18,7 @@ import com.lantern.library.data.CloudAccount
 import com.lantern.library.data.LibraryBook
 import com.lantern.library.data.ReaderTheme
 import com.lantern.library.data.ReadingPrefs
-import com.lantern.library.ui.components.AuroraBackdrop
+import com.lantern.library.ui.components.RoomBackdrop
 import com.lantern.library.ui.components.GlassCard
 import com.lantern.library.ui.components.LoreActionButton
 import com.lantern.library.ui.components.LoreGhostButton
@@ -26,6 +26,7 @@ import com.lantern.library.ui.components.LorePillButton
 import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.InkSoft
 import com.lantern.library.ui.theme.NightText
+import com.lantern.library.ui.theme.Parchment
 import com.lantern.library.ui.theme.Playfair
 
 @Composable
@@ -41,9 +42,10 @@ fun ProfileScreen(
     onLibraryAppearance: () -> Unit = {}
 ) {
     val dark = prefs.theme == ReaderTheme.DARK
-    val ink = if (dark) NightText else Ink
-    val mute = if (dark) Color(0xFFD0D6DE) else InkSoft
-    AuroraBackdrop(prefs.theme) {
+    // the backdrop is now a warm room, so text is parchment either way
+    val ink = Parchment
+    val mute = Color(0xFFC9B79F)
+    RoomBackdrop(dark) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
             Text("You", color = ink, fontFamily = Playfair, fontSize = 30.sp)
             Text("${books.count { it.finished }} finished  ·  ${books.size} on the shelf", color = mute, fontSize = 13.sp)

@@ -25,25 +25,26 @@ jobs:
       # The shelf's PBR materials are compiled here, with Filament's own matc, and shipped as
       # bytes in the APK. Compiling them on the phone was the flaw: a material that fails to
       # compile there takes the whole scene with it, and the device has no way to tell anyone
-      # which line it choked on. matc fails the build instead, with its complaint in the log.
+      # which line it choked on. matc fails the build instead.
       - name: Compile the shelf materials
+        run: ./tools/compile-materials.sh 2>&1 | tee material-compile.log
+
+      # The runner's log lives on a host that cannot always be reached from where this is
+      # debugged, so the compiler's own words are posted as a commit comment as well.
+      - name: Report a material that would not compile
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          mkdir -p app/src/main/assets/materials
-          curl -sSL -o filament.tgz \
-            "https://github.com/google/filament/releases/download/v1.72.0/filament-v1.72.0-linux.tgz"
-          tar xzf filament.tgz
-          MATC="$(find . -type f -name matc -perm -u+x | head -1)"
-          if [ -z "$MATC" ]; then MATC="$(find . -type f -name matc | head -1)"; chmod +x "$MATC"; fi
-          echo "matc: $MATC"
-          "$MATC" --version || true
-          for f in materials/*.mat; do
-            name="$(basename "$f" .mat)"
-            echo "::group::matc $name"
-            "$MATC" --api all --platform mobile -o "app/src/main/assets/materials/$name.filamat" "$f"
-            echo "::endgroup::"
-          done
-          ls -l app/src/main/assets/materials/
+          {
+            echo "The shelf's materials did not compile, so the shelf would not have started."
+            echo '```'
+            tail -n 60 material-compile.log 2>/dev/null || echo "no compiler output captured"
+            echo '```'
+          } > material-failure.md
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+            -F body=@material-failure.md >/dev/null 2>&1 || true
+          echo "::error title=Materials failed::See the commit comment for matc's output."
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4

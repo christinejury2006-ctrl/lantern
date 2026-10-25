@@ -16,3 +16,9 @@ captures/
 *.keystore
 *.jks
 *.p12
+
+# Filament's material compiler, fetched by tools/compile-materials.sh
+.matc/
+filament.tgz
+material-compile.log
+material-failure.md

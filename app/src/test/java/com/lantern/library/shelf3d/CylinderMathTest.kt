@@ -276,6 +276,75 @@ class CylinderMathTest {
     }
 
     @Test
+    fun `the case fills the phone however long it is`() {
+        // One row of books is a band across the middle of any screen. The number of tiers
+        // follows the phone, and the camera distance follows the tiers, so the case occupies the
+        // same share of the screen on a short phone as on a tall one.
+        val tall = CylinderMath.rowsFor(900f)
+        val short = CylinderMath.rowsFor(430f)
+        assertTrue("a tall phone must carry more tiers than a short one", tall > short)
+        assertEquals(1, CylinderMath.rowsFor(320f))
+        assertEquals(4, CylinderMath.rowsFor(1000f))
+
+        val halfFovV = Math.toRadians(CylinderMath.FOV_VERTICAL_DEGREES / 2.0).toFloat()
+        for (rows in 1..4) {
+            val distance = CylinderMath.caseDistanceFor(rows)
+            val caseHeight = rows * CylinderMath.ROW_PITCH
+            val visibleHeight = 2f * distance * kotlin.math.tan(halfFovV)
+            val fill = caseHeight / visibleHeight
+            assertEquals("$rows tiers should fill 86% of the height", 0.86f, fill, 0.01f)
+        }
+    }
+
+    @Test
+    fun `books are split over the tiers and stay in their slots`() {
+        for (count in listOf(1, 5, 12, 31, 100, 201)) {
+            for (rows in 1..4) {
+                val perRow = CylinderMath.perRowFor(count, rows)
+                assertTrue("$count books over $rows rows leaves an empty row", perRow > 0)
+                assertTrue("$rows rows must hold all $count books", perRow * rows >= count)
+                // every book has a tier and a slot inside that tier's drum
+                for (index in 0 until count) {
+                    val row = index / perRow
+                    val slot = index % perRow
+                    assertTrue("book $index lands on row $row", row in 0 until rows)
+                    assertTrue("book $index lands on slot $slot", slot in 0 until perRow)
+                }
+                // and the tiers do not overlap vertically
+                if (rows > 1) {
+                    val gap = CylinderMath.rowY(1, rows) - CylinderMath.rowY(0, rows)
+                    assertTrue("rows are $gap apart", gap >= CylinderMath.BOOK_HEIGHT)
+                }
+            }
+        }
+        // one tier holds everything
+        assertEquals(37, CylinderMath.perRowFor(37, 1))
+        assertEquals(0, CylinderMath.perRowFor(0, 3))
+    }
+
+    @Test
+    fun `a tap's height picks the tier, since every tier shares its slots`() {
+        // Four tiers: tapping the top of the screen must reach the top row, the middle the
+        // middle, and the bottom the bottom, or a tap would always open a book on one shelf.
+        val rows = 4
+        val distance = CylinderMath.caseDistanceFor(rows)
+        val height = 2160f
+        val top = CylinderMath.rowAtScreenY(height * 0.08f, height, rows, distance)
+        val middle = CylinderMath.rowAtScreenY(height * 0.5f, height, rows, distance)
+        val bottom = CylinderMath.rowAtScreenY(height * 0.92f, height, rows, distance)
+        assertEquals(rows - 1, top)
+        assertEquals(0, bottom)
+        assertTrue("the middle of four rows should be one of the two middle ones",
+            middle == 1 || middle == 2)
+        // outside the case, the nearest tier is still the best answer rather than an exception
+        assertEquals(rows - 1, CylinderMath.rowAtScreenY(-500f, height, rows, distance))
+        assertEquals(0, CylinderMath.rowAtScreenY(height + 500f, height, rows, distance))
+        // a one-tier case has nowhere else to be
+        assertEquals(0, CylinderMath.rowAtScreenY(height * 0.1f, height, 1, distance))
+        assertEquals(0, CylinderMath.rowAtScreenY(0f, 0f, rows, distance))
+    }
+
+    @Test
     fun `the drum grows with the library so books never overlap`() {
         // A book is 0.115 m of spine; spread evenly round a circle of radius R it occupies
         // BOOK_WIDTH/R radians, while its slot is 2*pi/count. Once the slot is narrower than the

@@ -25,9 +25,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.TextStyle
@@ -38,10 +40,13 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.lantern.library.data.LibraryBook
 import com.lantern.library.shelf3d.CylinderRotationController
+import com.lantern.library.shelf3d.CylinderMath
 import com.lantern.library.shelf3d.CylinderShelfSurfaceView
 import com.lantern.library.shelf3d.ShelfMaterials
 import com.lantern.library.shelf3d.SpineAtlas
+import com.lantern.library.ui.components.BookLiftOverlay
 import com.lantern.library.ui.components.LorePillButton
+import com.lantern.library.ui.components.ShelfTopStack
 import com.lantern.library.ui.components.spineColorFor
 import com.lantern.library.ui.theme.Parchment
 import com.lantern.library.ui.theme.Playfair
@@ -77,6 +82,12 @@ fun CylinderShelfScreen(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+
+    // How many tiers of books the case carries follows the phone's length: one row of books
+    // would be a band across the middle of any screen, and a revolving case is tall furniture.
+    val rows = remember {
+        CylinderMath.rowsFor(LocalConfiguration.current.screenHeightDp.toFloat())
+    }
     val controller = remember { CylinderRotationController() }
 
     var materialBytes by remember { mutableStateOf<Map<String, ByteArray>?>(null) }
@@ -86,6 +97,9 @@ fun CylinderShelfScreen(
     var frontIndex by remember { mutableStateOf(0) }
     var searching by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
+    // The book that has been taken off the shelf, if any. While one is up, the case behind it
+    // softens: the same lift the shelf always had, now over the 3D scene.
+    var lifted by remember { mutableStateOf<LibraryBook?>(null) }
 
     val colors = remember(books) {
         books.map { book ->
@@ -129,7 +143,11 @@ fun CylinderShelfScreen(
     Box(Modifier.fillMaxSize().background(Color(0xFF100B07))) {
         if (ready != null && books.isNotEmpty() && failure == null) {
             AndroidView(
-                modifier = Modifier.fillMaxSize(),
+                // Taking a book out blurs everything behind it. Blur is ignored below Android
+                // 12, where the lifted book simply sits over a sharp shelf.
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(if (lifted != null) Modifier.blur(18.dp) else Modifier),
                 factory = { ctx ->
                     CylinderShelfSurfaceView(
                         context = ctx,
@@ -139,12 +157,14 @@ fun CylinderShelfScreen(
                         bookCount = books.size,
                         bookColors = colors,
                         spineAtlas = spineAtlas,
+                        rows = rows,
                         onError = { message -> failure = message },
                         onFrontBook = { index -> frontIndex = index },
                         onTapBook = { index ->
-                            // First tap brings the book to the front; tapping it there opens it.
+                            // First tap turns the case to the book; tapping it at the front
+                            // lifts it out, with the shelf softening behind.
                             if (index == frontIndex) {
-                                books.getOrNull(index)?.let(onOpenBook)
+                                books.getOrNull(index)?.let { lifted = it }
                             } else {
                                 controller.revealBook(index)
                                 frontIndex = index
@@ -262,6 +282,18 @@ fun CylinderShelfScreen(
             Spacer(Modifier.height(96.dp).navigationBarsPadding())
         }
 
+        // A small pile of books left on top of the case, with an apple on it. It drops in when
+        // the shelf appears and opens the top book when tapped, through the same lift.
+        if (books.isNotEmpty() && failure == null && !searching) {
+            ShelfTopStack(
+                books = books.takeLast(3).reversed(),
+                onOpen = { book -> lifted = book },
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 18.dp, bottom = 150.dp)
+            )
+        }
+
         // Loading cover, only while there is genuinely nothing to show.
         if (ready == null && failure == null && books.isNotEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -273,6 +305,20 @@ fun CylinderShelfScreen(
                 )
             }
         }
+    }
+
+    // The lifted book, drawn over the softened shelf.
+    val up = lifted
+    if (up != null) {
+        BookLiftOverlay(
+            book = up,
+            dark = true,
+            onRead = {
+                lifted = null
+                onOpenBook(up)
+            },
+            onDismiss = { lifted = null }
+        )
     }
 
     // The SurfaceView's engine is torn down with the composable, in addition to the lifecycle

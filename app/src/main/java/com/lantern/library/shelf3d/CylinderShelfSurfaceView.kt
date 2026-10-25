@@ -28,6 +28,7 @@ class CylinderShelfSurfaceView(
     private val bookCount: Int,
     bookColors: List<Int>,
     private val spineAtlas: SpineAtlas?,
+    private val rows: Int,
     onError: (String) -> Unit,
     private val onFrontBook: (Int) -> Unit,
     private val onTapBook: (Int) -> Unit,
@@ -39,7 +40,8 @@ class CylinderShelfSurfaceView(
         controller = controller,
         materialBytes = materialBytes,
         bookColors = bookColors,
-        spineAtlas = spineAtlas
+        spineAtlas = spineAtlas,
+        rows = rows
     )
 
     private val engine: FilamentShelfEngine
@@ -126,13 +128,13 @@ class CylinderShelfSurfaceView(
 
                 if (event.actionMasked == MotionEvent.ACTION_UP && moved < 24f && quick) {
                     // A tap, not a drag: select the book under the finger.
-                    val hit = scene.bookAtScreenX(event.x, viewWidth)
+                    val hit = scene.bookAt(event.x, event.y, viewWidth, height.toFloat())
                     if (hit >= 0) onTapBook(hit)
                     engine.invalidate()
                 } else if (event.actionMasked == MotionEvent.ACTION_UP && moved < 24f) {
                     // Held still for longer than a tap: the same spine, asked a different
                     // question. Time is measured on the event, so no timer can outlive the touch.
-                    val hit = scene.bookAtScreenX(event.x, viewWidth)
+                    val hit = scene.bookAt(event.x, event.y, viewWidth, height.toFloat())
                     if (hit >= 0) onLongPressBook(hit)
                     engine.invalidate()
                 } else {

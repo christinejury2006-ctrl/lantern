@@ -35,7 +35,9 @@ class CylinderShelfScene(
     /** Colours for each book, supplied by the app so spines match the library's covers. */
     private val bookColors: List<Int>,
     /** Cover art for the spines, or null to draw plain bindings. */
-    private val spineAtlas: SpineAtlas? = null
+    private val spineAtlas: SpineAtlas? = null,
+    /** Tiers of the case. More tiers on a taller phone, so the case fills the screen. */
+    private val rows: Int = 1
 ) : FilamentShelfEngine.ShelfContent {
 
 
@@ -79,6 +81,9 @@ class CylinderShelfScene(
     private var radius: Float = CylinderMath.DRUM_RADIUS
     private var axis: Float = CylinderMath.AXIS_DISTANCE
 
+    /** Books on each row, and therefore how many slots the drum has. */
+    private var perRow: Int = 0
+
     private companion object {
         const val TAG = "CylinderShelfScene"
 
@@ -98,8 +103,11 @@ class CylinderShelfScene(
 
         // The drum's size comes first: everything below is built around it.
         val count = bookCount()
-        radius = CylinderMath.radiusFor(count)
-        axis = CylinderMath.axisForLibrary(count)
+        perRow = CylinderMath.perRowFor(count, rows).coerceAtLeast(1)
+        // The drum is sized by the books on ONE row, not by the whole library: the tiers share
+        // the same slots, so a tall case holds more books without widening.
+        radius = CylinderMath.radiusFor(perRow)
+        axis = CylinderMath.axisForCase(perRow, rows)
 
         try {
             val boxMesh = ShelfGeometry.box()
@@ -118,18 +126,22 @@ class CylinderShelfScene(
 
             // The board the books stand on. Its inner edge stops at the wall so the two meet
             // cleanly instead of intersecting.
-            val plinthMesh = ShelfGeometry.plinth(
-                radius = radius + 0.006f,
-                topY = CylinderMath.BOOK_Y - CylinderMath.BOOK_HEIGHT / 2f,
-                thickness = radius + 0.006f - wallRadius,
-                axisDistance = axis
-            )
-            addStatic(
-                engine, scene, res, plinthMesh, woodMaterial,
-                center = floatArrayOf(0f, CylinderMath.BOOK_Y, -axis),
-                halfExtent = floatArrayOf(radius + 0.1f, 0.3f, radius + 0.1f),
-                color = WOOD_SHELF
-            )
+            // One board per tier: the row's books stand on it.
+            for (row in 0 until rows) {
+                val boardY = CylinderMath.rowY(row, rows) - CylinderMath.BOOK_HEIGHT / 2f
+                val plinthMesh = ShelfGeometry.plinth(
+                    radius = radius + 0.006f,
+                    topY = boardY,
+                    thickness = radius + 0.006f - wallRadius,
+                    axisDistance = axis
+                )
+                addStatic(
+                    engine, scene, res, plinthMesh, woodMaterial,
+                    center = floatArrayOf(0f, boardY, -axis),
+                    halfExtent = floatArrayOf(radius + 0.1f, 0.1f, radius + 0.1f),
+                    color = WOOD_SHELF
+                )
+            }
 
             // The wall behind the books.
             //
@@ -137,17 +149,21 @@ class CylinderShelfScene(
             // shelf reads as solid instead of as a ring of floating boxes. And it is tall
             // enough to fill the frame: a room-scale backdrop, floor to well above the reader's
             // eye, is the difference between a shelf and a strip of furniture in a black void.
+            // The wall spans the whole case and well beyond it, so the frame is filled above
+            // and below the books however many tiers there are.
+            val wallBottom = FLOOR_Y - 0.4f
+            val wallTop = CylinderMath.rowY(rows - 1, rows) + CylinderMath.BOOK_HEIGHT / 2f + 0.55f
             val wallMesh = ShelfGeometry.backboard(
                 radius = wallRadius,
-                yBottom = FLOOR_Y - 0.4f,
-                yTop = 1.40f,
+                yBottom = wallBottom,
+                yTop = wallTop,
                 segments = 96,
                 axisDistance = axis
             )
             addStatic(
                 engine, scene, res, wallMesh, woodMaterial,
-                center = floatArrayOf(0f, (1.40f + FLOOR_Y - 0.4f) / 2f, -axis),
-                halfExtent = floatArrayOf(wallRadius + 0.1f, 1.2f, wallRadius + 0.1f),
+                center = floatArrayOf(0f, (wallTop + wallBottom) / 2f, -axis),
+                halfExtent = floatArrayOf(wallRadius + 0.1f, (wallTop - wallBottom) / 2f, wallRadius + 0.1f),
                 color = WOOD_WALL
             )
 
@@ -405,16 +421,19 @@ class CylinderShelfScene(
         val count = bookEntities.size
         if (count == 0) return
         val rotation = controller.rotation
+        val slots = perRow.coerceAtLeast(1)
         for (i in 0 until count) {
-            val angle = CylinderMath.angleOf(i, count, rotation)
+            val row = i / slots
+            val slot = i % slots
+            val angle = CylinderMath.angleOf(slot, slots, rotation)
             val x = CylinderMath.positionX(angle, radius)
             val z = CylinderMath.positionZ(angle, radius, axis)
             val degrees = CylinderMath.facingDegrees(angle)
-            buildTransform(x, CylinderMath.BOOK_Y, z, degrees)
+            buildTransform(x, CylinderMath.rowY(row, rows), z, degrees)
             val instance = transforms[i]
             if (instance != 0) tm.setTransform(instance, matrix)
         }
-        val front = CylinderMath.frontIndex(count, rotation)
+        val front = CylinderMath.frontIndex(slots, rotation)
         if (front != lastFrontIndex) {
             lastFrontIndex = front
             onFrontBookChanged?.invoke(front)
@@ -482,26 +501,41 @@ class CylinderShelfScene(
     // ---------------------------------------------------------------- queries
 
     /** The book nearest the front of the drum, for the caption under the shelf. */
-    fun frontBook(): Int = CylinderMath.frontIndex(bookEntities.size, controller.rotation)
+    fun frontBook(): Int = CylinderMath.frontIndex(perRow.coerceAtLeast(1), controller.rotation)
 
-    /** Which book a tap at [screenX] hit, or -1. */
-    fun bookAtScreenX(screenX: Float, viewWidth: Float): Int {
+    /** Which book a tap hit, or -1. */
+    fun bookAt(screenX: Float, screenY: Float, viewWidth: Float, viewHeight: Float): Int {
         val count = bookEntities.size
         if (count == 0) return -1
+        val slots = perRow.coerceAtLeast(1)
+        // The tiers share their slots, so the tap's height picks the row and its width picks
+        // the slot.
+        val row = CylinderMath.rowAtScreenY(screenY, viewHeight, rows, axis - radius)
+        return bookAtSlot(screenX, viewWidth, row * slots, slots, count)
+    }
+
+    private fun bookAtSlot(
+        screenX: Float,
+        viewWidth: Float,
+        base: Int,
+        slots: Int,
+        count: Int
+    ): Int {
         val angle = CylinderMath.angleForScreenX(screenX, viewWidth, halfFovH, radius, axis)
             ?: return -1
-        val index = CylinderMath.bookNearAngle(count, controller.rotation, angle)
+        val slot = CylinderMath.bookNearAngle(slots, controller.rotation, angle)
         if (!CylinderMath.isVisible(
-                CylinderMath.angleOf(index, count, controller.rotation),
+                CylinderMath.angleOf(slot, slots, controller.rotation),
                 CylinderMath.visibleArcDegrees(radius, axis)
             )
         ) return -1
         // A tap on the bare shelf between two books opens nothing, rather than opening whichever
         // book happens to be nearest.
-        return if (CylinderMath.isTapOnBook(
-                angle, index, count, controller.rotation, radius = radius
-            )
-        ) index else -1
+        if (!CylinderMath.isTapOnBook(angle, slot, slots, controller.rotation, radius = radius)) {
+            return -1
+        }
+        val index = base + slot
+        return if (index in 0 until count) index else -1
     }
 
     override fun onDestroy(engine: Engine) {

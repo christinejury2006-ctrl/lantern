@@ -61,6 +61,75 @@ object CylinderMath {
     /** Distance from the camera to the spine of the book at the front of the drum. */
     const val SPINE_DISTANCE = 0.72f
 
+    /** Vertical space one row of the case takes: a book standing on its board. */
+    const val ROW_PITCH = BOOK_HEIGHT + 0.05f
+
+    /**
+     * How many rows of books the case carries on a screen [heightDp] tall.
+     *
+     * One row of books is a band across the middle of the phone, whatever the camera does. A
+     * revolving case is a tall piece of furniture, so the number of tiers follows the phone's
+     * length: a squat phone gets two, a tall one four, and the case fills the screen either way.
+     */
+    fun rowsFor(heightDp: Float): Int = when {
+        heightDp >= 780f -> 4
+        heightDp >= 600f -> 3
+        heightDp >= 430f -> 2
+        else -> 1
+    }
+
+    /** How many books each row holds when the library is split over [rows] tiers. */
+    fun perRowFor(count: Int, rows: Int): Int {
+        if (rows <= 1) return count
+        if (count <= 0) return 0
+        return ceil(count / rows.toFloat()).toInt()
+    }
+
+    /**
+     * Camera distance that makes the whole case fill [fill] of the screen's height.
+     *
+     * This is what ties the shelf to the phone rather than to a fixed world scale: however many
+     * tiers the case has, the books and boards together take up most of the screen.
+     */
+    fun caseDistanceFor(rows: Int, fill: Float = 0.86f): Float {
+        val caseHeight = rows.coerceAtLeast(1) * ROW_PITCH
+        val halfFovV = Math.toRadians(FOV_VERTICAL_DEGREES / 2.0).toFloat()
+        return (caseHeight / fill) / (2f * tan(halfFovV))
+    }
+
+    /**
+     * Which tier of the case a tap at [screenY] points at.
+     *
+     * The tiers share their slots, so a tap's horizontal position alone is ambiguous: every row
+     * has a book at the same angle. The vertical position is what says which shelf was touched.
+     * The screen is a pinhole camera, so a pixel maps to a view angle, and the view angle maps
+     * to a height at the distance the front of the case sits at.
+     */
+    fun rowAtScreenY(
+        screenY: Float,
+        viewHeight: Float,
+        rows: Int,
+        distanceToShelf: Float
+    ): Int {
+        if (rows <= 1 || viewHeight <= 0f || distanceToShelf <= 0f) return 0
+        val halfFovV = Math.toRadians(FOV_VERTICAL_DEGREES / 2.0).toFloat()
+        // +1 at the top of the screen, -1 at the bottom
+        val normalised = (0.5f - screenY / viewHeight) * 2f
+        val worldY = distanceToShelf * normalised * tan(halfFovV)
+        val rowsFromBottom = (worldY - BOOK_Y) / ROW_PITCH + (rows - 1) / 2f
+        return kotlin.math.round(rowsFromBottom).toInt().coerceIn(0, rows - 1)
+    }
+
+    /** Centre height of row [row] in a case of [rows] tiers, centred on the eye line. */
+    fun rowY(row: Int, rows: Int): Float =
+        BOOK_Y + (row - (rows - 1) / 2f) * ROW_PITCH
+
+    /**
+     * The axis distance for a case of [rows] tiers, each holding [perRow] books.
+     */
+    fun axisForCase(perRow: Int, rows: Int): Float =
+        radiusFor(perRow) + caseDistanceFor(rows) + BOOK_DEPTH / 2f
+
     /** How many spines the screen should show across, at most. */
     const val BOOKS_ACROSS = 14f
 
@@ -179,6 +248,8 @@ object CylinderMath {
     fun bookArcRadians(radius: Float = DRUM_RADIUS): Float = BOOK_WIDTH / radius
 
     private const val TWO_PI = (PI * 2.0).toFloat()
+
+    private fun ceil(value: Float): Int = kotlin.math.ceil(value.toDouble()).toInt()
 
     /** Angle between neighbouring books when [count] books share the drum evenly. */
     fun angleStep(count: Int): Float = if (count <= 0) TWO_PI else TWO_PI / count

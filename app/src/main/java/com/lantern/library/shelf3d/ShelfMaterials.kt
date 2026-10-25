@@ -82,7 +82,7 @@ object ShelfMaterials {
      * Bytes for each material, keyed by name.
      *
      * The APK ships a material already compiled by matc on the build machine (see
-     * materials/*.mat and the workflow that compiles them). That is the normal path and it
+     * the .mat files in materials/ and the workflow that compiles them). That is the normal path and it
      * costs one file read: no compiler on the phone, no hundred-millisecond wait on first
      * launch, and no way for a device's driver to disagree with a shader.
      *

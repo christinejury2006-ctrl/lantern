@@ -323,7 +323,12 @@ class ShelfRenderer(
             .format(Texture.InternalFormat.RGBA8)
             .width(bitmap.width)
             .height(bitmap.height)
+            // 0 asks for the full mip chain. Without it a receding spine samples one texel per
+            // pixel and crawls as the shelf settles.
             .levels(0)
+            // A texture's default usage is UPLOADABLE | SAMPLEABLE. generateMipmaps refuses
+            // to run unless GEN_MIPMAPPABLE is declared as well, so it has to be asked for.
+            .usage(Texture.Usage.DEFAULT or Texture.Usage.GEN_MIPMAPPABLE)
             .build(e)
         val data = ByteBuffer.allocateDirect(bitmap.byteCount).order(ByteOrder.nativeOrder())
         bitmap.copyPixelsToBuffer(data)

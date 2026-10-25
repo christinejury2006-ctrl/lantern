@@ -172,7 +172,8 @@ class ShelfRenderer(
         val ib = indexBuffer(e, box)
         for (slot in slots) {
             val instance = mat.createInstance()
-            instance.setParameter("uvRect", cellRect(slot.cell))
+            val rect = cellRect(slot.cell)
+            instance.setParameter("uvRect", rect[0], rect[1], rect[2], rect[3])
             instance.setParameter("art", art, ts)
             instances.add(instance)
             val entity = EntityManager.get().create()

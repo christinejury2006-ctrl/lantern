@@ -314,63 +314,105 @@ class CylinderShelfScene(
         material: Material,
         artwork: Texture
     ) {
+        // Where the gap in the placement is. It is the one empty slot in the case, and the niche
+        // is set into it.
+        val nookPosition = placement.indexOf(-1)
+        val nookTile = spineAtlas?.nookTile
+
         for (position in placement.indices) {
-            val i = placement[position]
-            // The gap. Nothing is built for it: an empty slot is what makes the bay a bay.
-            if (i < 0) continue
-            val instance = material.createInstance()
-            val color = bookColors.getOrElse(i) { 0xFF6B4A32.toInt() }
-            // Linear-ish base colour; sRGB would need a colour space conversion, and a slightly
-            // desaturated leather reads better under the sun anyway.
-            instance.setParameter(
-                "baseColor",
-                Color.red(color) / 255f,
-                Color.green(color) / 255f,
-                Color.blue(color) / 255f
-            )
-            instance.setParameter("roughness", 0.55f + (i % 5) * 0.06f)
-            instance.setParameter("metallic", 0f)
-
-            // Bind the atlas on every book, then point this one at its own tile.
-            instance.setParameter(
-                "spineMap",
-                artwork,
-                TextureSampler(TextureSampler.MagFilter.LINEAR, TextureSampler.WrapMode.CLAMP_TO_EDGE)
-            )
-            val tile = spineAtlas?.tiles?.getOrNull(i)
-            if (tile != null) {
-                instance.setParameter("uvOffset", tile.u0, tile.v0)
-                instance.setParameter("uvScale", tile.u1 - tile.u0, tile.v1 - tile.v0)
-                instance.setParameter("useArtwork", 1f)
-            } else {
-                instance.setParameter("uvOffset", 0f, 0f)
-                instance.setParameter("uvScale", 1f, 1f)
-                instance.setParameter("useArtwork", 0f)
+            val book = placement[position]
+            if (book < 0) {
+                // The gap between the picks and the rest of the library. Empty, except for the
+                // niche: a lit alcove is more inviting to look at than a blank slot, and it is
+                // what gives the case its character.
+                if (position == nookPosition && nookTile != null) {
+                    addPanel(
+                        engine, scene, res, vertices, indices, material, artwork,
+                        tile = nookTile,
+                        position = position,
+                        colour = 0xFFFFFFFF.toInt(),
+                        roughness = 0.85f
+                    )
+                }
+                continue
             }
-            res.track(instance)
-            bookInstances.add(instance)
-
-            val entity = EntityManager.get().create()
-            val half = floatArrayOf(
-                CylinderMath.BOOK_WIDTH / 2f,
-                CylinderMath.BOOK_HEIGHT / 2f,
-                CylinderMath.BOOK_DEPTH / 2f
+            addPanel(
+                engine, scene, res, vertices, indices, material, artwork,
+                tile = spineAtlas?.tiles?.getOrNull(book),
+                position = position,
+                colour = bookColors.getOrElse(book) { 0xFF6B4A32.toInt() },
+                roughness = 0.55f + (book % 5) * 0.06f
             )
-            RenderableManager.Builder(1)
-                .geometry(0, RenderableManager.PrimitiveType.TRIANGLES, vertices, indices)
-                .material(0, instance)
-                .boundingBox(Box(floatArrayOf(0f, 0f, 0f), half))
-                // Small, always-on-screen objects: culling would cost more than it saves.
-                .culling(false)
-                .build(engine, entity)
-            scene.addEntity(entity)
-            bookEntities.add(entity)
-            entityPosition.add(position)
-            transforms.add(engine.transformManager.getInstance(entity))
         }
         // Place them immediately, so the first frame is already a shelf and not a pile at the
         // origin.
         applyRotation()
+    }
+
+    /**
+     * One standing panel on the drum: a book, or the niche, which is drawn with the same material
+     * and differs only by its tile.
+     */
+    private fun addPanel(
+        engine: Engine,
+        scene: Scene,
+        res: ShelfResources,
+        vertices: VertexBuffer,
+        indices: IndexBuffer,
+        material: Material,
+        artwork: Texture,
+        tile: SpineAtlas.Tile?,
+        position: Int,
+        colour: Int,
+        roughness: Float
+    ) {
+        val instance = material.createInstance()
+        // Linear-ish base colour; sRGB would need a colour space conversion, and a slightly
+        // desaturated leather reads better under the sun anyway.
+        instance.setParameter(
+            "baseColor",
+            Color.red(colour) / 255f,
+            Color.green(colour) / 255f,
+            Color.blue(colour) / 255f
+        )
+        instance.setParameter("roughness", roughness)
+        instance.setParameter("metallic", 0f)
+
+        // Bind the atlas on every panel, then point this one at its own tile.
+        instance.setParameter(
+            "spineMap",
+            artwork,
+            TextureSampler(TextureSampler.MagFilter.LINEAR, TextureSampler.WrapMode.CLAMP_TO_EDGE)
+        )
+        if (tile != null) {
+            instance.setParameter("uvOffset", tile.u0, tile.v0)
+            instance.setParameter("uvScale", tile.u1 - tile.u0, tile.v1 - tile.v0)
+            instance.setParameter("useArtwork", 1f)
+        } else {
+            instance.setParameter("uvOffset", 0f, 0f)
+            instance.setParameter("uvScale", 1f, 1f)
+            instance.setParameter("useArtwork", 0f)
+        }
+        res.track(instance)
+        bookInstances.add(instance)
+
+        val entity = EntityManager.get().create()
+        val half = floatArrayOf(
+            CylinderMath.BOOK_WIDTH / 2f,
+            CylinderMath.BOOK_HEIGHT / 2f,
+            CylinderMath.BOOK_DEPTH / 2f
+        )
+        RenderableManager.Builder(1)
+            .geometry(0, RenderableManager.PrimitiveType.TRIANGLES, vertices, indices)
+            .material(0, instance)
+            .boundingBox(Box(floatArrayOf(0f, 0f, 0f), half))
+            // Small, always-on-screen objects: culling would cost more than it saves.
+            .culling(false)
+            .build(engine, entity)
+        scene.addEntity(entity)
+        bookEntities.add(entity)
+        entityPosition.add(position)
+        transforms.add(engine.transformManager.getInstance(entity))
     }
 
     private fun addLights(engine: Engine, scene: Scene, res: ShelfResources) {

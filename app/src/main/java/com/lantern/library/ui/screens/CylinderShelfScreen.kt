@@ -133,8 +133,9 @@ fun CylinderShelfScreen(
         }
         if (result.isFailure) return@LaunchedEffect
         phase = "Binding the spines\u2026"
-        // Covers are decoded from disk; a book with none keeps its leather colour.
-        spineAtlas = runCatching { SpineAtlas.build(context, books) }.getOrNull()
+        // Covers are decoded from disk and each spine gets its title painted down it. A book with
+        // no cover gets a painted binding in the colour the shelf already gives it.
+        spineAtlas = runCatching { SpineAtlas.build(context, books, colors) }.getOrNull()
         materialBytes = result.getOrNull()
         phase = "Raising the shelf\u2026"
     }

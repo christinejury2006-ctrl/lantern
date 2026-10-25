@@ -19,7 +19,31 @@ android {
         buildConfigField("String", "GOOGLE_BOOKS_API_KEY", "\"${escapeBuildConfig(resolveGoogleBooksApiKey())}\"")
     }
 
+    signingConfigs {
+        val stableDebugStore = System.getenv("LORE_KEYSTORE_PATH")
+        val stableDebugStorePassword = System.getenv("LORE_KEYSTORE_PASSWORD")
+        val stableDebugAlias = System.getenv("LORE_KEY_ALIAS")
+        val stableDebugKeyPassword = System.getenv("LORE_KEY_PASSWORD")
+        if (!stableDebugStore.isNullOrBlank() &&
+            !stableDebugStorePassword.isNullOrBlank() &&
+            !stableDebugAlias.isNullOrBlank() &&
+            !stableDebugKeyPassword.isNullOrBlank()
+        ) {
+            create("stableDebug") {
+                storeFile = file(stableDebugStore)
+                storePassword = stableDebugStorePassword
+                keyAlias = stableDebugAlias
+                keyPassword = stableDebugKeyPassword
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (signingConfigs.findByName("stableDebug") != null) {
+                signingConfig = signingConfigs.getByName("stableDebug")
+            }
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(

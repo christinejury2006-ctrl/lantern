@@ -53,6 +53,7 @@ import com.lantern.library.ui.components.FadeToast
 import com.lantern.library.ui.screens.AppearanceEditor
 import com.lantern.library.ui.screens.BookDetailsOverlay
 import com.lantern.library.ui.screens.InterestOnboardingScreen
+import com.lantern.library.ui.screens.ShelfPreviewScreen
 import com.lantern.library.ui.screens.LibraryScreen
 import com.lantern.library.ui.screens.ProfileScreen
 import com.lantern.library.ui.screens.ReaderScreen
@@ -86,6 +87,7 @@ private sealed class Route {
 @Composable
 internal fun LanternRoot(store: LanternStore) {
     var tab by remember { mutableStateOf<Route>(Route.Library) }
+    var shelf3D by remember { mutableStateOf(false) }
     var details by remember { mutableStateOf<DiscoveryBook?>(null) }
     var libraryAppearOpen by remember { mutableStateOf(false) }
     var pickerForStudio by remember { mutableStateOf(true) }
@@ -232,7 +234,8 @@ internal fun LanternRoot(store: LanternStore) {
                     { store.signOut(activity) },
                     { store.requestDriveConnect() },
                     { store.openInterestEditor() },
-                    { libraryAppearOpen = true }
+                    { libraryAppearOpen = true },
+                    { shelf3D = true }
                 )
                 is Route.Reader -> {
                     val book = store.book(r.id)
@@ -246,6 +249,18 @@ internal fun LanternRoot(store: LanternStore) {
                     )
                 }
             }
+            if (shelf3D) {
+                ShelfPreviewScreen(
+                    books = store.books,
+                    onOpenBook = { book ->
+                        shelf3D = false
+                        store.openForReading(book) { ready ->
+                            if (ready != null) tab = Route.Reader(ready.id)
+                        }
+                    },
+                    onBack = { shelf3D = false }
+                )
+            }
             val detail = details
             if (detail != null && tab is Route.Library) {
                 BookDetailsOverlay(
@@ -257,7 +272,7 @@ internal fun LanternRoot(store: LanternStore) {
                     onGet = { getDiscovery(detail) }
                 )
             }
-            if (!needsOnboarding && tab !is Route.Reader && details == null) {
+            if (!needsOnboarding && tab !is Route.Reader && details == null && !shelf3D) {
                 BottomBar(theme, tab, { tab = it }, Modifier.align(Alignment.BottomCenter))
             }
             if (store.editingInterests && store.interestsChosen) {

@@ -39,7 +39,8 @@ fun ProfileScreen(
     onSignOut: () -> Unit,
     onConnectDrive: () -> Unit = {},
     onEditInterests: () -> Unit = {},
-    onLibraryAppearance: () -> Unit = {}
+    onLibraryAppearance: () -> Unit = {},
+    onOpenShelf3D: () -> Unit = {}
 ) {
     val dark = prefs.theme == ReaderTheme.DARK
     // the backdrop is now a warm room, so text is parchment either way
@@ -63,6 +64,8 @@ fun ProfileScreen(
                     }
                     Spacer(Modifier.height(10.dp))
                     LorePillButton("Library Appearance", onClick = onLibraryAppearance)
+                    Spacer(Modifier.height(10.dp))
+                    LorePillButton("The shelf, in 3D", onClick = onOpenShelf3D)
                 }
             }
             Spacer(Modifier.height(12.dp))

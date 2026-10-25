@@ -1,0 +1,254 @@
+package com.lantern.library.shelf
+
+import kotlin.math.abs
+import kotlin.math.atan
+import kotlin.math.cos
+import kotlin.math.hypot
+import kotlin.math.sin
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * The shelf's geometry is the part of the 3D scene a unit test can actually pin down: where
+ * books stand, which way their spines face and what a tap lands on.
+ */
+class ShelfLayoutTest {
+
+    @Test
+    fun `an empty library produces no slots`() {
+        assertTrue(ShelfLayout.slots(0).isEmpty())
+        assertTrue(ShelfLayout.slots(-3).isEmpty())
+    }
+
+    @Test
+    fun `every book lands on the circle of the case`() {
+        for (slot in ShelfLayout.slots(30)) {
+            val x = ShelfLayout.arcX(slot.angle, ShelfLayout.RADIUS)
+            val z = ShelfLayout.arcZ(slot.angle, ShelfLayout.RADIUS)
+            assertEquals(ShelfLayout.RADIUS, hypot(x, z), 1e-4f)
+            // in front of the viewer, never behind
+            assertTrue(z < 0f)
+        }
+    }
+
+    @Test
+    fun `books stay inside the arc of the case and never overlap`() {
+        val slots = ShelfLayout.slots(24)
+        for (row in 0 until ShelfLayout.ROWS) {
+            val inRow = slots.filter { it.row == row }.sortedBy { it.angle }
+            for ((a, b) in inRow.zipWithNext()) {
+                val gap = b.angle - a.angle
+                assertTrue("books overlap by ${a.arc} rad", gap > a.arc / 2f + b.arc / 2f)
+            }
+            for (slot in inRow) {
+                assertTrue(slot.angle - slot.arc / 2f >= -ShelfLayout.HALF_ARC - 1e-4f)
+                assertTrue(slot.angle + slot.arc / 2f <= ShelfLayout.HALF_ARC + 1e-4f)
+            }
+        }
+    }
+
+    @Test
+    fun `books stand on their board without poking through the shelf above`() {
+        for (slot in ShelfLayout.slots(18)) {
+            val bottom = ShelfLayout.bookCentreY(slot.row, slot.height) - slot.height / 2f
+            assertEquals(ShelfLayout.rowBaseY(slot.row), bottom, 1e-4f)
+            assertTrue(bottom + slot.height <= ShelfLayout.rowCeilingY(slot.row) + 1e-4f)
+        }
+    }
+
+    @Test
+    fun `atlas cells are distinct until the atlas runs out`() {
+        val slots = ShelfLayout.slots(ShelfLayout.CELLS)
+        assertEquals(ShelfLayout.CELLS, slots.map { it.cell }.toSet().size)
+        // beyond that it recycles rather than failing
+        val many = ShelfLayout.slots(ShelfLayout.CELLS + 10)
+        assertEquals(ShelfLayout.CELLS + 10, many.size)
+    }
+
+    @Test
+    fun `the spine of every book faces the viewer`() {
+        for (slot in ShelfLayout.slots(12)) {
+            val m = ShelfLayout.bookTransform(slot, 0f)
+            // third column of the transform is the box's +z axis; the spine is -z
+            val nx = -m[8]
+            val nz = -m[10]
+            val len = hypot(nx, nz)
+            assertEquals(1f, len, 1e-4f)
+            // and it must point back at the camera at the origin
+            val px = m[12]
+            val pz = m[14]
+            val pl = hypot(px, pz)
+            val dot = (nx * -px + nz * -pz) / (len * pl)
+            assertEquals(1f, dot, 1e-3f)
+        }
+    }
+
+    @Test
+    fun `the book is scaled to its own measurements`() {
+        val slot = ShelfLayout.slots(6).first()
+        val m = ShelfLayout.bookTransform(slot, 0f)
+        assertEquals(slot.width, hypot(m[0], m[2]),
+            // the tilt is zero when settled, so x stays in the horizontal plane
+            1e-4f
+        )
+        assertEquals(slot.height, abs(m[5]), 1e-4f)
+        assertEquals(slot.depth, hypot(m[8], m[10]), 1e-4f)
+    }
+
+    @Test
+    fun `lifting a book brings it toward the viewer and keeps it upright`() {
+        val slot = ShelfLayout.slots(9).first()
+        val down = ShelfLayout.bookTransform(slot, 0f)
+        val up = ShelfLayout.bookTransform(slot, 1f)
+        val restRadius = hypot(down[12], down[14])
+        val liftRadius = hypot(up[12], up[14])
+        assertEquals(ShelfLayout.RADIUS, restRadius, 1e-3f)
+        assertEquals(ShelfLayout.RADIUS - ShelfLayout.LIFT_DISTANCE, liftRadius, 1e-3f)
+        assertTrue(hypot(up[12], up[14]) < restRadius)
+        // it also rises a little, which is what makes it read as being taken off the shelf
+        assertTrue(up[13] > down[13])
+    }
+
+    @Test
+    fun `a tap in the middle of the screen lands on the middle book`() {
+        val pick = ShelfLayout.pickAngle(540f, 1200f, 1080f, 2400f)
+        assertNotNull(pick)
+        val (row, angle) = pick!!
+        assertEquals(ShelfLayout.ROWS / 2, row)
+        assertTrue(abs(angle) < 0.25f)
+    }
+
+    @Test
+    fun `a tap above or below the case misses`() {
+        assertNull(ShelfLayout.pickAngle(540f, 4f, 1080f, 2400f))
+        assertNull(ShelfLayout.pickAngle(540f, 2396f, 1080f, 2400f))
+        assertNull(ShelfLayout.pickAngle(540f, 1200f, 0f, 0f))
+    }
+
+    @Test
+    fun `the tap that lifts a book finds the book the ray hits`() {
+        val slots = ShelfLayout.slots(15)
+        val pick = ShelfLayout.pickAngle(540f, 1200f, 1080f, 2400f)!!
+        val slot = ShelfLayout.slotAt(slots, pick.first, pick.second)
+        assertNotNull(slot)
+        val found = slot!!
+        // the book it picked must be the closest one in that row to the ray
+        val nearest = slots.filter { it.row == pick.first }.minByOrNull { abs(it.angle - pick.second) }!!
+        assertEquals(nearest.index, found.index)
+    }
+
+    @Test
+    fun `taps map monotonically across the shelf`() {
+        // a tap further right must never land further left
+        var previous = -10f
+        var x = 60f
+        while (x < 1020f) {
+            val angle = ShelfLayout.pickAngle(x, 1200f, 1080f, 2400f)!!.second
+            assertTrue("angle went backwards at x=$x", angle > previous)
+            previous = angle
+            x += 40f
+        }
+    }
+
+    @Test
+    fun `the projection matches the width the shelf is tuned for`() {
+        val near = 0.05f
+        val p = ShelfLayout.projection(0.45f, near)
+        val left = p[0]
+        val right = p[1]
+        val bottom = p[2]
+        val top = p[3]
+        // at the radius of the books, the frustum must cover the visible half width
+        val visibleHalfWidth = right / near * ShelfLayout.RADIUS
+        assertEquals(ShelfLayout.HALF_WIDTH, visibleHalfWidth, 1e-3f)
+        assertEquals(-left, right, 1e-6f)
+        assertEquals(-bottom, top, 1e-6f)
+        assertTrue(top > right / 0.45f * 0.9f)
+    }
+
+    @Test
+    fun `the spring settles instead of bouncing`() {
+        var value = 0f
+        var velocity = 0f
+        var overshootsAboveTarget = 0
+        var steps = 0
+        while (steps < 400) {
+            val next = ShelfLayout.springStep(value, velocity, 1f, 1f / 60f)
+            value = next.first
+            velocity = next.second
+            if (value > 1.0005f) overshootsAboveTarget++
+            steps++
+            if (value == 1f && velocity == 0f) break
+        }
+        assertEquals(1f, value, 1e-3f)
+        assertEquals(0f, velocity, 1e-3f)
+        assertTrue("the book bounced $overshootsAboveTarget times", overshootsAboveTarget <= 40)
+        assertTrue("it should settle in well under 400 frames, took $steps", steps < 200)
+    }
+
+    @Test
+    fun `the case encloses the books and the room sits behind it`() {
+        val strips = ShelfLayout.caseStrips()
+        assertTrue(strips.size >= ShelfLayout.ROWS + 1)
+        for (strip in strips) {
+            assertTrue(strip.a0 < strip.a1)
+            assertTrue(strip.y0 < strip.y1)
+        }
+        assertTrue(ShelfLayout.ROOM_RADIUS > ShelfLayout.RADIUS + ShelfLayout.BOOK_MAX_D)
+        val board = ShelfLayout.caseStrips().first { it.y0 == ShelfLayout.rowBaseY(0) - ShelfLayout.BOARD }
+        assertEquals(ShelfLayout.BOARD, board.y1 - board.y0, 1e-6f)
+    }
+
+    @Test
+    fun `the four corners of an atlas cell never leave it`() {
+        for (region in ShelfGeometry.Region.values()) {
+            for (u in listOf(0f, 1f)) {
+                for (v in listOf(0f, 1f)) {
+                    val (cu, cv) = region.map(u, v)
+                    assertTrue("u=$cu out of cell", cu >= 0f && cu <= 1f + 1e-6f)
+                    assertTrue("v=$cv out of cell", cv >= 0f && cv <= 1f + 1e-6f)
+                }
+            }
+        }
+        // the spine only ever samples the left column of the cell
+        val (spineU, _) = ShelfGeometry.Region.SPINE.map(1f, 0.5f)
+        assertEquals(ShelfLayout.SPINE_U1, spineU, 1e-6f)
+    }
+
+    @Test
+    fun `the box mesh is a closed box with the expected vertex count`() {
+        val box = ShelfGeometry.box()
+        assertEquals(24, box.vertexCount)
+        assertEquals(36, box.indexCount)
+        for (index in box.indices) {
+            assertTrue("index out of range", index.toInt() in 0 until box.vertexCount)
+        }
+    }
+
+    @Test
+    fun `the box sits around the origin so the transform can scale it`() {
+        val box = ShelfGeometry.box()
+        for (i in 0 until box.vertexCount) {
+            val x = box.vertices[i * 9]
+            val y = box.vertices[i * 9 + 1]
+            val z = box.vertices[i * 9 + 2]
+            assertEquals(0.5f, maxOf(abs(x), abs(y), abs(z)), 1e-6f)
+        }
+    }
+
+    @Test
+    fun `the arc really curves away at the edges`() {
+        val centre = ShelfLayout.arcZ(0f, ShelfLayout.RADIUS)
+        val edge = ShelfLayout.arcZ(ShelfLayout.HALF_ARC, ShelfLayout.RADIUS)
+        // the middle of the shelf is nearer the viewer... in -z terms, further away
+        assertTrue(centre < edge)
+        val edgeX = ShelfLayout.arcX(ShelfLayout.HALF_ARC, ShelfLayout.RADIUS)
+        assertEquals(ShelfLayout.RADIUS * sin(ShelfLayout.HALF_ARC), edgeX, 1e-5f)
+        assertEquals(-ShelfLayout.RADIUS * cos(ShelfLayout.HALF_ARC), edge, 1e-5f)
+        // the visible half angle must be smaller than the arc, so edges stay off screen
+        assertTrue(atan(ShelfLayout.RADIUS * sin(ShelfLayout.HALF_ARC) / -edge) > ShelfLayout.halfAngleH())
+    }
+}

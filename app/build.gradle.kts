@@ -119,8 +119,8 @@ dependencies {
     // Native renderer for the bookcase. Only the engine and the small runtime material
     // compiler are pulled in: glTF loading and filament-utils are not needed because the
     // shelf is built from boxes in code, not from a model file.
-    implementation("com.google.android.filament:filament-android:1.78.1")
-    implementation("com.google.android.filament:filamat-android-lite:1.78.1")
+    implementation("com.google.android.filament:filament-android:1.77.3")
+    implementation("com.google.android.filament:filamat-android:1.77.3")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
 }

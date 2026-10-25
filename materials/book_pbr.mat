@@ -16,7 +16,7 @@ material {
         { type : float2, name : uvOffset },
         { type : float2, name : uvScale },
         { type : float, name : useArtwork },
-        { type : sampler2D, name : spineMap }
+        { type : sampler2d, name : spineMap }
     ]
 }
 

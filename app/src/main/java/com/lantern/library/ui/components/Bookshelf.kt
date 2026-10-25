@@ -33,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.ImageShader
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.Color
@@ -43,7 +44,6 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -297,7 +297,7 @@ fun ShelfRow(
             val a0Case = -halfVisible * 1.45f
             val a1Case = halfVisible * 1.45f
             val grain: Brush? = woodBitmap?.let {
-                ShaderBrush(ImageShader(it, TileMode.Repeated, TileMode.Repeated))
+                ShaderBrush(ImageShader(it.asImageBitmap(), TileMode.Repeated, TileMode.Repeated))
             }
 
             // ---- back of the case, a deep shadowed recess -------------------------
@@ -714,14 +714,21 @@ fun RoomBackdrop(
     modifier: Modifier = Modifier,
     content: @Composable BoxScope.() -> Unit
 ) {
-    val image = imageResource(R.drawable.library_room)
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val room = remember {
+        runCatching {
+            android.graphics.BitmapFactory.decodeResource(context.resources, R.drawable.library_room)
+        }.getOrNull()
+    }
     Box(modifier.fillMaxSize()) {
-        androidx.compose.foundation.Image(
-            image,
-            contentDescription = null,
-            modifier = Modifier.fillMaxSize(),
-            contentScale = androidx.compose.ui.layout.ContentScale.Crop
-        )
+        if (room != null) {
+            androidx.compose.foundation.Image(
+                room.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop
+            )
+        }
         Box(
             Modifier
                 .fillMaxSize()

@@ -35,7 +35,7 @@ jobs:
 
       - name: Install Android platform 34
         run: |
-          sdkmanager "platforms;android-34" "build-tools;34.0.0" "build-tools;30.0.3"
+          sdkmanager "platforms;android-34" "platforms;android-35" "build-tools;34.0.0" "build-tools;30.0.3"
 
       # Restores the one key that stays the same across builds. Without it, each runner
       # generates a fresh debug key, Android sees a different signer, and refuses the
@@ -73,7 +73,7 @@ jobs:
             {
               echo "Gradle unit test run failed."
               echo '```'
-              grep -E "app/src.*\.kt|\.kts:.*error|^e: |error:|What went wrong|Caused by|Exception|Detail:" gradle-tests.log | head -n 70
+              grep -E "app/src.*\.kt|\.kts:.*error|^e: |error:|What went wrong|Caused by|Exception|Detail:|requires|minCompileSdk|Dependency" gradle-tests.log | head -n 70
               echo '```'
               echo "Last 30 lines:"
               echo '```'
@@ -105,7 +105,7 @@ jobs:
             {
               echo "Gradle build failed."
               echo '```'
-              grep -E "app/src.*\.kt|\.kts:.*error|^e: |error:|What went wrong|Caused by|Exception|Detail:" gradle-build.log | head -n 70
+              grep -E "app/src.*\.kt|\.kts:.*error|^e: |error:|What went wrong|Caused by|Exception|Detail:|requires|minCompileSdk|Dependency" gradle-build.log | head -n 70
               echo '```'
               echo "Last 30 lines:"
               echo '```'

@@ -13,7 +13,7 @@ val baseVersionCode = 10
 
 android {
     namespace = "com.lantern.library"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.lantern.library"

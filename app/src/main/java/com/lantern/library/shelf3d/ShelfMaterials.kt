@@ -26,7 +26,7 @@ object ShelfMaterials {
      * The compiled package is cached in filesDir, so a device that ran an older build would
      * otherwise keep loading a material that has no spine sampler in it.
      */
-    private const val VERSION = 4
+    private const val VERSION = 5
 
     /** A book: leather or cloth, with a paper fore-edge. */
     private const val BOOK = "book_pbr"
@@ -47,56 +47,26 @@ object ShelfMaterials {
     /**
      * The book shader.
      *
-     * `MaterialInputs` is **write only**: every field must be computed into a local and assigned
-     * once, at the end. Reading `material.baseColor` back to blend something into it looks like
-     * ordinary GLSL and is a compile error in matc, which shows up as "book_pbr failed to
-     * compile" and, because a material that fails to compile takes the scene with it, as no
-     * shelf at all.
+     * This is deliberately the plainest version that draws a spine correctly: assign each
+     * MaterialInputs field once and never read one back. `MaterialInputs` is write-only in
+     * Filament, and reading `material.baseColor` to blend something into it is a compile error
+     * that takes the whole scene down with it.
      *
-     * [ribbon] adds the brass band that marks a book picked for the reader. It is a variant
-     * rather than a branch because a compile that fails must never be able to leave the case
-     * empty: [compile] falls back to the plain variant.
+     * The brass ribbon that marks a recommended book used to live here. It does not any more:
+     * it is painted into the spine atlas instead, where the worst case is a wrong pixel rather
+     * than a shelf that will not start.
      */
-    private fun bookFragment(ribbon: Boolean): String = """
+    private val BOOK_FRAGMENT = """
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
-
-            vec2 spineUV = getUV0();
-            vec2 atlasUV = materialParams.uvOffset + materialParams.uvScale * spineUV;
-            // Binding colour first, then the cover art over it when this book has any.
-            vec4 colour = mix(
-                vec4(materialParams.baseColor, 1.0),
-                texture(materialParams_spineMap, atlasUV),
-                materialParams.useArtwork
-            );
-            float roughness = materialParams.roughness;
-            float metallic = materialParams.metallic;
-
-            @RIBBON@
-
-            material.baseColor = colour;
-            material.roughness = roughness;
-            material.metallic = metallic;
+            vec2 uv = materialParams.uvOffset + materialParams.uvScale * getUV0();
+            vec4 art = texture(materialParams_spineMap, uv);
+            // A book with no cover keeps its binding colour.
+            material.baseColor = mix(vec4(materialParams.baseColor, 1.0), art, materialParams.useArtwork);
+            material.roughness = materialParams.roughness;
+            material.metallic = materialParams.metallic;
         }
-    """.trimIndent().let { template ->
-        val band = if (!ribbon) "" else """
-            |
-            |            // A brass ribbon across the spine of a book picked for the reader. Drawn rather
-            |            // than modelled: it is a stripe on the leather, and a second piece of geometry
-            |            // per book would cost a draw call to say the same thing.
-            |            //
-            |            // The band is placed on the spine's own uv, which runs down the book's height, so
-            |            // it sits at a fixed height on the book however big the book is on screen. It is
-            |            // narrow, and sits just above the middle, where a real ribbon is tied.
-            |            float band = step(0.42, spineUV.y) * step(spineUV.y, 0.56) * materialParams.useRibbon;
-            |            colour = mix(colour, vec4(0.60, 0.40, 0.13, 1.0), band);
-            |            roughness = mix(roughness, 0.30, band);
-            |            metallic = mix(metallic, 0.80, band);
-        """.trimMargin()
-        // The placeholder sits alone on its line; drop the whole line when there is no ribbon,
-        // so the plain variant has no dangling marker for matc to choke on.
-        template.replace(Regex("(?m)^[ \\t]*@RIBBON@[ \\t]*$"), band)
-    }
+    """.trimIndent()
 
     /** The woodwork: colour and roughness only, no texture. */
     private val WOOD_FRAGMENT = """
@@ -141,22 +111,16 @@ object ShelfMaterials {
     private var filamatReady = false
 
     /**
-     * Compiles a material, and never throws because of a shader mistake in the ribbon.
+     * Compiles a material.
      *
-     * A material that fails to compile takes the entire scene with it — the case simply does not
-     * appear. The ribbon is a marking, not the shelf, so if its variant will not compile the
-     * plain book shader is used and the shelf still works: a missing ribbon is a much smaller
-     * problem than a missing library.
+     * A material that fails to compile takes the entire scene with it, so the message names the
+     * material: "book_pbr failed to compile" says which shader to look at, where a bare
+     * IllegalStateException says nothing.
      */
-    private fun compile(name: String): ByteArray {
-        if (name == BOOK) {
-            build(name, bookFragment(ribbon = true), withArtwork = true)?.let { return it }
-            Log.w(TAG, "the ribbon variant of $name did not compile; spines will be plain")
-            build(name, bookFragment(ribbon = false), withArtwork = true)?.let { return it }
-            error("$name failed to compile")
-        }
-        return build(name, WOOD_FRAGMENT, withArtwork = false)
-            ?: error("$name failed to compile")
+    private fun compile(name: String): ByteArray = if (name == BOOK) {
+        build(name, BOOK_FRAGMENT, withArtwork = true) ?: error("$name failed to compile")
+    } else {
+        build(name, WOOD_FRAGMENT, withArtwork = false) ?: error("$name failed to compile")
     }
 
     /** Compiles one variant, returning null for a package matc rejected. */
@@ -192,8 +156,6 @@ object ShelfMaterials {
                     uniformParameter(MaterialBuilder.UniformType.FLOAT2, "uvOffset")
                     uniformParameter(MaterialBuilder.UniformType.FLOAT2, "uvScale")
                     uniformParameter(MaterialBuilder.UniformType.FLOAT, "useArtwork")
-                    // 1 when this book is a pick for the reader, so the spine carries a ribbon.
-                    uniformParameter(MaterialBuilder.UniformType.FLOAT, "useRibbon")
                     samplerParameter(
                         MaterialBuilder.SamplerType.SAMPLER_2D,
                         MaterialBuilder.SamplerFormat.FLOAT,

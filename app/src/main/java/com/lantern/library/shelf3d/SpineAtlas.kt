@@ -58,7 +58,18 @@ class SpineAtlas(
          * Runs on IO: this reads image files. Returns null when not one cover could be loaded,
          * which lets the caller fall back to coloured bindings instead of a blank atlas.
          */
-        suspend fun build(context: Context, books: List<LibraryBook>): SpineAtlas? =
+        suspend fun build(
+            context: Context,
+            books: List<LibraryBook>,
+            /**
+             * Ids of books picked for the reader. Their tile gets a brass band painted across it,
+             * which is how a recommendation is shown on the case.
+             *
+             * Painted rather than shaded on purpose. A shader that will not compile takes the
+             * whole shelf with it; a wrong pixel in a texture takes nothing with it.
+             */
+            picked: Set<String> = emptySet()
+        ): SpineAtlas? =
             withContext(Dispatchers.IO) {
                 if (books.isEmpty()) return@withContext null
 
@@ -114,6 +125,7 @@ class SpineAtlas(
                         (rect.right - 1).toFloat(), (rect.bottom - 1).toFloat(),
                         edgePaint
                     )
+                    if (book.id in picked) drawRibbon(canvas, rect)
                     painted++
 
                     val w = atlas.width.toFloat()
@@ -148,6 +160,27 @@ class SpineAtlas(
             // never been fetched, and remembers failures so a dead URL costs nothing twice.
             if (book.remoteCover.isNullOrBlank()) return null
             return runCatching { CoverCache.load(book.remoteCover) }.getOrNull()
+        }
+
+        /**
+         * A brass ribbon across a spine: the band, a highlight along its top edge and a shadow
+         * under it, which is what makes it read as something wrapped over the cover rather than a
+         * rectangle filled with gold.
+         */
+        private fun drawRibbon(canvas: Canvas, rect: Rect) {
+            val w = rect.width().toFloat()
+            val h = rect.height().toFloat()
+            val left = rect.left + w * 0.05f
+            val right = rect.right - w * 0.05f
+            val top = rect.top + h * 0.42f
+            val bottom = rect.top + h * 0.56f
+
+            val band = Paint().apply { color = 0xFFA8802F.toInt() }
+            canvas.drawRect(left, top, right, bottom, band)
+            val lit = Paint().apply { color = 0x88FFE6B4.toInt() }
+            canvas.drawRect(left, top, right, top + h * 0.02f, lit)
+            val shade = Paint().apply { color = 0x66000000.toInt() }
+            canvas.drawRect(left, bottom - h * 0.02f, right, bottom, shade)
         }
 
         /** Draws [src] into [dst], scaling to fill and cropping the overhang. */

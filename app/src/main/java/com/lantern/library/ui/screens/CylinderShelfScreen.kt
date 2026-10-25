@@ -12,7 +12,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
@@ -23,6 +26,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import android.util.Log
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
@@ -107,17 +111,27 @@ fun CylinderShelfScreen(
         }
     }
 
-    LaunchedEffect(books.size) {
+    // Books picked for the reader. Their spines get a brass ribbon in the atlas, so this has to
+    // be known before the atlas is built.
+    val picks = remember(books) { ShelfPicks.picks(books) }
+
+    LaunchedEffect(books.size, picks) {
         controller.setBookCount(books.size)
         // Compiling the two PBR shaders is the only slow step, and only on first launch.
         val result = withContext(Dispatchers.Default) {
             runCatching { ShelfMaterials.load(context) }
         }
+        // The stage the screen is at is part of the failure report: it says whether the shaders,
+        // the spine atlas or the engine was the thing that went wrong.
+        result.onFailure {
+            failure = it.message ?: it.javaClass.simpleName
+            Log.e("CylinderShelf", "the shelf failed while " + phase, it)
+        }
+        if (result.isFailure) return@LaunchedEffect
         phase = "Binding the spines\u2026"
         // Covers are decoded from disk; a book with none keeps its leather colour.
-        spineAtlas = runCatching { SpineAtlas.build(context, books) }.getOrNull()
-        result.onSuccess { materialBytes = it }
-        result.onFailure { failure = it.message ?: it.javaClass.simpleName }
+        spineAtlas = runCatching { SpineAtlas.build(context, books, picks) }.getOrNull()
+        materialBytes = result.getOrNull()
         phase = "Raising the shelf\u2026"
     }
 
@@ -129,11 +143,6 @@ fun CylinderShelfScreen(
     }
     val front = books.getOrNull(frontIndex.coerceIn(0, (books.size - 1).coerceAtLeast(0)))
 
-    // Books picked for the reader, marked with a brass ribbon on the spine by the scene.
-    val picks = remember(books) { ShelfPicks.picks(books) }
-    val pickedIndices = remember(books, picks) {
-        books.indices.filter { books[it].id in picks }.toSet()
-    }
 
     /** Turns the drum to the first book matching the query. */
     fun search() {
@@ -168,7 +177,6 @@ fun CylinderShelfScreen(
                         bookColors = colors,
                         spineAtlas = spineAtlas,
                         rows = rows,
-                        picked = pickedIndices,
                         onError = { message -> failure = message },
                         onFrontBook = { index -> frontIndex = index },
                         onTapBook = { index ->
@@ -305,6 +313,49 @@ fun CylinderShelfScreen(
                 }
             }
             Spacer(Modifier.height(96.dp).navigationBarsPadding())
+        }
+
+        // A failure needs room. The reason used to be squeezed into the caption band, two lines
+        // at a time, which is why it could not be read back to me.
+        val trouble = failure
+        if (trouble != null) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color(0xF2100B07))
+                    .padding(horizontal = 26.dp)
+                    .verticalScroll(rememberScrollState()),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                Column {
+                    Text(
+                        "The shelf could not start",
+                        color = Parchment,
+                        fontFamily = Playfair,
+                        fontSize = 24.sp
+                    )
+                    Text(
+                        "Stage: $phase",
+                        color = Color(0xFFC9B79F),
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 10.dp)
+                    )
+                    SelectionContainer {
+                        Text(
+                            trouble,
+                            color = Color(0xFFE8735C),
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                    }
+                    Text(
+                        "This text can be selected and copied.",
+                        color = Color(0xFF8E7A63),
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(top = 14.dp)
+                    )
+                }
+            }
         }
 
         // Loading cover, only while there is genuinely nothing to show.

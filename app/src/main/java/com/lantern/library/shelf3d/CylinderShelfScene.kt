@@ -37,14 +37,7 @@ class CylinderShelfScene(
     /** Cover art for the spines, or null to draw plain bindings. */
     private val spineAtlas: SpineAtlas? = null,
     /** Tiers of the case. More tiers on a taller phone, so the case fills the screen. */
-    private val rows: Int = 1,
-    /**
-     * Books picked for the reader, by index, which carry a brass ribbon across the spine.
-     *
-     * Marking them on the spine rather than in a strip above the case means the recommendation
-     * is part of the furniture: it turns up as the drum turns, and there is nothing to dismiss.
-     */
-    private val picked: Set<Int> = emptySet()
+    private val rows: Int = 1
 ) : FilamentShelfEngine.ShelfContent {
 
 
@@ -314,8 +307,6 @@ class CylinderShelfScene(
             )
             instance.setParameter("roughness", 0.55f + (i % 5) * 0.06f)
             instance.setParameter("metallic", 0f)
-            // Ribbons are per book and per book only: the material is shared.
-            instance.setParameter("useRibbon", if (i in picked) 1f else 0f)
 
             // Bind the atlas on every book, then point this one at its own tile.
             instance.setParameter(

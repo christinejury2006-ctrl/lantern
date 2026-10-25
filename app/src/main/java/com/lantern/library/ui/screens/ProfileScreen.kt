@@ -65,7 +65,7 @@ fun ProfileScreen(
                     Spacer(Modifier.height(10.dp))
                     LorePillButton("Library Appearance", onClick = onLibraryAppearance)
                     Spacer(Modifier.height(10.dp))
-                    LorePillButton("The shelf, in 3D", onClick = onOpenShelf3D)
+                    LorePillButton("Revolving shelf", onClick = onOpenShelf3D)
                 }
             }
             Spacer(Modifier.height(12.dp))

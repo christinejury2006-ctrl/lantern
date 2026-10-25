@@ -73,7 +73,7 @@ jobs:
             {
               echo "Gradle unit test run failed."
               echo '```'
-              grep -E "app/src.*\.kt|\.kts:.*error|^e: |error:|What went wrong" gradle-tests.log | head -n 60
+              grep -E "app/src.*\.kt|\.kts:.*error|^e: |error:|What went wrong|Caused by|Exception|Detail:" gradle-tests.log | head -n 70
               echo '```'
               echo "Last 30 lines:"
               echo '```'
@@ -105,7 +105,7 @@ jobs:
             {
               echo "Gradle build failed."
               echo '```'
-              grep -E "app/src.*\.kt|\.kts:.*error|^e: |error:|What went wrong" gradle-build.log | head -n 60
+              grep -E "app/src.*\.kt|\.kts:.*error|^e: |error:|What went wrong|Caused by|Exception|Detail:" gradle-build.log | head -n 70
               echo '```'
               echo "Last 30 lines:"
               echo '```'

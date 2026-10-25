@@ -223,7 +223,7 @@ fun LibraryScreen(
                         Spacer(Modifier.height(8.dp))
                         ReadingProgressBar(selected.progress, Modifier.fillMaxWidth())
                         Spacer(Modifier.height(4.dp))
-                        Text("${selected.progress.coerceIn(0, 100)}% read", color = mute, fontSize = 12.sp)
+                        Text("${selected.progress.coerceIn(0f, 100f).toInt()}% read", color = mute, fontSize = 12.sp)
                     }
                 },
                 confirmButton = {

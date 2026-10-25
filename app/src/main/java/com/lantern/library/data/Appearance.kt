@@ -93,11 +93,8 @@ data class WallpaperChoice(
 
 object WallpaperCatalog {
     val items: List<WallpaperChoice> = listOf(
-        WallpaperChoice("aurora_purple", "Blush Glass", R.drawable.wp_aurora_purple),
-        WallpaperChoice("aurora_teal", "Sea Glass", R.drawable.wp_aurora_teal),
         WallpaperChoice("paper_cream", "Warm Paper", R.drawable.wp_paper_cream),
         WallpaperChoice("dusk_slate", "Slate Glass", R.drawable.wp_dusk_slate),
-        WallpaperChoice("mist_lilac", "Soft Frost", R.drawable.wp_mist_lilac),
         WallpaperChoice("night_ink", "Ink Glass", R.drawable.wp_night_ink)
     )
 

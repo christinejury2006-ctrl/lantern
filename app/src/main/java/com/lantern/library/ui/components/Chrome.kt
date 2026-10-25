@@ -113,7 +113,7 @@ fun CoverFace(
     fallbacks: List<String> = emptyList()
 ) {
     val shape = RoundedCornerShape(10.dp)
-    Box(modifier.shadow(8.dp, shape).clip(shape).background(if (dark) SlateHi else Color(0xFFD8C8E8))) {
+    Box(modifier.shadow(8.dp, shape).clip(shape).background(if (dark) SlateHi else Color(0xFFD1D5DB))) {
         when {
             localRes != null -> Image(painterResource(localRes), title, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             !pathOrUrl.isNullOrBlank() || fallbacks.isNotEmpty() -> {

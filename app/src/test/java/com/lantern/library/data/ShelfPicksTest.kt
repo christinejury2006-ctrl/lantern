@@ -4,7 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class RecommendationsTest {
+class ShelfPicksTest {
 
     private fun book(
         id: String,
@@ -26,13 +26,13 @@ class RecommendationsTest {
     )
 
     @Test
-    fun `a book already started is never recommended`() {
+    fun `a book already started is never picked`() {
         val books = listOf(
             book("reading", currentPage = 12, lastReadAt = 10L),
             book("done", currentPage = 100),
             book("fresh")
         )
-        assertEquals(setOf("fresh"), Recommendations.picks(books))
+        assertEquals(setOf("fresh"), ShelfPicks.picks(books))
     }
 
     @Test
@@ -42,12 +42,12 @@ class RecommendationsTest {
             book("poetry-read", category = "Poetry", currentPage = 3, lastReadAt = 99L),
             book("history-old", category = "History", addedAt = 1_000L),
             book("poetry-new", category = "Poetry", addedAt = 900L),
-            book("history-newest-but-other", category = "Science", addedAt = 9_999L)
+            book("science-newest", category = "Science", addedAt = 9_999L)
         )
         // Poetry was read last, so poetry comes first; then the rest by when they arrived.
-        val picks = Recommendations.picks(books, count = 3).toList()
+        val picks = ShelfPicks.picks(books, count = 3).toList()
         assertEquals("poetry-new", picks[0])
-        assertTrue(picks.contains("history-newest-but-other"))
+        assertTrue(picks.contains("science-newest"))
         assertTrue(picks.contains("history-old"))
     }
 
@@ -58,7 +58,7 @@ class RecommendationsTest {
             book("newer", addedAt = 20L),
             book("newest", addedAt = 30L)
         )
-        assertEquals(setOf("newest", "newer", "older"), Recommendations.picks(books))
+        assertEquals(setOf("newest", "newer", "older"), ShelfPicks.picks(books))
     }
 
     @Test
@@ -67,18 +67,18 @@ class RecommendationsTest {
             book("a", currentPage = 4, lastReadAt = 1L),
             book("b", currentPage = 100)
         )
-        assertTrue(Recommendations.picks(books).isEmpty())
+        assertTrue(ShelfPicks.picks(books).isEmpty())
     }
 
     @Test
-    fun `picks are a set, so the ribbon never moves between recompositions`() {
+    fun `picks are stable, so a ribbon never moves between recompositions`() {
         val books = (1..20).map { book("b$it", addedAt = it.toLong()) }
-        assertEquals(Recommendations.picks(books), Recommendations.picks(books))
-        assertEquals(Recommendations.PICK_COUNT, Recommendations.picks(books).size)
+        assertEquals(ShelfPicks.picks(books), ShelfPicks.picks(books))
+        assertEquals(ShelfPicks.PICK_COUNT, ShelfPicks.picks(books).size)
     }
 
     @Test
-    fun `an empty library recommends nothing`() {
-        assertTrue(Recommendations.picks(emptyList()).isEmpty())
+    fun `an empty library picks nothing`() {
+        assertTrue(ShelfPicks.picks(emptyList()).isEmpty())
     }
 }

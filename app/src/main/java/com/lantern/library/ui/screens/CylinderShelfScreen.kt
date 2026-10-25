@@ -39,7 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.lantern.library.data.LibraryBook
-import com.lantern.library.data.Recommendations
+import com.lantern.library.data.ShelfPicks
 import com.lantern.library.shelf3d.CylinderRotationController
 import com.lantern.library.shelf3d.CylinderMath
 import com.lantern.library.shelf3d.CylinderShelfSurfaceView
@@ -130,7 +130,7 @@ fun CylinderShelfScreen(
     val front = books.getOrNull(frontIndex.coerceIn(0, (books.size - 1).coerceAtLeast(0)))
 
     // Books picked for the reader, marked with a brass ribbon on the spine by the scene.
-    val picks = remember(books) { Recommendations.picks(books) }
+    val picks = remember(books) { ShelfPicks.picks(books) }
     val pickedIndices = remember(books, picks) {
         books.indices.filter { books[it].id in picks }.toSet()
     }

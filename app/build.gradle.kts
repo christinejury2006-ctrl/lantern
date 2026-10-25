@@ -6,6 +6,11 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// Declared before the google/android blocks: script properties initialise in order, so a
+// value used inside android {} must be assigned above it.
+// 10 is the first code that can update over the old 3.5.0 (versionCode 9) builds.
+val baseVersionCode = 10
+
 android {
     namespace = "com.lantern.library"
     compileSdk = 34
@@ -123,9 +128,6 @@ fun resolveGoogleBooksApiKey(): String {
 
 fun escapeBuildConfig(value: String): String =
     value.replace("\\", "\\\\").replace("\"", "\\\"")
-
-// 10 is the first code that can update over the old 3.5.0 (versionCode 9) builds.
-val baseVersionCode = 10
 
 fun signingValue(name: String): String? =
     System.getenv(name)?.trim().orEmpty()

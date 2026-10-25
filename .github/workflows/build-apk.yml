@@ -98,6 +98,14 @@ jobs:
           src="$(ls app/build/outputs/apk/debug/*.apk | head -n 1)"
           mv "$src" app/build/outputs/apk/debug/lore-debug.apk
 
+      - name: Report APK identity
+        run: |
+          apk=app/build/outputs/apk/debug/lore-debug.apk
+          info="$("$ANDROID_HOME"/build-tools/34.0.0/aapt dump badging "$apk" | head -1)"
+          echo "::notice title=APK built::$info"
+          "$ANDROID_HOME"/build-tools/34.0.0/apksigner verify --print-certs "$apk" \
+            | head -3 | tr '\n' '|' | xargs -I{} echo "::notice title=APK signer::{}"
+
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:

@@ -6,6 +6,7 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.exponentialDecay
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.Orientation
@@ -230,14 +231,19 @@ fun ShelfRow(
                     orientation = Orientation.Horizontal,
                     onDragStopped = { velocity ->
                         if (!fits) {
-                            val projected = scroll.value - velocity / cam.focal * 0.30f
-                            val target = projected.coerceIn(minScroll, 0f)
+                            val v = -velocity / cam.focal
                             scope.launch {
-                                scroll.animateTo(
-                                    target,
-                                    animationSpec = exponentialDecay<Float>(frictionMultiplier = 2.4f)
-                                )
-                                scroll.snapTo(scroll.value.coerceIn(minScroll, 0f))
+                                if (abs(v) > 0.15f) {
+                                    scroll.animateDecay(
+                                        initialVelocity = v,
+                                        animationSpec = exponentialDecay<Float>(frictionMultiplier = 2.4f)
+                                    )
+                                }
+                                // the fling may run past the end of the row: settle back
+                                val clamped = scroll.value.coerceIn(minScroll, 0f)
+                                if (clamped != scroll.value) {
+                                    scroll.animateTo(clamped, tween(durationMillis = 240))
+                                }
                             }
                         }
                     }

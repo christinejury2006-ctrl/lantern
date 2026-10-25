@@ -85,9 +85,8 @@ fun CylinderShelfScreen(
 
     // How many tiers of books the case carries follows the phone's length: one row of books
     // would be a band across the middle of any screen, and a revolving case is tall furniture.
-    val rows = remember {
-        CylinderMath.rowsFor(LocalConfiguration.current.screenHeightDp.toFloat())
-    }
+    val screenHeightDp = LocalConfiguration.current.screenHeightDp.toFloat()
+    val rows = remember(screenHeightDp) { CylinderMath.rowsFor(screenHeightDp) }
     val controller = remember { CylinderRotationController() }
 
     var materialBytes by remember { mutableStateOf<Map<String, ByteArray>?>(null) }

@@ -287,6 +287,14 @@ object ShelfLayout {
     }
 
     /**
+     * y the camera looks at: the middle of the case.
+     *
+     * The case is not centred on y = 0 (it starts low and grows upward), so a frustum centred
+     * on the origin clips the lowest board and the bottom of every book in the bottom row.
+     */
+    fun caseCentreY(rows: Int = ROWS): Float = (caseTopY(rows) + caseBottomY()) / 2f
+
+    /**
      * Half the height the camera must show: the whole case plus a margin of air.
      */
     fun visibleHalfHeight(rows: Int = ROWS): Float =
@@ -335,8 +343,8 @@ object ShelfLayout {
         val nx = (screenX / viewW - 0.5f) * 2f
         val angle = atan(nx * tanHFov(aspect, rows))
         val ny = (0.5f - screenY / viewH) * 2f
-        // where that ray crosses the plane of the books
-        val y = ny * tanVFov(rows) * RADIUS
+        // where that ray crosses the plane of the books, offset by where the camera is aimed
+        val y = caseCentreY(rows) + ny * tanVFov(rows) * RADIUS
         for (row in 0 until rows) {
             if (y >= rowBaseY(row) && y <= rowCeilingY(row) + BOARD) return Pair(row, angle)
         }

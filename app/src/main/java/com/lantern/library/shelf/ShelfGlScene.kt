@@ -395,6 +395,11 @@ class ShelfGlScene(
         viewProj[11] = -1f
         viewProj[14] = -2f * far * near / (far - near)
         viewProj[15] = 0f
+        // Aim the camera at the middle of the case. Without this the frustum is centred on
+        // y = 0 while the case sits low, and the bottom board falls off the screen.
+        val centre = ShelfLayout.caseCentreY(rows)
+        viewProj[13] = -centre * (1f / tanV)
+        viewProj[15] = 0f
     }
 
     // ---------------------------------------------------------------- drawing

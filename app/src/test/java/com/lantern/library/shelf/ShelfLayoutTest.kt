@@ -65,7 +65,7 @@ class ShelfLayoutTest {
             assertTrue("book is ${slot.width} m wide", slot.width >= 0.04f)
         }
         // rows are centred, so the shelf is not lopsided around a handful of books
-        for (row in 0 until ShelfLayout.ROWS) {
+        for (row in 0 until ShelfLayout.rowsUsed(slots)) {
             val inRow = slots.filter { it.row == row }
             val middle = inRow.sumOf { it.angle.toDouble() } / inRow.size
             assertTrue("row $row is off centre by $middle", abs(middle) < 0.02)
@@ -123,11 +123,13 @@ class ShelfLayoutTest {
     fun `a large library is packed tight and still fits the arc`() {
         val slots = ShelfLayout.slots(90)
         assertEquals(90, slots.size)
-        for (row in 0 until ShelfLayout.ROWS) {
+        val rows = ShelfLayout.rowsUsed(slots)
+        val arc = ShelfLayout.layoutArc(rows)
+        for (row in 0 until rows) {
             val inRow = slots.filter { it.row == row }.sortedBy { it.angle }
-            // a full row runs most of the way across the case
+            // a full row runs right across the arc that is on screen
             val span = inRow.last().angle - inRow.first().angle
-            assertTrue("row $row only spans $span rad", span > ShelfLayout.HALF_ARC)
+            assertTrue("row $row only spans $span rad of $arc", span > arc * 0.75f)
             for ((a, b) in inRow.zipWithNext()) {
                 assertTrue(b.angle - a.angle > a.arc / 2f + b.arc / 2f)
             }
@@ -208,10 +210,14 @@ class ShelfLayoutTest {
     }
 
     @Test
-    fun `a tap above or below the case misses`() {
-        assertNull(ShelfLayout.pickAngle(540f, 4f, 1080f, 2400f))
-        assertNull(ShelfLayout.pickAngle(540f, 2396f, 1080f, 2400f))
+    fun `a tap off the case misses, and the case reaches the screen edges`() {
+        assertNull(ShelfLayout.pickAngle(540f, 2f, 1080f, 2400f))
         assertNull(ShelfLayout.pickAngle(540f, 1200f, 0f, 0f))
+        // the camera is aimed at the middle of the case, so the bottom board is on screen and
+        // a tap near the bottom edge is a real tap on the bottom shelf
+        val bottom = ShelfLayout.pickAngle(540f, 2390f, 1080f, 2400f)
+        assertNotNull("the bottom of the case is off screen", bottom)
+        assertEquals(0, bottom!!.first)
     }
 
     @Test
@@ -290,7 +296,7 @@ class ShelfLayoutTest {
                 val z = ShelfLayout.arcZ(angle, ShelfLayout.RADIUS)
                 val y = ShelfLayout.rowBaseY(1) + 0.1f
                 val sx = (x / -z / tanH * 0.5f + 0.5f) * w
-                val sy = (0.5f - y / -z / tanV * 0.5f) * h
+                val sy = (0.5f - (y - ShelfLayout.caseCentreY()) / -z / tanV * 0.5f) * h
                 val pick = ShelfLayout.pickAngle(sx, sy, w, h)
                 assertNotNull("aspect $aspect missed the shelf", pick)
                 assertEquals(1, pick!!.first)
@@ -324,7 +330,11 @@ class ShelfLayoutTest {
         val strips = ShelfLayout.caseStrips()
         assertTrue(strips.size >= ShelfLayout.ROWS + 1)
         // one back panel per row, so the wood grain repeats at a believable scale
-        assertEquals(ShelfLayout.ROWS, strips.count { it.y1 - it.y0 > ShelfLayout.BOARD * 1.5f })
+        val backRadius = ShelfLayout.RADIUS + ShelfLayout.BOOK_MAX_D + 0.03f
+        assertEquals(
+            ShelfLayout.ROWS,
+            strips.count { it.radius <= backRadius + 1e-4f && it.y1 - it.y0 > ShelfLayout.BOARD * 1.5f }
+        )
         for (strip in strips) {
             assertTrue(strip.a0 < strip.a1)
             assertTrue(strip.y0 < strip.y1)

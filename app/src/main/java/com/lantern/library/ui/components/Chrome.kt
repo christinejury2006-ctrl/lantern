@@ -63,7 +63,8 @@ import com.lantern.library.ui.theme.Sky
 import com.lantern.library.ui.theme.SlateHi
 import com.lantern.library.ui.theme.SourceSerif
 
-fun auroraBrush(dark: Boolean) = if (dark) Brush.verticalGradient(listOf(Color(0xFF202124), Color(0xFF303134), Color(0xFF202124)))\nelse Brush.verticalGradient(listOf(Color(0xFFF8F9FA), Color(0xFFE9ECEF), Color(0xFFF3F4F6)))
+fun auroraBrush(dark: Boolean) = if (dark) Brush.verticalGradient(listOf(Color(0xFF202124), Color(0xFF303134), Color(0xFF202124)))
+else Brush.verticalGradient(listOf(Color(0xFFF8F9FA), Color(0xFFE9ECEF), Color(0xFFF3F4F6)))
 
 @Composable
 fun AuroraBackdrop(theme: ReaderTheme, content: @Composable BoxScope.() -> Unit) {

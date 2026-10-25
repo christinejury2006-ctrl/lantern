@@ -85,10 +85,13 @@ jobs:
           ./gradlew assembleDebug --no-daemon --stacktrace > gradle-build.log 2>&1
           code=$?
           if [ "$code" -ne 0 ]; then
-            errs=$(grep -m 12 -E "^e: " gradle-build.log | tr '\n' '|' | cut -c1-2500)
-            why=$(grep -A 6 "What went wrong" gradle-build.log | tr '\n' '|' | cut -c1-800)
-            msg="${errs:-$why}"
-            [ -z "$msg" ] && msg=$(tail -n 25 gradle-build.log | tr '\n' '|' | cut -c1-2000)
+            # Kotlin prints each error on its own line; keep the compile section verbatim.
+            errs=$(grep -n -m 1 -E "^e: |error:" gradle-build.log | cut -d: -f1)
+            if [ -n "$errs" ]; then
+              msg=$(tail -n +"$errs" gradle-build.log | head -n 16 | tr '\n' '|' | cut -c1-5000)
+            else
+              msg=$(tail -n 45 gradle-build.log | tr '\n' '|' | cut -c1-5000)
+            fi
             echo "::error title=APK build failed::$msg"
           fi
           tail -n 40 gradle-build.log

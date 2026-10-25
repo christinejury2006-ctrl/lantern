@@ -141,7 +141,7 @@ object BookIo {
         )
     }
 
-    fun importTree(context: Context, tree: Uri, limit: Int = Int.MAX_VALUE: List<LibraryBook> {
+    fun importTree(context: Context, tree: Uri, limit: Int = Int.MAX_VALUE): List<LibraryBook> {
         val out = mutableListOf<LibraryBook>()
         val cr = context.contentResolver
         val children = DocumentsContract.buildChildDocumentsUriUsingTree(

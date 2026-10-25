@@ -72,16 +72,18 @@ class ShelfLayoutTest {
     fun `the spine of every book faces the viewer`() {
         for (slot in ShelfLayout.slots(12)) {
             val m = ShelfLayout.bookTransform(slot, 0f)
-            // third column of the transform is the box's +z axis; the spine is -z
-            val nx = -m[8]
-            val nz = -m[10]
-            val len = hypot(nx, nz)
-            assertEquals(1f, len, 1e-4f)
+            // the third column of the transform is the box's +z axis, scaled by the book's
+            // depth; the spine is -z. Normalise it before comparing directions.
+            val scale = hypot(m[8], m[10])
+            assertEquals(slot.depth, scale, 1e-4f)
+            val nx = -m[8] / scale
+            val nz = -m[10] / scale
+            assertEquals(1f, hypot(nx, nz), 1e-4f)
             // and it must point back at the camera at the origin
             val px = m[12]
             val pz = m[14]
             val pl = hypot(px, pz)
-            val dot = (nx * -px + nz * -pz) / (len * pl)
+            val dot = (nx * -px + nz * -pz) / pl
             assertEquals(1f, dot, 1e-3f)
         }
     }
@@ -198,7 +200,9 @@ class ShelfLayoutTest {
             assertTrue(strip.y0 < strip.y1)
         }
         assertTrue(ShelfLayout.ROOM_RADIUS > ShelfLayout.RADIUS + ShelfLayout.BOOK_MAX_D)
-        val board = ShelfLayout.caseStrips().first { it.y0 == ShelfLayout.rowBaseY(0) - ShelfLayout.BOARD }
+        // the back panel starts at the same height as the lowest board, so pick the thin one
+        val board = ShelfLayout.caseStrips()
+            .first { it.y0 == ShelfLayout.rowBaseY(0) - ShelfLayout.BOARD && it.y1 - it.y0 < 0.05f }
         assertEquals(ShelfLayout.BOARD, board.y1 - board.y0, 1e-6f)
     }
 

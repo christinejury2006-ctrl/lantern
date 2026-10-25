@@ -35,7 +35,7 @@ jobs:
 
       - name: Install Android platform 34
         run: |
-          sdkmanager "platforms;android-34" "platforms;android-35" "build-tools;34.0.0" "build-tools;30.0.3"
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" "build-tools;30.0.3"
 
       # Restores the one key that stays the same across builds. Without it, each runner
       # generates a fresh debug key, Android sees a different signer, and refuses the

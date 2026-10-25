@@ -88,6 +88,11 @@ android {
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
+    androidResources {
+        // Filament materials and baked textures are read through assets and must not be
+        // recompressed by aapt, which would break the binary blob.
+        noCompress += listOf("filamat", "ktx", "filamesh")
+    }
 
 }
 
@@ -111,6 +116,11 @@ dependencies {
     implementation("org.jsoup:jsoup:1.17.2")
     implementation("com.google.android.gms:play-services-auth:20.7.0")
     implementation("io.github.oothp:pdfium-android:1.9.5-beta01")
+    // Native renderer for the bookcase. Only the engine and the small runtime material
+    // compiler are pulled in: glTF loading and filament-utils are not needed because the
+    // shelf is built from boxes in code, not from a model file.
+    implementation("com.google.android.filament:filament-android:1.78.1")
+    implementation("com.google.android.filament:filamat-android-lite:1.78.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
 }

@@ -150,6 +150,7 @@ class ShelfRenderer(
     /** Builds the scene once, the first time a surface exists. */
     private fun ensureScene() {
         if (engine != null) return
+        loadNativeLibrary()
         val e = Engine.create()
         engine = e
         renderer = e.createRenderer()
@@ -215,6 +216,29 @@ class ShelfRenderer(
         addStatic(e, roomMesh, prepared.room ?: prepared.wood, art, ts)
 
         updateProjection()
+    }
+
+    /**
+     * Loads Filament's native library.
+     *
+     * Filament's Java classes deliberately do not load it themselves — Engine, Scene and the
+     * rest are plain JNI wrappers. Touching `Filament` runs its static initialiser, which is
+     * what calls System.loadLibrary("filament-jni"). Skip this and the first native call fails
+     * with "No implementation found for ... nCreateBuilder". filamat is different: its
+     * MaterialBuilder loads its own library, which is why compiling the material worked while
+     * the engine did not.
+     */
+    private fun loadNativeLibrary() {
+        try {
+            com.google.android.filament.Filament.init()
+        } catch (t: UnsatisfiedLinkError) {
+            val abis = android.os.Build.SUPPORTED_ABIS.joinToString(", ")
+            throw IllegalStateException(
+                "The renderer's native library is missing for this phone ($abis). " +
+                    "The app needs rebuilding with that ABI included.",
+                t
+            )
+        }
     }
 
     private fun addStatic(

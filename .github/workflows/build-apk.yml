@@ -141,6 +141,26 @@ jobs:
           "$ANDROID_HOME"/build-tools/34.0.0/apksigner verify --print-certs "$apk" \
             | head -3 | tr '\n' '|' | xargs -I{} echo "::notice title=APK signer::{}"
 
+      # The renderer is native code. If an ABI's library is missing from the APK, the app
+      # installs and runs and then fails on the first call into the engine, which is exactly
+      # what happened once. This makes that impossible to ship again.
+      - name: Check the renderer's native libraries are in the APK
+        run: |
+          apk="$(ls app/build/outputs/apk/debug/*.apk | head -n 1)"
+          echo "Native libraries in $apk:"
+          unzip -l "$apk" | grep -E '\.so$' | awk '{print $4}' | sort
+          missing=0
+          for abi in arm64-v8a armeabi-v7a; do
+            for lib in libfilament-jni.so libfilamat-jni.so; do
+              if ! unzip -l "$apk" | grep -q "lib/$abi/$lib"; then
+                echo "::error title=Missing native library::lib/$abi/$lib is not in the APK."
+                missing=1
+              fi
+            done
+          done
+          if [ "$missing" -ne 0 ]; then exit 1; fi
+          echo "::notice title=Native libraries::filament and filamat are packaged for both phone ABIs."
+
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:

@@ -62,23 +62,35 @@ jobs:
           fi
 
       - name: Run unit tests
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           chmod +x gradlew
           set +e
           ./gradlew testDebugUnitTest --no-daemon --stacktrace > gradle-tests.log 2>&1
           code=$?
           if [ "$code" -ne 0 ]; then
-            # Surface the reason as an annotation: artifact/log blobs are not always reachable.
-            msg=$(grep -A 14 "What went wrong" gradle-tests.log | tr '\n' '|' | cut -c1-3000)
-            [ -z "$msg" ] && msg=$(grep -m 20 -E "^e: |^error:|Caused by|Unresolved" gradle-tests.log | tr '\n' '|' | cut -c1-3000)
-            [ -z "$msg" ] && msg=$(tail -n 25 gradle-tests.log | tr '\n' '|' | cut -c1-3000)
-            echo "::error title=Unit tests failed::$msg"
+            {
+              echo "Gradle unit test run failed."
+              echo '```'
+              grep -E "app/src.*\.kt|\.kts:.*error|^e: |error:|What went wrong" gradle-tests.log | head -n 60
+              echo '```'
+              echo "Last 30 lines:"
+              echo '```'
+              tail -n 30 gradle-tests.log
+              echo '```'
+            } > test-failure.md
+            head -c 60000 test-failure.md > test-failure.trimmed.md
+            gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+              -F body=@test-failure.trimmed.md >/dev/null 2>&1 || true
+            echo "::error title=Unit tests failed::See the build-failure commit comment for the compiler output."
           fi
           tail -n 40 gradle-tests.log
           exit "$code"
 
       - name: Build debug APK
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOOGLE_BOOKS_API_KEY: ${{ secrets.GOOGLE_BOOKS_API_KEY }}
           # Monotonic across runs: a newer build always has a higher versionCode.
           LORE_BUILD_NUMBER: ${{ github.run_number }}

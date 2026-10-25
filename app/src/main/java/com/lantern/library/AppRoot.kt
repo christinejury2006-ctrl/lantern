@@ -1,6 +1,7 @@
 package com.lantern.library
 
 import android.app.Activity
+import com.lantern.library.ExternalBookIntent
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -91,6 +92,13 @@ internal fun LanternRoot(store: LanternStore) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val activity = context as Activity
+    LaunchedEffect(ExternalBookIntent.pendingUri) {
+        val incoming = ExternalBookIntent.pendingUri ?: return@LaunchedEffect
+        ExternalBookIntent.pendingUri = null
+        store.importUri(incoming) { imported ->
+            if (imported != null) tab = Route.Reader(imported.id)
+        }
+    }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         val uri = res.data?.data
         if (res.resultCode == Activity.RESULT_OK && uri != null) {

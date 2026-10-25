@@ -169,7 +169,7 @@ class CylinderMathTest {
         for (count in listOf(4, 9, 20)) {
             for (i in 0 until count) {
                 val angle = CylinderMath.angleOf(i, count, 0f)
-                if (!CylinderMath.isVisible(angle, 60f)) continue
+                if (!CylinderMath.isVisible(angle)) continue
                 // where that book appears on screen
                 val screenAngle = CylinderMath.screenAngle(angle)
                 // convert back to a pixel position in a 1080-wide view

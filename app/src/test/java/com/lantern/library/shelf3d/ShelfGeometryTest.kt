@@ -66,15 +66,18 @@ class ShelfGeometryTest {
     fun `every box face decodes to the normal it was built with`() {
         // These are the six normals box() actually writes. If any one is wrong, that face of
         // every book in the library is lit wrong.
-        val cases = listOf(
-            Triple(0f, 0f, 1f, "spine (+z)"),
-            Triple(0f, 0f, -1f, "fore-edge (-z)"),
-            Triple(1f, 0f, 0f, "right board (+x)"),
-            Triple(-1f, 0f, 0f, "left board (-x)"),
-            Triple(0f, 1f, 0f, "top edge (+y)"),
-            Triple(0f, -1f, 0f, "bottom edge (-y)")
+        val cases = linkedMapOf(
+            "spine (+z)" to floatArrayOf(0f, 0f, 1f),
+            "fore-edge (-z)" to floatArrayOf(0f, 0f, -1f),
+            "right board (+x)" to floatArrayOf(1f, 0f, 0f),
+            "left board (-x)" to floatArrayOf(-1f, 0f, 0f),
+            "top edge (+y)" to floatArrayOf(0f, 1f, 0f),
+            "bottom edge (-y)" to floatArrayOf(0f, -1f, 0f)
         )
-        for ((nx, ny, nz, label) in cases) {
+        for ((label, n) in cases) {
+            val nx = n[0]
+            val ny = n[1]
+            val nz = n[2]
             // any in-plane hint; each is perpendicular to its own normal
             val hint = when {
                 nz != 0f -> floatArrayOf(1f, 0f, 0f)
@@ -82,7 +85,7 @@ class ShelfGeometryTest {
                 else -> floatArrayOf(1f, 0f, 0f)
             }
             val q = ShelfGeometry.tangentFrame(nx, ny, nz, hint[0], hint[1], hint[2])
-            assertVec(floatArrayOf(nx, ny, nz), decodeNormal(q), "$label normal")
+            assertVec(n, decodeNormal(q), "$label normal")
             assertVec(hint, decodeTangent(q), "$label tangent")
         }
     }

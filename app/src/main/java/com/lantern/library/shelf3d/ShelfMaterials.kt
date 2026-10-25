@@ -30,7 +30,8 @@ object ShelfMaterials {
 
     /**
      * Every book shares one material and differs only by instance parameters. `baseColor`,
-     * `roughness` and `metallic` are all per-instance, so one draw state covers the shelf.
+     * `roughness` and `metallic` are all per-instance, so one draw state covers the shelf and
+     * the colours can come from the library's own covers.
      *
      * `prepareMaterial(material)` must come first: it fills in the defaults Filament expects
      * before the shader touches any of the standard fields.
@@ -47,20 +48,15 @@ object ShelfMaterials {
     /** Bytes for each material, keyed by name. Compiles only what is missing. */
     fun load(context: Context): Map<String, ByteArray> {
         val out = HashMap<String, ByteArray>(2)
-        out[BOOK] = loadOrCompile(context, BOOK, roughness = 0.62f, metallic = 0f)
-        out[WOOD] = loadOrCompile(context, WOOD, roughness = 0.38f, metallic = 0f)
+        out[BOOK] = loadOrCompile(context, BOOK)
+        out[WOOD] = loadOrCompile(context, WOOD)
         return out
     }
 
     const val BOOK_MATERIAL = BOOK
     const val WOOD_MATERIAL = WOOD
 
-    private fun loadOrCompile(
-        context: Context,
-        name: String,
-        roughness: Float,
-        metallic: Float
-    ): ByteArray {
+    private fun loadOrCompile(context: Context, name: String): ByteArray {
         val file = File(context.filesDir, "${name}_v$VERSION.filamat")
         if (file.isFile && file.length() > 0L) {
             runCatching { file.readBytes() }.getOrNull()?.let { if (it.isNotEmpty()) return it }

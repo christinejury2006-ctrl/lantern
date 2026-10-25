@@ -188,15 +188,21 @@ class CylinderMathTest {
 
     @Test
     fun `screen projection and hit testing agree`() {
-        for (count in listOf(4, 9, 20)) {
+        // Counts chosen so several books land on screen at once: the screen spans about four
+        // book widths, so a library of 20 or 31 puts two or three in view.
+        val halfFov = CylinderMath.halfFovH(aspect = 1080f / 2160f)
+        var onScreen = 0
+        for (count in listOf(16, 20, 31)) {
             for (i in 0 until count) {
                 val angle = CylinderMath.angleOf(i, count, 0f)
-                if (!CylinderMath.isVisible(angle)) continue
                 // where that book appears on screen
                 val screenAngle = CylinderMath.screenAngle(angle)
-                // convert back to a pixel position in a 1080-wide view. The lens must be the
-                // one the viewport produces, not an assumed constant.
-                val halfFov = CylinderMath.halfFovH(aspect = 1080f / 2160f)
+                // Two gates, and both matter. The book must be in front of the drum's horizon,
+                // because a book on the far side curves back into the lens geometrically while
+                // the carcass hides it. And it must actually be inside the lens.
+                if (!CylinderMath.isVisible(angle)) continue
+                if (abs(screenAngle) > halfFov * 0.98f) continue
+                onScreen++
                 val tanHalf = kotlin.math.tan(halfFov)
                 val nx = kotlin.math.tan(screenAngle) / tanHalf
                 val x = (nx * 0.5f + 0.5f) * 1080f
@@ -210,6 +216,7 @@ class CylinderMathTest {
                 )
             }
         }
+        assertTrue("the test should have exercised several books, not $onScreen", onScreen >= 3)
     }
 
     @Test
@@ -224,8 +231,10 @@ class CylinderMathTest {
     fun `the lens is computed from the viewport, never assumed`() {
         // a phone in portrait: a 55 degree vertical lens is only about 29 degrees horizontally
         val portrait = CylinderMath.halfFovH(aspect = 690f / 1376f)
-        assertEquals(0.256f, portrait, 0.005f)
-        assertEquals(29.3f, Math.toDegrees(portrait.toDouble()).toFloat(), 0.3f)
+        assertEquals(0.2554f, portrait, 0.002f)
+        // half-angle of 14.6 degrees: a 29 degree lens in total
+        assertEquals(14.63f, Math.toDegrees(portrait.toDouble()).toFloat(), 0.1f)
+        assertEquals(29.3f, Math.toDegrees(portrait.toDouble()).toFloat() * 2f, 0.2f)
         // and a landscape screen is much wider
         val landscape = CylinderMath.halfFovH(aspect = 1376f / 690f)
         assertTrue("landscape must be wider than portrait", landscape > portrait)

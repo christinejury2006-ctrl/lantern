@@ -182,7 +182,9 @@ object CylinderMath {
         if (viewWidth <= 0f) return null
         val nx = (screenX / viewWidth - 0.5f) * 2f
         val screenAngle = atan2(nx * tan(halfFovH), 1f)
-        if (abs(screenAngle) > halfFovH + 0.02f) return null
+        // Strictly outside the lens: there is nothing there to touch. A tolerance here would
+        // make a tap on the bezel select a book at the very edge of the shelf.
+        if (abs(screenAngle) > halfFovH) return null
         // Invert screenAngle() by bisection. This is only valid inside the drum's horizon: up
         // to the tangent point the mapping increases, and after it the drum curves away and
         // screen positions come back inward. Bracket exactly the monotonic stretch.

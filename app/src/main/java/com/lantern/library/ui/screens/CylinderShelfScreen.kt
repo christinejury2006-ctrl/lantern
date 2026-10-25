@@ -310,6 +310,16 @@ fun CylinderShelfScreen(
 
     // The lifted book, drawn over the softened shelf.
     val up = lifted
+    // Modifier.blur is a Compose render effect and does not reach a SurfaceView's own buffer, and
+    // it is unavailable before Android 12 in any case. A scrim is what actually pushes the shelf
+    // back behind the lifted book on most phones; the blur is a bonus where it works.
+    if (up != null) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color(0x99000000))
+        )
+    }
     if (up != null) {
         BookLiftOverlay(
             book = up,

@@ -4,6 +4,9 @@ name: Build debug APK
 # same signature, so installing a newer APK updates the app in place instead of forcing an
 # uninstall that wipes the library.
 
+permissions:
+  contents: write
+
 on:
   workflow_dispatch:
   push:
@@ -85,14 +88,22 @@ jobs:
           ./gradlew assembleDebug --no-daemon --stacktrace > gradle-build.log 2>&1
           code=$?
           if [ "$code" -ne 0 ]; then
-            # Kotlin prints each error on its own line; keep the compile section verbatim.
-            errs=$(grep -n -m 1 -E "^e: |error:" gradle-build.log | cut -d: -f1)
-            if [ -n "$errs" ]; then
-              msg=$(tail -n +"$errs" gradle-build.log | head -n 16 | tr '\n' '|' | cut -c1-5000)
-            else
-              msg=$(tail -n 45 gradle-build.log | tr '\n' '|' | cut -c1-5000)
-            fi
-            echo "::error title=APK build failed::$msg"
+            # Actions log blobs are not always reachable from every client, so the useful
+            # part of the log is also posted as a commit comment where it can be read back.
+            {
+              echo "Gradle build failed."
+              echo '```'
+              grep -E "app/src.*\.kt|\.kts:.*error|^e: |error:|What went wrong" gradle-build.log | head -n 60
+              echo '```'
+              echo "Last 30 lines:"
+              echo '```'
+              tail -n 30 gradle-build.log
+              echo '```'
+            } > build-failure.md
+            head -c 60000 build-failure.md > build-failure.trimmed.md
+            gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+              -F body=@build-failure.trimmed.md >/dev/null 2>&1 || true
+            echo "::error title=APK build failed::See the build-failure commit comment for the compiler output."
           fi
           tail -n 40 gradle-build.log
           exit "$code"

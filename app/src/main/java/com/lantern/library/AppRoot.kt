@@ -177,15 +177,14 @@ internal fun LanternRoot(store: LanternStore) {
                 )
             } else when (val r = tab) {
                 Route.Library -> LibraryScreen(
-                    store.books, store.forYou, store.wantToRead, theme,
-                    store.libraryAppearance,
-                    store.forYouBusy,
-                    onOpen = { book -> store.openForReading(book) { ready -> if (ready != null) tab = Route.Reader(ready.id) } },
+                    books = store.books,
+                    onOpen = { book ->
+                        store.openForReading(book) { ready ->
+                            if (ready != null) tab = Route.Reader(ready.id)
+                        }
+                    },
                     onRemove = { store.remove(it) },
-                    onImport = { importFile() },
-                    onOpenDiscovery = { details = it },
-                    onSaveWant = { store.addWantToRead(it) },
-                    onRefreshForYou = { store.refreshForYou() }
+                    onImport = { importFile() }
                 )
                 Route.Studio -> StudioScreen(
                     theme = theme,

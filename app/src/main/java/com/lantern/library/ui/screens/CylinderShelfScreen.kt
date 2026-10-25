@@ -12,6 +12,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -24,8 +27,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -45,9 +51,9 @@ import kotlinx.coroutines.withContext
 /**
  * A photorealistic revolving bookcase, drawn with Filament in a SurfaceView.
  *
- * The 3D content is a native surface behind the window; everything in this file that is not
- * the [AndroidView] is ordinary Compose drawn over it, so the HUD stays crisp and the shelf
- * cannot interfere with it.
+ * The 3D content is a native surface behind the window; everything in this file that is not the
+ * [AndroidView] is ordinary Compose drawn over it, so the HUD stays crisp and the shelf cannot
+ * interfere with it.
  *
  * Materials are compiled before the engine is created: filamat takes a moment on its first run
  * (afterwards it reads a cached package), and paying that while a spinner is visible is much
@@ -57,7 +63,17 @@ import kotlinx.coroutines.withContext
 fun CylinderShelfScreen(
     books: List<LibraryBook>,
     onOpenBook: (LibraryBook) -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    /** Heading over the shelf. */
+    title: String = "Your shelf",
+    /** The preview screen offers a way back; the Library tab has the bottom bar instead. */
+    showBack: Boolean = true,
+    /** Whether to offer a search field that turns the drum to a book. */
+    searchable: Boolean = false,
+    /** Shows a "+" to add a book, when the caller has somewhere for it to go. */
+    onImport: (() -> Unit)? = null,
+    /** Long-press on a spine, for removing a book. */
+    onLongPressBook: ((LibraryBook) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -68,6 +84,8 @@ fun CylinderShelfScreen(
     var failure by remember { mutableStateOf<String?>(null) }
     var phase by remember { mutableStateOf("Warming the workshop\u2026") }
     var frontIndex by remember { mutableStateOf(0) }
+    var searching by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
 
     val colors = remember(books) {
         books.map { book ->
@@ -93,6 +111,21 @@ fun CylinderShelfScreen(
     val ready = materialBytes
     val front = books.getOrNull(frontIndex.coerceIn(0, (books.size - 1).coerceAtLeast(0)))
 
+    /** Turns the drum to the first book matching the query. */
+    fun search() {
+        if (query.isBlank()) return
+        val match = books.indexOfFirst { book ->
+            book.title.contains(query, ignoreCase = true) ||
+                book.author.contains(query, ignoreCase = true)
+        }
+        if (match >= 0) {
+            // The whole point of the 3D shelf: the book comes to the reader, not the reverse.
+            controller.revealBook(match)
+            frontIndex = match
+            searching = false
+        }
+    }
+
     Box(Modifier.fillMaxSize().background(Color(0xFF100B07))) {
         if (ready != null && books.isNotEmpty() && failure == null) {
             AndroidView(
@@ -116,13 +149,15 @@ fun CylinderShelfScreen(
                                 controller.revealBook(index)
                                 frontIndex = index
                             }
+                        },
+                        onLongPressBook = { index ->
+                            books.getOrNull(index)?.let { onLongPressBook?.invoke(it) }
                         }
                     ).also { it.start() }
                 }
             )
         }
 
-        // HUD: title, the book the shelf is offering, and a way out.
         Column(
             Modifier
                 .fillMaxSize()
@@ -134,19 +169,59 @@ fun CylinderShelfScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
-                    Text("Your shelf", color = Parchment, fontFamily = Playfair, fontSize = 30.sp)
+                Column(Modifier.weight(1f)) {
+                    Text(title, color = Parchment, fontFamily = Playfair, fontSize = 30.sp)
                     Text(
                         when {
                             failure != null -> "The shelf could not start"
                             books.isEmpty() -> "Nothing on it yet"
-                            else -> "Spin the case \u00b7 tap a book to open it"
+                            else -> "${books.size} books \u00b7 spin the case \u00b7 tap a book"
                         },
                         color = Color(0xFFC9B79F),
                         fontSize = 12.sp
                     )
                 }
-                LorePillButton("Back", onClick = onBack)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (searchable) {
+                        LorePillButton(
+                            if (searching) "Close" else "Find",
+                            onClick = {
+                                searching = !searching
+                                if (!searching) query = ""
+                            }
+                        )
+                    }
+                    if (onImport != null) {
+                        LorePillButton("+", onClick = onImport)
+                    }
+                    if (showBack) {
+                        LorePillButton("Back", onClick = onBack)
+                    }
+                }
+            }
+
+            if (searching) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp)
+                        .background(Color(0x33FFFFFF), androidx.compose.foundation.shape.RoundedCornerShape(14.dp))
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                ) {
+                    if (query.isEmpty()) {
+                        Text("Title or author", color = Color(0x99C9B79F), fontSize = 14.sp)
+                    }
+                    BasicTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        singleLine = true,
+                        textStyle = TextStyle(color = Parchment, fontSize = 14.sp),
+                        cursorBrush = SolidColor(Parchment),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { search() }),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
 
             Spacer(Modifier.weight(1f))
@@ -164,9 +239,9 @@ fun CylinderShelfScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    val title = failure ?: front?.title.orEmpty()
+                    val headline = failure ?: front?.title.orEmpty()
                     Text(
-                        title,
+                        headline,
                         color = Parchment,
                         fontFamily = Playfair,
                         fontSize = 19.sp,

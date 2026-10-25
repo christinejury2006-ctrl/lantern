@@ -276,6 +276,51 @@ class CylinderMathTest {
     }
 
     @Test
+    fun `the drum grows with the library so books never overlap`() {
+        // A book is 0.115 m of spine; spread evenly round a circle of radius R it occupies
+        // BOOK_WIDTH/R radians, while its slot is 2*pi/count. Once the slot is narrower than the
+        // book the books interpenetrate, which is what 100 books on the smallest drum would do
+        // three times over.
+        for (count in 1..200) {
+            val radius = CylinderMath.radiusFor(count)
+            val arc = CylinderMath.bookArcRadians(radius)
+            val slot = CylinderMath.angleStep(count)
+            assertTrue(
+                "with $count books the spine is ${Math.toDegrees(arc.toDouble())} deg of a " +
+                    "${Math.toDegrees(slot.toDouble())} deg slot",
+                arc <= slot + 1e-5f
+            )
+            assertTrue("radius must never shrink below the smallest drum",
+                radius >= CylinderMath.DRUM_RADIUS - 1e-6f)
+        }
+        // a small library does not need a bigger drum
+        assertEquals(CylinderMath.DRUM_RADIUS, CylinderMath.radiusFor(10), 1e-6f)
+        // a large one does
+        assertTrue(CylinderMath.radiusFor(100) > 1.9f)
+    }
+
+    @Test
+    fun `a large library shows a full run of spines, not three`() {
+        // The camera distance is chosen so that min(count, BOOKS_ACROSS) spines span the width
+        // the lens can see. Three spines across a 100-book library would mean an absurd amount
+        // of spinning to find anything.
+        val halfFov = CylinderMath.REFERENCE_HALF_FOV_H
+        for (count in listOf(20, 60, 100, 400)) {
+            val distance = CylinderMath.spineDistanceFor(count)
+            val visibleWidth = 2f * distance * kotlin.math.tan(halfFov)
+            val across = visibleWidth / CylinderMath.BOOK_WIDTH
+            assertTrue("$count books show only $across spines across", across >= 10f)
+            assertTrue("$count books show $across spines across", across <= 20f)
+        }
+        // and a three-book library shows its three books, close up
+        assertEquals(
+            CylinderMath.SPINE_DISTANCE,
+            CylinderMath.spineDistanceFor(1),
+            1e-5f
+        )
+    }
+
+    @Test
     fun `a book fills a sensible part of a portrait screen`() {
         // The whole scene's scale exists to satisfy this. A book should span a good fraction of
         // the screen height, and the camera must sit where the geometry says it does.

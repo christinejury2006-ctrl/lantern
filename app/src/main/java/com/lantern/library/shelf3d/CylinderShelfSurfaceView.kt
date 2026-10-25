@@ -30,7 +30,8 @@ class CylinderShelfSurfaceView(
     private val spineAtlas: SpineAtlas?,
     onError: (String) -> Unit,
     private val onFrontBook: (Int) -> Unit,
-    private val onTapBook: (Int) -> Unit
+    private val onTapBook: (Int) -> Unit,
+    private val onLongPressBook: (Int) -> Unit = {}
 ) : SurfaceView(context) {
 
     private val scene = CylinderShelfScene(
@@ -127,6 +128,12 @@ class CylinderShelfSurfaceView(
                     // A tap, not a drag: select the book under the finger.
                     val hit = scene.bookAtScreenX(event.x, viewWidth)
                     if (hit >= 0) onTapBook(hit)
+                    engine.invalidate()
+                } else if (event.actionMasked == MotionEvent.ACTION_UP && moved < 24f) {
+                    // Held still for longer than a tap: the same spine, asked a different
+                    // question. Time is measured on the event, so no timer can outlive the touch.
+                    val hit = scene.bookAtScreenX(event.x, viewWidth)
+                    if (hit >= 0) onLongPressBook(hit)
                     engine.invalidate()
                 } else {
                     controller.onRelease(vx)

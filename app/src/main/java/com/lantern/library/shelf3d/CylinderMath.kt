@@ -31,14 +31,24 @@ import kotlin.math.tan
 object CylinderMath {
 
     /**
-     * Radius of the drum: the distance of each book's centre from the axis.
+     * The smallest drum the shelf is ever built on, and the radius used when nothing says
+     * otherwise.
      *
-     * The whole scene is sized from one requirement: a book should fill a good part of a phone
-     * held in portrait. At radius 2.35 m with the axis 4.5 m away, a 0.31 m book sat 2.15 m from
-     * the camera and covered 15% of the screen height, leaving a thin strip of shelf in a black
-     * void. These numbers put the nearest spine 0.72 m away, where the same book covers 41%.
+     * The scene is sized from one requirement: a book should fill a good part of a phone held in
+     * portrait. With the nearest spine [SPINE_DISTANCE] from the camera, a 0.31 m book covers
+     * 41% of the screen height.
+     *
+     * The real radius comes from [radiusFor], which grows the drum to fit the library.
      */
     const val DRUM_RADIUS = 0.60f
+
+    /**
+     * How much room each book gets on the drum, as a multiple of its spine width.
+     *
+     * 1.15 leaves a 15% gap: enough that spines read as separate books, close enough to look
+     * like a packed shelf.
+     */
+    const val BOOK_GAP = 1.15f
 
     /** A book's centre height, just below the reader's eye line. */
     const val BOOK_Y = -0.05f
@@ -51,35 +61,94 @@ object CylinderMath {
     /** Distance from the camera to the spine of the book at the front of the drum. */
     const val SPINE_DISTANCE = 0.72f
 
+    /** How many spines the screen should show across, at most. */
+    const val BOOKS_ACROSS = 14f
+
     /**
-     * How far in front of the reader the drum's axis sits.
-     *
-     * Derived, not chosen: it puts the spine of the front book exactly [SPINE_DISTANCE] from
-     * the camera, which is what fixes a book's apparent size on screen.
+     * The lens the scene is composed for: a phone in portrait. Scene scale is worked out for
+     * this lens and not for the live one, so the shelf does not rebuild itself when the phone
+     * turns; a wider lens in landscape simply shows more of it.
      */
+    val REFERENCE_HALF_FOV_H: Float = halfFovH(aspect = 690f / 1376f)
+
+    /**
+     * Distance from the camera to the spine of the front book, for a library of [count] books.
+     *
+     * This is the knob that decides how many spines fill the screen. The visible width at the
+     * shelf is `2 * d * tan(halfFov)`, so putting `min(count, BOOKS_ACROSS)` books in that width
+     * makes the shelf show a fixed number of spines however large the library is — three or four
+     * for a handful of books, a full run of fourteen once the library is big.
+     *
+     * Never closer than [SPINE_DISTANCE], or a one-book library would fill the screen with a
+     * single giant spine.
+     */
+    fun spineDistanceFor(count: Int): Float {
+        if (count <= 0) return SPINE_DISTANCE
+        val wanted = minOf(count.toFloat(), BOOKS_ACROSS) * BOOK_WIDTH * BOOK_GAP /
+            (2f * tan(REFERENCE_HALF_FOV_H))
+        return if (wanted > SPINE_DISTANCE) wanted else SPINE_DISTANCE
+    }
+
+    /**
+     * How far in front of the reader the drum's axis sits, for a drum of [radius] holding the
+     * default spine distance.
+     */
+    fun axisFor(radius: Float): Float = radius + SPINE_DISTANCE + BOOK_DEPTH / 2f
+
+    /** The axis distance for a library of [count] books: radius plus its sight line. */
+    fun axisForLibrary(count: Int): Float =
+        radiusFor(count) + spineDistanceFor(count) + BOOK_DEPTH / 2f
+
+    /** The axis distance for the smallest drum. */
     const val AXIS_DISTANCE = DRUM_RADIUS + SPINE_DISTANCE + BOOK_DEPTH / 2f
+
+    /**
+     * The drum radius a library of [count] books needs.
+     *
+     * Books spread evenly around a full circle get `360/count` degrees of drum each, while a
+     * spine is [BOOK_WIDTH] wide; once the library is big enough those two collide and the
+     * books interpenetrate. A hundred books on the smallest drum would each get 3.6 degrees
+     * where they need 11, so they would overlap three deep. Growing the drum with the library
+     * keeps every book's slot wider than the book, and because [axisFor] follows the radius,
+     * the front book stays the same distance from the camera — so the shelf simply gets wider
+     * and flatter as it fills, instead of the books getting smaller.
+     */
+    fun radiusFor(count: Int): Float {
+        if (count <= 0) return DRUM_RADIUS
+        val needed = count * BOOK_WIDTH * BOOK_GAP / TWO_PI
+        return if (needed > DRUM_RADIUS) needed else DRUM_RADIUS
+    }
 
     /** The camera's vertical field of view, in degrees. A phone-camera-like lens. */
     const val FOV_VERTICAL_DEGREES = 55f
 
     /**
-     * The true horizon of a drum seen from this distance: beyond it a book has turned past the
-     * drum's own silhouette and the carcass hides it.
-     *
-     * acos(R / axis) = acos(2.35 / 4.50) = 58.5 degrees.
+     * The true horizon of a drum of [radius]: beyond it a book has turned past the drum's own
+     * silhouette and the carcass hides it. `acos(R / axis)`.
      *
      * This is not cosmetic. Past the horizon a book's screen position stops moving outward and
-     * starts coming back, so the angle-to-pixel mapping is no longer one-to-one and hit testing
-     * would start selecting the wrong book. The visible arc is defined from it.
+     * starts coming back, so the angle-to-pixel mapping stops being one-to-one and hit testing
+     * would select the wrong book. The visible arc is defined from it.
      */
-    val HORIZON_DEGREES: Float =
-        Math.toDegrees(kotlin.math.acos((DRUM_RADIUS / AXIS_DISTANCE).toDouble())).toFloat()
+    fun horizonDegrees(
+        radius: Float = DRUM_RADIUS,
+        axis: Float = axisFor(radius)
+    ): Float = Math.toDegrees(kotlin.math.acos((radius / axis).toDouble())).toFloat()
 
     /**
-     * Half-angle of the drum that is worth drawing: just inside the horizon, so every book that
-     * is drawn can also be hit-tested unambiguously and no book is ever half-cut by the edge.
+     * Half-angle of the drum worth drawing: just inside the horizon, so every book drawn can
+     * also be hit-tested unambiguously and none is half-cut by the edge.
      */
-    val VISIBLE_ARC_DEGREES: Float = HORIZON_DEGREES - 3f
+    fun visibleArcDegrees(
+        radius: Float = DRUM_RADIUS,
+        axis: Float = axisFor(radius)
+    ): Float = horizonDegrees(radius, axis) - 3f
+
+    /** The horizon of the smallest drum. */
+    val HORIZON_DEGREES: Float = horizonDegrees(DRUM_RADIUS)
+
+    /** The visible arc of the smallest drum. */
+    val VISIBLE_ARC_DEGREES: Float = visibleArcDegrees(DRUM_RADIUS)
 
     /**
      * Half the horizontal field of view, in radians.
@@ -101,10 +170,13 @@ object CylinderMath {
      * races the finger: with a hand-picked constant the drum turned about ten times too far for
      * a given swipe.
      */
-    fun trackingGain(): Float = DRUM_RADIUS / (AXIS_DISTANCE - DRUM_RADIUS)
+    fun trackingGain(
+        radius: Float = DRUM_RADIUS,
+        axis: Float = axisFor(radius)
+    ): Float = radius / (axis - radius)
 
-    /** The angular width of one book's spine on the drum, in radians. */
-    fun bookArcRadians(): Float = BOOK_WIDTH / DRUM_RADIUS
+    /** The angular width of one book's spine on a drum of [radius], in radians. */
+    fun bookArcRadians(radius: Float = DRUM_RADIUS): Float = BOOK_WIDTH / radius
 
     private const val TWO_PI = (PI * 2.0).toFloat()
 
@@ -143,8 +215,11 @@ object CylinderMath {
     fun positionX(angle: Float, radius: Float = DRUM_RADIUS): Float = radius * sin(angle)
 
     /** z of a book on the drum. Negative: in front of the reader. */
-    fun positionZ(angle: Float, radius: Float = DRUM_RADIUS): Float =
-        -AXIS_DISTANCE + radius * cos(angle)
+    fun positionZ(
+        angle: Float,
+        radius: Float = DRUM_RADIUS,
+        axis: Float = axisFor(radius)
+    ): Float = -axis + radius * cos(angle)
 
     /**
      * Rotation about y, in degrees, that makes a book's spine face outward.
@@ -164,9 +239,13 @@ object CylinderMath {
      * Exact, not an approximation, because hit testing compares the angle of a tap against
      * these: a book's apparent position depends on both its angle and its distance.
      */
-    fun screenAngle(angle: Float): Float {
-        val x = positionX(angle)
-        val depth = -positionZ(angle)
+    fun screenAngle(
+        angle: Float,
+        radius: Float = DRUM_RADIUS,
+        axis: Float = axisFor(radius)
+    ): Float {
+        val x = positionX(angle, radius)
+        val depth = -positionZ(angle, radius, axis)
         if (depth <= 0.01f) return atan2(x.coerceIn(-1f, 1f), 0.01f)
         return atan2(x, depth)
     }
@@ -177,7 +256,9 @@ object CylinderMath {
     fun angleForScreenX(
         screenX: Float,
         viewWidth: Float,
-        halfFovH: Float = halfFovH(aspect = 0.5f)
+        halfFovH: Float = halfFovH(aspect = 0.5f),
+        radius: Float = DRUM_RADIUS,
+        axis: Float = axisFor(radius)
     ): Float? {
         if (viewWidth <= 0f) return null
         val nx = (screenX / viewWidth - 0.5f) * 2f
@@ -188,12 +269,12 @@ object CylinderMath {
         // Invert screenAngle() by bisection. This is only valid inside the drum's horizon: up
         // to the tangent point the mapping increases, and after it the drum curves away and
         // screen positions come back inward. Bracket exactly the monotonic stretch.
-        val limit = Math.toRadians(HORIZON_DEGREES.toDouble()).toFloat()
+        val limit = Math.toRadians(horizonDegrees(radius, axis).toDouble()).toFloat()
         var low = -limit
         var high = limit
         repeat(24) {
             val mid = (low + high) / 2f
-            if (screenAngle(mid) < screenAngle) low = mid else high = mid
+            if (screenAngle(mid, radius, axis) < screenAngle) low = mid else high = mid
         }
         return (low + high) / 2f
     }
@@ -211,12 +292,13 @@ object CylinderMath {
         index: Int,
         count: Int,
         rotation: Float,
-        slop: Float = 1.25f
+        slop: Float = 1.25f,
+        radius: Float = DRUM_RADIUS
     ): Boolean {
         if (count <= 0 || index < 0 || index >= count) return false
         val centre = angleOf(index, count, rotation)
         val off = abs(wrapSigned(tapAngle - centre))
-        val halfBook = bookArcRadians() / 2f * slop
+        val halfBook = bookArcRadians(radius) / 2f * slop
         val halfSlot = angleStep(count) / 2f
         return off <= minOf(halfBook, halfSlot)
     }

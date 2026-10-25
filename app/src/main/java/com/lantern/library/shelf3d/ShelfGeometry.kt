@@ -238,7 +238,13 @@ object ShelfGeometry {
      * The shelf board the books stand on: a flat ring following the drum, [thickness] deep,
      * with its top face at [topY].
      */
-    fun plinth(radius: Float, topY: Float, thickness: Float, segments: Int = 96): Mesh {
+    fun plinth(
+        radius: Float,
+        topY: Float,
+        thickness: Float,
+        segments: Int = 96,
+        axisDistance: Float = CylinderMath.AXIS_DISTANCE
+    ): Mesh {
         val v = ArrayList<Float>(FLOATS_PER_VERTEX * segments * 2)
         val idx = ArrayList<Short>(segments * 6)
         val up = floatArrayOf(0f, 1f, 0f)
@@ -252,7 +258,7 @@ object ShelfGeometry {
             val u = t * radius * (Math.PI * 2).toFloat() / 0.4f
             for ((r, w) in listOf(radius to 0f, radius - thickness to 1f)) {
                 val x = r * sin
-                val z = -CylinderMath.AXIS_DISTANCE + r * cos
+                val z = -axisDistance + r * cos
                 val q = tangentFrame(up[0], up[1], up[2], hint[0], hint[1], hint[2])
                 v.add(x); v.add(topY); v.add(z)
                 v.add(q[0]); v.add(q[1]); v.add(q[2]); v.add(q[3])
@@ -309,7 +315,8 @@ object ShelfGeometry {
         radius: Float,
         yBottom: Float,
         yTop: Float,
-        segments: Int = 96
+        segments: Int = 96,
+        axisDistance: Float = CylinderMath.AXIS_DISTANCE
     ): Mesh {
         val v = ArrayList<Float>(FLOATS_PER_VERTEX * segments * 2)
         val idx = ArrayList<Short>(segments * 6)
@@ -322,7 +329,7 @@ object ShelfGeometry {
             val q = tangentFrame(sin, 0f, cos, 1f, 0f, 0f)
             val u = t * radius * (Math.PI * 2).toFloat() / 0.4f
             for ((y, w) in listOf(yTop to 0f, yBottom to 1f)) {
-                v.add(radius * sin); v.add(y); v.add(-CylinderMath.AXIS_DISTANCE + radius * cos)
+                v.add(radius * sin); v.add(y); v.add(-axisDistance + radius * cos)
                 v.add(q[0]); v.add(q[1]); v.add(q[2]); v.add(q[3])
                 v.add(u); v.add(w)
             }

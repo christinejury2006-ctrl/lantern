@@ -70,10 +70,14 @@ class CylinderRotationController(
      * times too fast, which reads as "it jumps to the next book" because even a short drag
      * overshoots a whole slot and the settle pulls it forward.
      */
-    fun trackViewport(viewWidthPx: Int, halfFovH: Float) {
-        if (viewWidthPx <= 0) return
+    fun trackViewport(
+        viewWidthPx: Int,
+        halfFovH: Float,
+        gain: Float = CylinderMath.trackingGain()
+    ) {
+        if (viewWidthPx <= 0 || gain <= 0f) return
         val viewAnglePerPixel = 2f * kotlin.math.tan(halfFovH) / viewWidthPx
-        radiansPerPixel = viewAnglePerPixel / CylinderMath.trackingGain()
+        radiansPerPixel = viewAnglePerPixel / gain
     }
 
     /** Angle turned per pixel dragged, for tests and for the HUD. */

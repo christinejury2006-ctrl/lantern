@@ -79,6 +79,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -104,6 +105,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import com.lantern.library.ReaderVolumeKeys
 import com.lantern.library.data.BookFormat
 import com.lantern.library.data.BookIo
 import com.lantern.library.data.Chapter
@@ -318,7 +320,7 @@ fun ReaderScreen(
         if (!prefs.swipeMode) return@LaunchedEffect
         if (!ready || pageCount <= 0) return@LaunchedEffect
         val target = book.currentPage.coerceIn(0, pageCount - 1)
-        if (pager.currentPage != target) pager.scrollToPage(target)
+        if (pager.currentPage != target) pager.animateScrollToPage(target)
         epubRestored = true
     }
     LaunchedEffect(book.id, ready, prefs.swipeMode, book.format, scrollState.maxValue, pageCount) {
@@ -385,6 +387,23 @@ fun ReaderScreen(
         closeMenus()
     }
 
+    DisposableEffect(book.id, pageCount, prefs.swipeMode, menuOpen) {
+        val handler: (Int) -> Boolean = { direction ->
+            if (menuOpen) false else {
+                val current = when {
+                    prefs.swipeMode -> pager.currentPage
+                    book.format == BookFormat.PDF -> pdfList.firstVisibleItemIndex
+                    scrollState.maxValue <= 0 -> 0
+                    else -> ((scrollState.value.toFloat() / scrollState.maxValue) * (pageCount - 1).coerceAtLeast(0)).toInt()
+                }
+                go(current + direction)
+                true
+            }
+        }
+        val unregister = ReaderVolumeKeys.register(handler)
+        onDispose { unregister() }
+    }
+
     BackHandler {
         if (menuOpen) closeMenus() else onBack()
     }
@@ -413,13 +432,21 @@ fun ReaderScreen(
                         userScrollEnabled = !menuOpen
                     ) { i ->
                         Box(Modifier.fillMaxSize().then(pageTap), contentAlignment = Alignment.Center) {
-                            PdfPageImage(
-                                path = book.filePath,
-                                index = i,
-                                ink = ink,
-                                modifier = Modifier.fillMaxSize(),
-                                fillViewport = true
-                            )
+                            Box(
+                                Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 64.dp)
+                                    .shadow(10.dp, RoundedCornerShape(4.dp))
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(Color.White),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                PdfPageImage(
+                                    path = book.filePath,
+                                    index = i,
+                                    ink = Color(0xFF252525),
+                                    modifier = Modifier.fillMaxSize(),
+                                    fillViewport = true
+                                )
+                            }
                         }
                     }
                 } else {
@@ -433,15 +460,22 @@ fun ReaderScreen(
                             count = pdfCount,
                             key = { index -> index }
                         ) { i ->
-                            PdfPageImage(
-                                path = book.filePath,
-                                index = i,
-                                ink = ink,
-                                modifier = Modifier.fillMaxWidth().then(pageTap),
-                                fillViewport = false,
-                                session = pdfSession
-                            )
-                            if (i < pdfCount - 1) Spacer(Modifier.height(8.dp))
+                            Box(
+                                Modifier.fillMaxWidth().padding(horizontal = 8.dp)
+                                    .shadow(8.dp, RoundedCornerShape(4.dp))
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(Color.White)
+                            ) {
+                                PdfPageImage(
+                                    path = book.filePath,
+                                    index = i,
+                                    ink = Color(0xFF252525),
+                                    modifier = Modifier.fillMaxWidth().padding(4.dp).then(pageTap),
+                                    fillViewport = false,
+                                    session = pdfSession
+                                )
+                            }
+                            if (i < pdfCount - 1) Spacer(Modifier.height(12.dp))
                         }
                     }
                 }
@@ -464,8 +498,12 @@ fun ReaderScreen(
                     Column(
                         Modifier
                             .fillMaxSize()
+                            .padding(horizontal = 16.dp, vertical = 68.dp)
+                            .shadow(10.dp, RoundedCornerShape(4.dp))
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color(0xFFFFFEFC))
                             .verticalScroll(scrollState, enabled = !menuOpen)
-                            .padding(26.dp, 88.dp, 26.dp, 96.dp)
+                            .padding(horizontal = 24.dp, vertical = 28.dp)
                     ) {
                         val body = chapters.ifEmpty { listOf(Chapter(book.title, book.synopsis.ifBlank { "This book has no text yet." })) }
                         body.forEachIndexed { index, ch ->
@@ -957,22 +995,30 @@ private fun ColBtn(
 
 @Composable
 private fun PageLeaf(page: ReaderPage?, family: FontFamily, size: Float, ink: Color, modifier: Modifier) {
-    Column(modifier.padding(26.dp, 88.dp, 26.dp, 80.dp)) {
+    val paperInk = Color(0xFF252525)
+    Column(
+        modifier
+            .padding(horizontal = 16.dp, vertical = 64.dp)
+            .shadow(10.dp, RoundedCornerShape(4.dp))
+            .clip(RoundedCornerShape(4.dp))
+            .background(Color(0xFFFFFEFC))
+            .padding(horizontal = 24.dp, vertical = 28.dp)
+    ) {
         if (page == null) {
-            Text("…", color = ink, fontFamily = family)
+            Text("…", color = paperInk, fontFamily = family)
             return
         }
         if (page.showChapterTitle) {
             Text(
-                page.chapterTitle, color = ink, fontFamily = family, fontSize = (size + 10).sp,
+                page.chapterTitle, color = paperInk, fontFamily = family, fontSize = (size + 10).sp,
                 modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center
             )
             Spacer(Modifier.height(20.dp))
         }
         page.paragraphs.forEachIndexed { i, para ->
-            if (i == 0 && page.showChapterTitle) Drop(para, family, size, ink)
+            if (i == 0 && page.showChapterTitle) Drop(para, family, size, paperInk)
             else Text(
-                para, color = ink, fontFamily = family, fontSize = size.sp,
+                para, color = paperInk, fontFamily = family, fontSize = size.sp,
                 lineHeight = (size * 1.55f).sp, modifier = Modifier.padding(bottom = 12.dp)
             )
         }

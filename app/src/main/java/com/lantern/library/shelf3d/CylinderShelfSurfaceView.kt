@@ -29,6 +29,7 @@ class CylinderShelfSurfaceView(
     bookColors: List<Int>,
     private val spineAtlas: SpineAtlas?,
     private val rows: Int,
+    picks: List<Int> = emptyList(),
     onError: (String) -> Unit,
     private val onFrontBook: (Int) -> Unit,
     private val onTapBook: (Int) -> Unit,
@@ -41,7 +42,8 @@ class CylinderShelfSurfaceView(
         materialBytes = materialBytes,
         bookColors = bookColors,
         spineAtlas = spineAtlas,
-        rows = rows
+        rows = rows,
+        picks = picks
     )
 
     private val engine: FilamentShelfEngine

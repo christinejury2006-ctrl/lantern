@@ -22,6 +22,29 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      # The shelf's PBR materials are compiled here, with Filament's own matc, and shipped as
+      # bytes in the APK. Compiling them on the phone was the flaw: a material that fails to
+      # compile there takes the whole scene with it, and the device has no way to tell anyone
+      # which line it choked on. matc fails the build instead, with its complaint in the log.
+      - name: Compile the shelf materials
+        run: |
+          set -euo pipefail
+          mkdir -p app/src/main/assets/materials
+          curl -sSL -o filament.tgz \
+            "https://github.com/google/filament/releases/download/v1.72.0/filament-v1.72.0-linux.tgz"
+          tar xzf filament.tgz
+          MATC="$(find . -type f -name matc -perm -u+x | head -1)"
+          if [ -z "$MATC" ]; then MATC="$(find . -type f -name matc | head -1)"; chmod +x "$MATC"; fi
+          echo "matc: $MATC"
+          "$MATC" --version || true
+          for f in materials/*.mat; do
+            name="$(basename "$f" .mat)"
+            echo "::group::matc $name"
+            "$MATC" --api all --platform mobile -o "app/src/main/assets/materials/$name.filamat" "$f"
+            echo "::endgroup::"
+          done
+          ls -l app/src/main/assets/materials/
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:

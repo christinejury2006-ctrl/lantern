@@ -374,6 +374,42 @@ object CylinderMath {
         return off <= minOf(halfBook, halfSlot)
     }
 
+    /**
+     * What stands at each position on the drum, in reading order.
+     *
+     * Position `p` is slot `p % slots` of row `p / slots`, so this one array drives the whole
+     * case: the geometry, the hit test, and the caption. A -1 is the empty gap that separates
+     * the picks' bay from the rest of the library.
+     *
+     * The bay goes first, which puts it at the front of the bottom tier whenever the drum is at
+     * rest, and gets one empty slot after it so it reads as a shelf of its own rather than as
+     * three books that happen to come first. Picks are capped at one less than a row, so the bay
+     * and its gap can never fill a whole row and leave the library nowhere to start.
+     */
+    fun placementFor(count: Int, slots: Int, picks: List<Int>): IntArray {
+        if (count <= 0) return IntArray(0)
+        val width = slots.coerceAtLeast(1)
+        val picked = picks.filter { it in 0 until count }.distinct().take((width - 1).coerceAtLeast(0))
+        val out = IntArray(count + if (picked.isEmpty()) 0 else 1) { -1 }
+        var next = 0
+        picked.forEach { out[next++] = it }
+        if (picked.isNotEmpty()) next++ // the gap
+        val taken = picked.toHashSet()
+        for (book in 0 until count) {
+            if (book in taken) continue
+            if (next >= out.size) break
+            out[next++] = book
+        }
+        return out
+    }
+
+    /** The slot a book stands in, or -1 when it is not on the drum. */
+    fun slotOfBook(book: Int, placement: IntArray, slots: Int): Int {
+        val width = slots.coerceAtLeast(1)
+        val position = placement.indexOf(book)
+        return if (position < 0) -1 else position % width
+    }
+
     /** The book nearest [angle] on the drum, given the current [rotation]. */
     fun bookNearAngle(count: Int, rotation: Float, angle: Float): Int {
         if (count <= 0) return -1

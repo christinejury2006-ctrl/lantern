@@ -37,7 +37,15 @@ class CylinderShelfScene(
     /** Cover art for the spines, or null to draw plain bindings. */
     private val spineAtlas: SpineAtlas? = null,
     /** Tiers of the case. More tiers on a taller phone, so the case fills the screen. */
-    private val rows: Int = 1
+    private val rows: Int = 1,
+    /**
+     * Books picked for the reader, in the order they should stand in the bay.
+     *
+     * The bay is a reserved space at the front of the bottom tier: these books stand there, then
+     * one empty slot, then the rest of the library carries on round the drum. Nothing is painted
+     * on a spine to mark a recommendation: the recommendation has a shelf of its own.
+     */
+    private val picks: List<Int> = emptyList()
 ) : FilamentShelfEngine.ShelfContent {
 
 
@@ -84,6 +92,16 @@ class CylinderShelfScene(
     /** Books on each row, and therefore how many slots the drum has. */
     private var perRow: Int = 0
 
+    /**
+     * What stands at each position on the drum, in reading order: position `p` is slot
+     * `p % slots` of row `p / slots`. A -1 is the empty gap that separates the bay from the rest
+     * of the library, and is the whole point of the bay.
+     */
+    private var placement: IntArray = IntArray(0)
+
+    /** Which position each book entity stands at. */
+    private val entityPosition = ArrayList<Int>(64)
+
     private companion object {
         const val TAG = "CylinderShelfScene"
 
@@ -103,11 +121,14 @@ class CylinderShelfScene(
 
         // The drum's size comes first: everything below is built around it.
         val count = bookCount()
-        perRow = CylinderMath.perRowFor(count, rows).coerceAtLeast(1)
+        // One extra position when there is a bay, for the gap between the picks and the library.
+        val bay = if (picks.isEmpty()) 0 else 1
+        perRow = CylinderMath.perRowFor(count + bay, rows).coerceAtLeast(1)
         // The drum is sized by the books on ONE row, not by the whole library: the tiers share
         // the same slots, so a tall case holds more books without widening.
         radius = CylinderMath.radiusFor(perRow)
         axis = CylinderMath.axisForCase(perRow, rows)
+        placement = CylinderMath.placementFor(count, perRow, picks)
 
         try {
             val boxMesh = ShelfGeometry.box()
@@ -293,8 +314,10 @@ class CylinderShelfScene(
         material: Material,
         artwork: Texture
     ) {
-        val count = bookCount()
-        for (i in 0 until count) {
+        for (position in placement.indices) {
+            val i = placement[position]
+            // The gap. Nothing is built for it: an empty slot is what makes the bay a bay.
+            if (i < 0) continue
             val instance = material.createInstance()
             val color = bookColors.getOrElse(i) { 0xFF6B4A32.toInt() }
             // Linear-ish base colour; sRGB would need a colour space conversion, and a slightly
@@ -342,6 +365,7 @@ class CylinderShelfScene(
                 .build(engine, entity)
             scene.addEntity(entity)
             bookEntities.add(entity)
+            entityPosition.add(position)
             transforms.add(engine.transformManager.getInstance(entity))
         }
         // Place them immediately, so the first frame is already a shelf and not a pile at the
@@ -423,8 +447,9 @@ class CylinderShelfScene(
         val rotation = controller.rotation
         val slots = perRow.coerceAtLeast(1)
         for (i in 0 until count) {
-            val row = i / slots
-            val slot = i % slots
+            val position = entityPosition.getOrNull(i) ?: continue
+            val row = position / slots
+            val slot = position % slots
             val angle = CylinderMath.angleOf(slot, slots, rotation)
             val x = CylinderMath.positionX(angle, radius)
             val z = CylinderMath.positionZ(angle, radius, axis)
@@ -433,10 +458,10 @@ class CylinderShelfScene(
             val instance = transforms[i]
             if (instance != 0) tm.setTransform(instance, matrix)
         }
-        val front = CylinderMath.frontIndex(slots, rotation)
-        if (front != lastFrontIndex) {
+        val front = frontPosition()
+        if (front != null && front != lastFrontIndex) {
             lastFrontIndex = front
-            onFrontBookChanged?.invoke(front)
+            placement.getOrNull(front)?.takeIf { it >= 0 }?.let { onFrontBookChanged?.invoke(it) }
         }
     }
 
@@ -508,10 +533,17 @@ class CylinderShelfScene(
      * whichever tier happened to be built first.
      */
     fun frontBook(): Int {
+        val position = frontPosition() ?: return -1
+        return placement.getOrNull(position) ?: -1
+    }
+
+    /** The position on the middle tier that is at the front of the drum, if any book is there. */
+    private fun frontPosition(): Int? {
         val slots = perRow.coerceAtLeast(1)
         val slot = CylinderMath.frontIndex(slots, controller.rotation)
-        val middleRow = (rows - 1) / 2
-        return (middleRow * slots + slot).coerceIn(0, (bookEntities.size - 1).coerceAtLeast(0))
+        val position = (rows - 1) / 2 * slots + slot
+        val book = placement.getOrNull(position) ?: return null
+        return if (book >= 0) position else null
     }
 
     /** Which book a tap hit, or -1. */
@@ -545,8 +577,9 @@ class CylinderShelfScene(
         if (!CylinderMath.isTapOnBook(angle, slot, slots, controller.rotation, radius = radius)) {
             return -1
         }
-        val index = base + slot
-        return if (index in 0 until count) index else -1
+        // The slot the tap landed on, as a book: the bay means slot and book no longer match.
+        val position = base + slot
+        return placement.getOrNull(position)?.takeIf { it >= 0 } ?: -1
     }
 
     override fun onDestroy(engine: Engine) {

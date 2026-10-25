@@ -78,13 +78,29 @@ object ShelfMaterials {
         }
     """.trimIndent()
 
-    /** Bytes for each material, keyed by name. Compiles only what is missing. */
+    /**
+     * Bytes for each material, keyed by name.
+     *
+     * The APK ships a material already compiled by matc on the build machine (see
+     * materials/*.mat and the workflow that compiles them). That is the normal path and it
+     * costs one file read: no compiler on the phone, no hundred-millisecond wait on first
+     * launch, and no way for a device's driver to disagree with a shader.
+     *
+     * [loadOrCompile] remains for builds made without that step, and for anyone running the
+     * app from Android Studio.
+     */
     fun load(context: Context): Map<String, ByteArray> {
         val out = HashMap<String, ByteArray>(2)
-        out[BOOK] = loadOrCompile(context, BOOK)
-        out[WOOD] = loadOrCompile(context, WOOD)
+        out[BOOK] = loadAsset(context, BOOK) ?: loadOrCompile(context, BOOK)
+        out[WOOD] = loadAsset(context, WOOD) ?: loadOrCompile(context, WOOD)
         return out
     }
+
+    /** The precompiled material from the APK's assets, or null when the build did not ship one. */
+    private fun loadAsset(context: Context, name: String): ByteArray? =
+        runCatching {
+            context.assets.open("materials/$name.filamat").use { it.readBytes() }
+        }.getOrNull()?.takeIf { it.isNotEmpty() }
 
     const val BOOK_MATERIAL = BOOK
     const val WOOD_MATERIAL = WOOD

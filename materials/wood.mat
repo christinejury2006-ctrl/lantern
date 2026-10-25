@@ -1,0 +1,21 @@
+// The woodwork of the case: colour and roughness only, no texture.
+material {
+    name : wood_pbr,
+    shadingModel : lit,
+    culling : none,
+    flipUV : false,
+    parameters : [
+        { type : float3, name : baseColor },
+        { type : float, name : roughness },
+        { type : float, name : metallic }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor.rgb = materialParams.baseColor;
+        material.roughness = materialParams.roughness;
+        material.metallic = materialParams.metallic;
+    }
+}

@@ -111,9 +111,13 @@ fun CylinderShelfScreen(
         }
     }
 
-    // Books picked for the reader. Their spines get a brass ribbon in the atlas, so this has to
-    // be known before the atlas is built.
+    // Books picked for the reader, and the bay they stand in. The placement is the same array
+    // the scene builds, from the same function, so a search can find a book's slot without
+    // asking the scene.
     val picks = remember(books) { ShelfPicks.picks(books) }
+    val pickIndices = remember(books, picks) {
+        books.indices.filter { books[it].id in picks }
+    }
 
     LaunchedEffect(books.size, picks) {
         controller.setBookCount(books.size)
@@ -130,7 +134,7 @@ fun CylinderShelfScreen(
         if (result.isFailure) return@LaunchedEffect
         phase = "Binding the spines\u2026"
         // Covers are decoded from disk; a book with none keeps its leather colour.
-        spineAtlas = runCatching { SpineAtlas.build(context, books, picks) }.getOrNull()
+        spineAtlas = runCatching { SpineAtlas.build(context, books) }.getOrNull()
         materialBytes = result.getOrNull()
         phase = "Raising the shelf\u2026"
     }
@@ -138,8 +142,12 @@ fun CylinderShelfScreen(
     val ready = materialBytes
     // Books per tier. The tiers share the drum's slots, so whether a tapped book is the one at
     // the front is a question about its slot, not about its index.
-    val perRow = remember(books.size, rows) {
-        CylinderMath.perRowFor(books.size, rows).coerceAtLeast(1)
+    val perRow = remember(books.size, rows, pickIndices) {
+        val bay = if (pickIndices.isEmpty()) 0 else 1
+        CylinderMath.perRowFor(books.size + bay, rows).coerceAtLeast(1)
+    }
+    val placement = remember(books.size, perRow, pickIndices) {
+        CylinderMath.placementFor(books.size, perRow, pickIndices)
     }
     val front = books.getOrNull(frontIndex.coerceIn(0, (books.size - 1).coerceAtLeast(0)))
 
@@ -153,7 +161,8 @@ fun CylinderShelfScreen(
         }
         if (match >= 0) {
             // The whole point of the 3D shelf: the book comes to the reader, not the reverse.
-            controller.revealBook(match)
+            val slot = CylinderMath.slotOfBook(match, placement, perRow)
+            if (slot >= 0) controller.revealBook(slot)
             frontIndex = match
             searching = false
         }
@@ -177,20 +186,14 @@ fun CylinderShelfScreen(
                         bookColors = colors,
                         spineAtlas = spineAtlas,
                         rows = rows,
+                        picks = pickIndices,
                         onError = { message -> failure = message },
                         onFrontBook = { index -> frontIndex = index },
                         onTapBook = { index ->
-                            // First tap turns the case to the book; tapping it at the front
-                            // lifts it out, with the shelf softening behind. On any tier: the
-                            // front most book is the one at the front slot, whichever row it
-                            // stands on.
-                            val atFront = index % perRow == frontIndex % perRow
-                            if (atFront) {
-                                books.getOrNull(index)?.let { lifted = it }
-                            } else {
-                                controller.revealBook(index)
-                                frontIndex = index
-                            }
+                            // A tap takes the book off the shelf, whatever tier or slot it
+                            // stands in. Asking for two taps — one to turn the case, one to
+                            // lift — was a rule about the drum's plumbing, not about reading.
+                            books.getOrNull(index)?.let { lifted = it }
                         },
                         onLongPressBook = { index ->
                             books.getOrNull(index)?.let { onLongPressBook?.invoke(it) }

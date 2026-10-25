@@ -426,4 +426,39 @@ class CylinderMathTest {
         assertEquals(-1, CylinderMath.bookNearAngle(0, 0f, 0f))
         assertTrue(CylinderMath.visibleIndices(0, 0f).isEmpty())
     }
+
+    @Test
+    fun `the picks stand in a bay at the front of the bottom tier`() {
+        val placement = CylinderMath.placementFor(count = 5, slots = 4, picks = listOf(2))
+        // The pick first, then the gap, then the library in order.
+        assertEquals(listOf(2, -1, 0, 1, 3, 4), placement.toList())
+    }
+
+    @Test
+    fun `the bay never swallows the whole row`() {
+        val slots = 4
+        val placement = CylinderMath.placementFor(count = 6, slots = slots, picks = listOf(0, 1, 2, 3, 4))
+        // At most slots-1 picks, one gap, and every book still somewhere on the drum.
+        assertEquals(listOf(0, 1, 2), placement.take(slots - 1).toList())
+        val books = placement.filter { it >= 0 }.sorted()
+        assertEquals(listOf(0, 1, 2, 3, 4, 5), books)
+        assertEquals(-1, placement[slots - 1])
+    }
+
+    @Test
+    fun `a book's slot is where it stands, not where it sits in the library`() {
+        val slots = 4
+        val placement = CylinderMath.placementFor(count = 9, slots = slots, picks = listOf(7))
+        val slot = CylinderMath.slotOfBook(7, placement, slots)
+        assertEquals(0, slot)
+        // Position 4 is row 1 slot 0, and holds whatever the placement put there.
+        assertEquals(0, CylinderMath.slotOfBook(placement[4], placement, slots))
+        assertEquals(-1, CylinderMath.slotOfBook(99, placement, slots))
+    }
+
+    @Test
+    fun `without picks the drum is untouched`() {
+        val placement = CylinderMath.placementFor(count = 6, slots = 3, picks = emptyList())
+        assertEquals((0..5).toList(), placement.toList())
+    }
 }

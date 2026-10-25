@@ -67,12 +67,10 @@ class MainActivity : ComponentActivity() {
         queueBookIntent(intent)
     }
 
+    @Suppress("DEPRECATION")
     private fun queueBookIntent(intent: Intent) {
         if (intent.action == Intent.ACTION_VIEW || intent.action == Intent.ACTION_SEND) {
-            val uri = intent.data ?: runCatching {
-                @Suppress("DEPRECATION")
-                intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
-            }.getOrNull()
+            val uri = intent.data ?: intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
             if (uri != null) ExternalBookIntent.pendingUri = uri
         }
     }

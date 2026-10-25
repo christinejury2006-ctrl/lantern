@@ -398,9 +398,9 @@ private fun RecentlyReadShelf(
                 Canvas(Modifier.fillMaxSize()) {
                     val shelf = androidx.compose.ui.graphics.Path().apply {
                         moveTo(0f, size.height * 0.70f)
-                        quadraticTo(size.width * 0.50f, size.height * 0.92f, size.width, size.height * 0.70f)
+                        cubicTo(size.width * 0.25f, size.height * 0.86f, size.width * 0.75f, size.height * 0.86f, size.width, size.height * 0.70f)
                         lineTo(size.width, size.height * 0.84f)
-                        quadraticTo(size.width * 0.50f, size.height, 0f, size.height * 0.84f)
+                        cubicTo(size.width * 0.75f, size.height * 0.96f, size.width * 0.25f, size.height * 0.96f, 0f, size.height * 0.84f)
                         close()
                     }
                     drawPath(shelf, if (dark) Color(0xFF49382F) else Color(0xFF6E4B38))
@@ -418,8 +418,8 @@ private fun RecentlyReadShelf(
                         translationY = a * 9.dp.toPx()
                         cameraDistance = 20f * density
                     }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Bottom) {
-                        Box(Modifier.width((54 - kotlin.math.abs(offset).coerceAtMost(1f) * 8).dp)
-                            .height((104 - kotlin.math.abs(offset).coerceAtMost(1f) * 12).dp)
+                        Box(Modifier.width((54f - kotlin.math.abs(offset).coerceAtMost(1f) * 8f).dp)
+                            .height((104f - kotlin.math.abs(offset).coerceAtMost(1f) * 12f).dp)
                             .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
                             .background(if (dark) Color(0xFF37302B) else Color(0xFFE7D9C6))
                             .combinedClickable(onClick = { onOpen(book) }).padding(horizontal = 3.dp, vertical = 6.dp),

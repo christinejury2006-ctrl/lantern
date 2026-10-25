@@ -139,17 +139,6 @@ fun LibraryScreen(
                     onRefresh = onRefreshForYou
                 )
             }
-            if (books.isNotEmpty()) {
-                item(span = { GridItemSpan(3) }) {
-                    RecentlyReadShelf(
-                        books = recentlyRead(books),
-                        dark = dark,
-                        ink = ink,
-                        mute = mute,
-                        onOpen = { previewBook = it }
-                    )
-                }
-            }
             item(span = { GridItemSpan(3) }) {
                 Row(
                     Modifier.horizontalScroll(rememberScrollState()),
@@ -206,27 +195,14 @@ fun LibraryScreen(
                     }
                 }
             } else {
-                items(shown, key = { it.id }) { book ->
-                    Column {
-                        BookCover(
-                            book,
-                            Modifier.fillMaxWidth().aspectRatio(0.68f).combinedClickable(
-                                onClick = { previewBook = book },
-                                onLongClick = { pendingRemove = book }
-                            ),
-                            dark
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        ReadingProgressBar(book.progress)
-                        Spacer(Modifier.height(4.dp))
-                        Text(book.title, color = ink, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        Text(
-                            if (book.localFileAvailable) book.author else "Import on this phone",
-                            color = if (book.localFileAvailable) mute else Coral,
-                            fontSize = 11.sp,
-                            maxLines = 1
-                        )
-                    }
+                item(span = { GridItemSpan(3) }) {
+                    RecentlyReadShelf(
+                        books = shown,
+                        dark = dark,
+                        ink = ink,
+                        mute = mute,
+                        onOpen = { previewBook = it }
+                    )
                 }
             }
         }

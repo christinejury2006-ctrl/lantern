@@ -51,6 +51,38 @@ class ShelfLayoutTest {
     }
 
     @Test
+    fun `a small library keeps book-sized books in the middle of the shelf`() {
+        val slots = ShelfLayout.slots(6)
+        assertEquals(6, slots.size)
+        for (slot in slots) {
+            // a book, not a plank
+            assertTrue("book is ${slot.width} m wide", slot.width <= 0.075f)
+            assertTrue("book is ${slot.width} m wide", slot.width >= 0.03f)
+        }
+        // rows are centred, so the shelf is not lopsided around a handful of books
+        for (row in 0 until ShelfLayout.ROWS) {
+            val inRow = slots.filter { it.row == row }
+            val middle = inRow.sumOf { it.angle.toDouble() } / inRow.size
+            assertTrue("row $row is off centre by $middle", abs(middle) < 0.02)
+        }
+    }
+
+    @Test
+    fun `a large library is packed tight and still fits the arc`() {
+        val slots = ShelfLayout.slots(90)
+        assertEquals(90, slots.size)
+        for (row in 0 until ShelfLayout.ROWS) {
+            val inRow = slots.filter { it.row == row }.sortedBy { it.angle }
+            // a full row runs most of the way across the case
+            val span = inRow.last().angle - inRow.first().angle
+            assertTrue("row $row only spans $span rad", span > ShelfLayout.HALF_ARC)
+            for ((a, b) in inRow.zipWithNext()) {
+                assertTrue(b.angle - a.angle > a.arc / 2f + b.arc / 2f)
+            }
+        }
+    }
+
+    @Test
     fun `books stand on their board without poking through the shelf above`() {
         for (slot in ShelfLayout.slots(18)) {
             val bottom = ShelfLayout.bookCentreY(slot.row, slot.height) - slot.height / 2f

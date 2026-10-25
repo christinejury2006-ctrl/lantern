@@ -61,6 +61,12 @@ object ShelfLayout {
     const val SPINE_U1 = 0.42f
     const val COVER_V1 = 0.62f
 
+    /** Width a book is drawn at when there is room for it, in metres. */
+    const val TYPICAL_WIDTH = 0.058f
+
+    /** The gap left between neighbouring books. */
+    const val TYPICAL_GAP = 0.009f
+
     /** Radius of the painted room behind the case. */
     const val ROOM_RADIUS = RADIUS + 0.95f
 
@@ -115,32 +121,39 @@ object ShelfLayout {
     }
 
     /**
-     * Lays [count] books across [ROWS] rows, filling the whole arc of the case.
+     * Lays [count] books across [ROWS] rows.
      *
-     * Books are spread evenly by angle so a row reads as one continuous run; each book then
-     * takes slightly less arc than its stride, which leaves the gaps between them. Atlas
-     * cells are handed out in order, so every book gets its own tile before any is reused.
+     * Books keep a believable width rather than being stretched to fill whatever space they
+     * are given: a library of six books sits as six books in the middle of the shelf with
+     * bare boards either side, and only a large library gets squeezed tight across the arc.
+     * Rows are centred, and every book in the library is always on the shelf.
      */
     fun slots(count: Int): List<Slot> {
         if (count <= 0) return emptyList()
         val perRow = (count + ROWS - 1) / ROWS
+        val arcSpan = HALF_ARC * 2f
+        val idealStride = (TYPICAL_WIDTH + TYPICAL_GAP) / RADIUS
         val out = ArrayList<Slot>(count)
         var placed = 0
         for (row in 0 until ROWS) {
             val inThisRow = minOf(perRow, count - placed)
             if (inThisRow <= 0) break
-            val stride = (HALF_ARC * 2f) / inThisRow
+            // Keep natural spacing until the row no longer fits, then close ranks.
+            val stride = minOf(idealStride, arcSpan / inThisRow)
+            val start = -(stride * inThisRow) / 2f
             for (i in 0 until inThisRow) {
                 val n = placed + i
                 val h = BOOK_MAX_H * (0.72f + 0.28f * wobble(n, 1))
-                val w = RADIUS * stride * (0.66f + 0.18f * wobble(n, 2))
+                val w = minOf(
+                    TYPICAL_WIDTH * (0.84f + 0.32f * wobble(n, 2)),
+                    RADIUS * stride * 0.86f
+                )
                 val d = BOOK_MAX_D * (0.68f + 0.32f * wobble(n, 3))
-                val centre = -HALF_ARC + stride * (i + 0.5f)
                 out.add(
                     Slot(
                         row = row,
                         index = n,
-                        angle = centre,
+                        angle = start + stride * (i + 0.5f),
                         arc = w / RADIUS,
                         width = w,
                         height = h,

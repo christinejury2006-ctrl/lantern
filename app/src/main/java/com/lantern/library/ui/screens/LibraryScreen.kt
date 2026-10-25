@@ -1,6 +1,7 @@
 package com.lantern.library.ui.screens
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
@@ -40,7 +41,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -89,6 +92,7 @@ fun LibraryScreen(
     val mute = if (dark) Color(0xFFD0D6DE) else InkSoft
     var filter by remember { mutableStateOf(LibFilter.ALL) }
     var pendingRemove by remember { mutableStateOf<LibraryBook?>(null) }
+    var previewBook by remember { mutableStateOf<LibraryBook?>(null) }
     val shown = when (filter) {
         LibFilter.ALL -> books
         LibFilter.CURRENT -> books.filter { it.shelf == Shelf.CURRENT }
@@ -99,7 +103,7 @@ fun LibraryScreen(
     AppearanceLayer(appearance.look, dark) {
         LazyVerticalGrid(
             columns = GridCells.Fixed(3),
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().blur(if (previewBook != null) 13.dp else 0.dp),
             contentPadding = PaddingValues(18.dp, 18.dp, 18.dp, 96.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -135,17 +139,6 @@ fun LibraryScreen(
                     onSave = onSaveWant,
                     onRefresh = onRefreshForYou
                 )
-            }
-            if (books.isNotEmpty()) {
-                item(span = { GridItemSpan(3) }) {
-                    RecentlyReadShelf(
-                        books = recentlyRead(books),
-                        dark = dark,
-                        ink = ink,
-                        mute = mute,
-                        onOpen = onOpen
-                    )
-                }
             }
             item(span = { GridItemSpan(3) }) {
                 Row(
@@ -203,29 +196,42 @@ fun LibraryScreen(
                     }
                 }
             } else {
-                items(shown, key = { it.id }) { book ->
-                    Column {
-                        BookCover(
-                            book,
-                            Modifier.fillMaxWidth().aspectRatio(0.68f).combinedClickable(
-                                onClick = { onOpen(book) },
-                                onLongClick = { pendingRemove = book }
-                            ),
-                            dark
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        ReadingProgressBar(book.progress)
-                        Spacer(Modifier.height(4.dp))
-                        Text(book.title, color = ink, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        Text(
-                            if (book.localFileAvailable) book.author else "Import on this phone",
-                            color = if (book.localFileAvailable) mute else Coral,
-                            fontSize = 11.sp,
-                            maxLines = 1
-                        )
-                    }
+                item(span = { GridItemSpan(3) }) {
+                    RecentlyReadShelf(
+                        books = shown,
+                        dark = dark,
+                        ink = ink,
+                        mute = mute,
+                        onOpen = { previewBook = it }
+                    )
                 }
             }
+        }
+        val selected = previewBook
+        if (selected != null) {
+            AlertDialog(
+                onDismissRequest = { previewBook = null },
+                containerColor = if (dark) Color(0xFF242424) else Color(0xFFF7F5F0),
+                title = { Text(selected.title, color = ink, fontFamily = Playfair) },
+                text = {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Box(Modifier.fillMaxWidth().height(250.dp), contentAlignment = Alignment.Center) {
+                            Box(Modifier.width(172.dp).height(238.dp).padding(start = 7.dp, bottom = 5.dp).background(Color(0xFFB8AFA1), RoundedCornerShape(3.dp)))
+                            BookCover(selected, Modifier.width(164.dp).height(226.dp).graphicsLayer { rotationY = -5f; cameraDistance = 18f * density }, dark)
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Text(selected.author, color = mute, fontSize = 13.sp)
+                        Spacer(Modifier.height(8.dp))
+                        ReadingProgressBar(selected.progress, Modifier.fillMaxWidth())
+                        Spacer(Modifier.height(4.dp))
+                        Text("${selected.progress.coerceIn(0f, 100f).toInt()}% read", color = mute, fontSize = 12.sp)
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { previewBook = null; onOpen(selected) }) { Text(if (selected.progress > 0) "Continue reading" else "Start reading") }
+                },
+                dismissButton = { TextButton(onClick = { previewBook = null }) { Text("Back to shelf") } }
+            )
         }
         val doomed = pendingRemove
         if (doomed != null) {
@@ -362,7 +368,7 @@ private fun recentlyRead(books: List<LibraryBook>): List<LibraryBook> {
     val current = books.filter { it.shelf == Shelf.CURRENT }.sortedByDescending { it.lastReadAt }
     val rest = books.filter { it.shelf != Shelf.CURRENT }
         .sortedWith(compareByDescending<LibraryBook> { it.lastReadAt }.thenByDescending { it.addedAt })
-    return (current + rest).distinctBy { it.id }.take(12)
+    return (current + rest).distinctBy { it.id }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -376,8 +382,11 @@ private fun RecentlyReadShelf(
 ) {
     if (books.isEmpty()) return
     val continuing = books.any { it.shelf == Shelf.CURRENT }
-    GlassCard(Modifier.fillMaxWidth(), dark, 18) {
-        Column(Modifier.padding(vertical = 12.dp)) {
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
+            .background(if (dark) Color(0x55302B28) else Color(0x66E5D8C8))
+            .padding(vertical = 12.dp)
+    ) {
             Text(
                 if (continuing) "Continue Reading" else "Your Shelf",
                 color = ink, fontFamily = Playfair, fontSize = 16.sp,
@@ -386,21 +395,69 @@ private fun RecentlyReadShelf(
             Text("Your books", color = mute, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 16.dp).padding(top = 2.dp))
             Spacer(Modifier.height(8.dp))
             val pager = rememberPagerState(pageCount = { books.size })
-            HorizontalPager(
-                state = pager,
-                contentPadding = PaddingValues(horizontal = 72.dp),
-                pageSpacing = 12.dp,
-                modifier = Modifier.fillMaxWidth().height(168.dp)
-            ) { page ->
-                val book = books[page]
-                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                    BookCover(
-                        book,
-                        Modifier.width(96.dp).aspectRatio(0.68f).combinedClickable(onClick = { onOpen(book) }),
-                        dark
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    ReadingProgressBar(book.progress, Modifier.width(96.dp))
+            Box(Modifier.fillMaxWidth().height(202.dp)) {
+                Canvas(Modifier.fillMaxSize()) {
+                    val top = size.height * 0.70f
+                    val front = androidx.compose.ui.graphics.Path().apply {
+                        moveTo(-size.width * 0.02f, top)
+                        cubicTo(size.width * 0.24f, top + size.height * 0.10f, size.width * 0.76f, top + size.height * 0.10f, size.width * 1.02f, top)
+                        lineTo(size.width * 1.02f, size.height * 0.91f)
+                        cubicTo(size.width * 0.74f, size.height * 1.02f, size.width * 0.26f, size.height * 1.02f, -size.width * 0.02f, size.height * 0.91f)
+                        close()
+                    }
+                    val woodTop = androidx.compose.ui.graphics.Path().apply {
+                        moveTo(0f, top - 2.dp.toPx())
+                        cubicTo(size.width * 0.24f, top + size.height * 0.09f, size.width * 0.76f, top + size.height * 0.09f, size.width, top - 2.dp.toPx())
+                        cubicTo(size.width * 0.76f, top + size.height * 0.015f, size.width * 0.24f, top + size.height * 0.015f, 0f, top - 2.dp.toPx())
+                        close()
+                    }
+                    drawPath(front, brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                        colors = if (dark) listOf(Color(0xFF5A4032), Color(0xFF2C211D), Color(0xFF191514))
+                        else listOf(Color(0xFFB9855C), Color(0xFF805035), Color(0xFF593722)),
+                        startY = top, endY = size.height
+                    ))
+                    drawPath(woodTop, brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                        colors = if (dark) listOf(Color(0xFF9A765E), Color(0xFF5D4030))
+                        else listOf(Color(0xFFE5B887), Color(0xFFAC7146)),
+                        startY = top - 3.dp.toPx(), endY = top + size.height * 0.12f
+                    ))
+                    val grain = if (dark) Color(0x557F604B) else Color(0x66F1C99C)
+                    for (i in 0..5) {
+                        val y = top + size.height * (0.035f + i * 0.022f)
+                        drawLine(grain, androidx.compose.ui.geometry.Offset(size.width * 0.04f, y),
+                            androidx.compose.ui.geometry.Offset(size.width * 0.96f, y + size.height * 0.018f),
+                            strokeWidth = if (i == 0) 1.4.dp.toPx() else 0.6.dp.toPx())
+                    }
+                    drawLine(if (dark) Color(0xFFB08A6E) else Color(0xFFFFD8A8),
+                        androidx.compose.ui.geometry.Offset(size.width * 0.02f, top + 1.dp.toPx()),
+                        androidx.compose.ui.geometry.Offset(size.width * 0.98f, top + 1.dp.toPx()), strokeWidth = 1.5.dp.toPx())
+                    drawLine(Color(0x33000000),
+                        androidx.compose.ui.geometry.Offset(size.width * 0.04f, size.height * 0.94f),
+                        androidx.compose.ui.geometry.Offset(size.width * 0.96f, size.height * 0.94f), strokeWidth = 2.dp.toPx())
+                }
+                HorizontalPager(state = pager, contentPadding = PaddingValues(horizontal = 10.dp), pageSpacing = 1.dp,
+                    modifier = Modifier.fillMaxSize().padding(bottom = 17.dp)) { page ->
+                    val book = books[page]
+                    val offset = (pager.currentPage - page) + pager.currentPageOffsetFraction
+                    val distance = kotlin.math.abs(offset).coerceAtMost(1f)
+                    Column(Modifier.fillMaxSize().graphicsLayer {
+                        rotationY = offset * -7f
+                        translationY = distance * 7.dp.toPx()
+                        cameraDistance = 24f * density
+                        shadowElevation = (8f - distance * 4f).dp.toPx()
+                    }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Bottom) {
+                        Box(Modifier.width((57f - distance * 7f).dp)
+                            .height((111f - distance * 10f).dp)
+                            .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
+                            .background(if (dark) Color(0xFF2B211C) else Color(0xFFD5B99A))
+                            .combinedClickable(onClick = { onOpen(book) })
+                            .padding(start = 3.dp, end = 2.dp, top = 4.dp, bottom = 3.dp),
+                            contentAlignment = Alignment.Center) {
+                            BookCover(book, Modifier.fillMaxSize(), dark)
+                        }
+                        Spacer(Modifier.height(5.dp))
+                        ReadingProgressBar(book.progress, Modifier.width(49.dp))
+                    }
                 }
             }
             val current = books.getOrNull(pager.currentPage)
@@ -408,7 +465,6 @@ private fun RecentlyReadShelf(
                 Text(current.title, Modifier.padding(top = 8.dp, start = 16.dp, end = 16.dp), color = ink, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(current.author, Modifier.padding(start = 16.dp, top = 1.dp), color = mute, fontSize = 11.sp)
             }
-        }
     }
 }
 

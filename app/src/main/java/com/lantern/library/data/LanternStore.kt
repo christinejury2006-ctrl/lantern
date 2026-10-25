@@ -25,7 +25,7 @@ import java.io.File
 
 class LanternStore(app: Application) : AndroidViewModel(app) {
     companion object {
-        const val MAX_USER_BOOKS = 200
+        const val MAX_USER_BOOKS = Int.MAX_VALUE
         private const val STUDIO_PREVIEW_ID = "studio_preview"
     }
 
@@ -462,7 +462,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             }
         }
     }
-    fun importUri(uri: Uri) {
+    fun importUri(uri: Uri, onImported: ((LibraryBook?) -> Unit)? = null) {
         viewModelScope.launch {
             val book = withContext(Dispatchers.IO) { runCatching { BookIo.importUri(getApplication(), uri) }.getOrNull() }
             if (book == null) {
@@ -473,10 +473,11 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             when (commitNewUserBook(incoming)) {
                 CommitUserBookResult.ACCEPTED -> {
                     toast("Added to Library")
+                    onImported?.invoke(incoming)
                 }
                 CommitUserBookResult.LIBRARY_FULL -> {
                     withContext(Dispatchers.IO) { discardOrphan(incoming) }
-                    toast("Library is full (200 books)")
+                    toast("Could not add more books")
                 }
                 CommitUserBookResult.PERSIST_FAILED -> toast("Could not add that file")
             }
@@ -1243,6 +1244,34 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         if (!account.signedIn || account.provider != "google") return
         if (GoogleAuth.accountId(getApplication<Application>()).isNullOrBlank()) return
         if (!networkReady()) return
+        // Upload local imported/downloaded files as well as syncing their metadata.
+        val uploadCandidates = withContext(Dispatchers.Main) {
+            books.toList().filter { book ->
+                book.origin != BookOrigin.BUNDLED &&
+                    book.format != BookFormat.TEXT &&
+                    book.driveFileId.isNullOrBlank() &&
+                    book.filePath?.let { path -> File(path).exists() && File(path).length() > 0L } == true
+            }
+        }
+        uploadCandidates.forEach { candidate ->
+            val localFile = candidate.filePath?.let { File(it) } ?: return@forEach
+            val uploadedResult = withDriveOutcome { token, owner ->
+                when (val folder = DriveLibrary.ensureFolder(token, owner)) {
+                    is DriveOutcome.Ok -> DriveLibrary.upload(token, folder.value, candidate, localFile)
+                    DriveOutcome.Unauthorized -> DriveOutcome.Unauthorized
+                    DriveOutcome.Failed -> DriveOutcome.Failed
+                }
+            }
+            val uploadedId = (uploadedResult as? DriveOutcome.Ok)?.value
+            if (!uploadedId.isNullOrBlank()) {
+                withContext(Dispatchers.Main) {
+                    val latest = book(candidate.id)
+                    if (latest != null && latest.driveFileId.isNullOrBlank()) {
+                        upsert(latest.copy(driveFileId = uploadedId, pendingUpload = false))
+                    }
+                }
+            }
+        }
         val local = withContext(Dispatchers.Main) { currentSnapshot() }
         val cloudOutcome = withDriveOutcome { token, owner ->
             when (val folder = DriveLibrary.ensureFolder(token, owner)) {

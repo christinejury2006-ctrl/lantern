@@ -86,6 +86,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -431,7 +432,17 @@ fun ReaderScreen(
                         modifier = Modifier.fillMaxSize(),
                         userScrollEnabled = !menuOpen
                     ) { i ->
-                        Box(Modifier.fillMaxSize().then(pageTap), contentAlignment = Alignment.Center) {
+                        val pageOffset = ((pager.currentPage - i) + pager.currentPageOffsetFraction).coerceIn(-1f, 1f)
+                        Box(
+                            Modifier.fillMaxSize().graphicsLayer {
+                                rotationY = -pageOffset * 18f
+                                transformOrigin = TransformOrigin(if (pageOffset > 0f) 0f else 1f, 0.5f)
+                                cameraDistance = 28f * density
+                                shadowElevation = kotlin.math.abs(pageOffset) * 18.dp.toPx()
+                                alpha = 1f - kotlin.math.abs(pageOffset) * 0.08f
+                            }.then(pageTap),
+                            contentAlignment = Alignment.Center
+                        ) {
                             Box(
                                 Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 64.dp)
                                     .shadow(10.dp, RoundedCornerShape(4.dp))
@@ -487,11 +498,20 @@ fun ReaderScreen(
                         modifier = Modifier.fillMaxSize(),
                         userScrollEnabled = !menuOpen
                     ) { i ->
+                        val pageOffset = ((pager.currentPage - i) + pager.currentPageOffsetFraction).coerceIn(-1f, 1f)
                         key(prefs.fontSizeSp, i) {
-                            PageLeaf(
-                                pages.getOrNull(i), family, prefs.fontSizeSp, ink,
-                                Modifier.fillMaxSize().then(pageTap)
-                            )
+                            Box(Modifier.fillMaxSize().graphicsLayer {
+                                rotationY = -pageOffset * 24f
+                                transformOrigin = TransformOrigin(if (pageOffset > 0f) 0f else 1f, 0.5f)
+                                cameraDistance = 24f * density
+                                shadowElevation = kotlin.math.abs(pageOffset) * 24.dp.toPx()
+                                alpha = 1f - kotlin.math.abs(pageOffset) * 0.12f
+                            }) {
+                                PageLeaf(
+                                    pages.getOrNull(i), family, prefs.fontSizeSp, ink,
+                                    Modifier.fillMaxSize().then(pageTap)
+                                )
+                            }
                         }
                     }
                 } else {

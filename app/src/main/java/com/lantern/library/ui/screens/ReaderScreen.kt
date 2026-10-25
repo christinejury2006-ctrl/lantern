@@ -354,7 +354,7 @@ fun ReaderScreen(
         val target = p.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
         scope.launch {
             if (prefs.swipeMode) {
-                pager.scrollToPage(target)
+                pager.animateScrollToPage(target)
             } else if (book.format == BookFormat.PDF) {
                 pdfList.scrollToItem(target)
             } else if (scrollState.maxValue > 0 && pageCount > 1) {

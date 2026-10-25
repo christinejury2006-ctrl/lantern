@@ -1,6 +1,7 @@
 package com.lantern.library.ui.screens
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
@@ -41,6 +42,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -89,6 +91,7 @@ fun LibraryScreen(
     val mute = if (dark) Color(0xFFD0D6DE) else InkSoft
     var filter by remember { mutableStateOf(LibFilter.ALL) }
     var pendingRemove by remember { mutableStateOf<LibraryBook?>(null) }
+    var previewBook by remember { mutableStateOf<LibraryBook?>(null) }
     val shown = when (filter) {
         LibFilter.ALL -> books
         LibFilter.CURRENT -> books.filter { it.shelf == Shelf.CURRENT }
@@ -143,7 +146,7 @@ fun LibraryScreen(
                         dark = dark,
                         ink = ink,
                         mute = mute,
-                        onOpen = onOpen
+                        onOpen = { previewBook = it }
                     )
                 }
             }
@@ -208,7 +211,7 @@ fun LibraryScreen(
                         BookCover(
                             book,
                             Modifier.fillMaxWidth().aspectRatio(0.68f).combinedClickable(
-                                onClick = { onOpen(book) },
+                                onClick = { previewBook = book },
                                 onLongClick = { pendingRemove = book }
                             ),
                             dark
@@ -226,6 +229,32 @@ fun LibraryScreen(
                     }
                 }
             }
+        }
+        val selected = previewBook
+        if (selected != null) {
+            AlertDialog(
+                onDismissRequest = { previewBook = null },
+                containerColor = if (dark) Color(0xFF242424) else Color(0xFFF7F5F0),
+                title = { Text(selected.title, color = ink, fontFamily = Playfair) },
+                text = {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Box(Modifier.fillMaxWidth().height(250.dp), contentAlignment = Alignment.Center) {
+                            Box(Modifier.width(172.dp).height(238.dp).padding(start = 7.dp, bottom = 5.dp).background(Color(0xFFB8AFA1), RoundedCornerShape(3.dp)))
+                            BookCover(selected, Modifier.width(164.dp).height(226.dp).graphicsLayer { rotationY = -5f; cameraDistance = 18f * density }, dark)
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Text(selected.author, color = mute, fontSize = 13.sp)
+                        Spacer(Modifier.height(8.dp))
+                        ReadingProgressBar(selected.progress, Modifier.fillMaxWidth())
+                        Spacer(Modifier.height(4.dp))
+                        Text("${selected.progress.coerceIn(0, 100)}% read", color = mute, fontSize = 12.sp)
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { previewBook = null; onOpen(selected) }) { Text(if (selected.progress > 0) "Continue reading" else "Start reading") }
+                },
+                dismissButton = { TextButton(onClick = { previewBook = null }) { Text("Back to shelf") } }
+            )
         }
         val doomed = pendingRemove
         if (doomed != null) {
@@ -362,7 +391,7 @@ private fun recentlyRead(books: List<LibraryBook>): List<LibraryBook> {
     val current = books.filter { it.shelf == Shelf.CURRENT }.sortedByDescending { it.lastReadAt }
     val rest = books.filter { it.shelf != Shelf.CURRENT }
         .sortedWith(compareByDescending<LibraryBook> { it.lastReadAt }.thenByDescending { it.addedAt })
-    return (current + rest).distinctBy { it.id }.take(12)
+    return (current + rest).distinctBy { it.id }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -376,8 +405,11 @@ private fun RecentlyReadShelf(
 ) {
     if (books.isEmpty()) return
     val continuing = books.any { it.shelf == Shelf.CURRENT }
-    GlassCard(Modifier.fillMaxWidth(), dark, 18) {
-        Column(Modifier.padding(vertical = 12.dp)) {
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
+            .background(if (dark) Color(0x55302B28) else Color(0x66E5D8C8))
+            .padding(vertical = 12.dp)
+    ) {
             Text(
                 if (continuing) "Continue Reading" else "Your Shelf",
                 color = ink, fontFamily = Playfair, fontSize = 16.sp,
@@ -386,21 +418,41 @@ private fun RecentlyReadShelf(
             Text("Your books", color = mute, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 16.dp).padding(top = 2.dp))
             Spacer(Modifier.height(8.dp))
             val pager = rememberPagerState(pageCount = { books.size })
-            HorizontalPager(
-                state = pager,
-                contentPadding = PaddingValues(horizontal = 72.dp),
-                pageSpacing = 12.dp,
-                modifier = Modifier.fillMaxWidth().height(168.dp)
-            ) { page ->
-                val book = books[page]
-                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                    BookCover(
-                        book,
-                        Modifier.width(96.dp).aspectRatio(0.68f).combinedClickable(onClick = { onOpen(book) }),
-                        dark
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    ReadingProgressBar(book.progress, Modifier.width(96.dp))
+            Box(Modifier.fillMaxWidth().height(190.dp)) {
+                Canvas(Modifier.fillMaxSize()) {
+                    val shelf = androidx.compose.ui.graphics.Path().apply {
+                        moveTo(0f, size.height * 0.70f)
+                        quadraticTo(size.width * 0.50f, size.height * 0.92f, size.width, size.height * 0.70f)
+                        lineTo(size.width, size.height * 0.84f)
+                        quadraticTo(size.width * 0.50f, size.height, 0f, size.height * 0.84f)
+                        close()
+                    }
+                    drawPath(shelf, if (dark) Color(0xFF49382F) else Color(0xFF6E4B38))
+                    drawLine(if (dark) Color(0xFF7C6557) else Color(0xFFB58A68),
+                        androidx.compose.ui.geometry.Offset(0f, size.height * 0.72f),
+                        androidx.compose.ui.geometry.Offset(size.width, size.height * 0.72f), strokeWidth = 3.dp.toPx())
+                }
+                HorizontalPager(state = pager, contentPadding = PaddingValues(horizontal = 14.dp), pageSpacing = 3.dp,
+                    modifier = Modifier.fillMaxSize().padding(bottom = 16.dp)) { page ->
+                    val book = books[page]
+                    val offset = (pager.currentPage - page) + pager.currentPageOffsetFraction
+                    Column(Modifier.fillMaxSize().graphicsLayer {
+                        val a = kotlin.math.abs(offset).coerceAtMost(1f)
+                        rotationY = offset * -10f
+                        translationY = a * 9.dp.toPx()
+                        cameraDistance = 20f * density
+                    }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Bottom) {
+                        Box(Modifier.width((54 - kotlin.math.abs(offset).coerceAtMost(1f) * 8).dp)
+                            .height((104 - kotlin.math.abs(offset).coerceAtMost(1f) * 12).dp)
+                            .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
+                            .background(if (dark) Color(0xFF37302B) else Color(0xFFE7D9C6))
+                            .combinedClickable(onClick = { onOpen(book) }).padding(horizontal = 3.dp, vertical = 6.dp),
+                            contentAlignment = Alignment.Center) {
+                            BookCover(book, Modifier.fillMaxSize(), dark)
+                        }
+                        Spacer(Modifier.height(5.dp))
+                        ReadingProgressBar(book.progress, Modifier.width(48.dp))
+                    }
                 }
             }
             val current = books.getOrNull(pager.currentPage)

@@ -98,8 +98,7 @@ object WallpaperCatalog {
         WallpaperChoice("paper_cream", "Warm Paper", R.drawable.wp_paper_cream),
         WallpaperChoice("dusk_slate", "Slate Glass", R.drawable.wp_dusk_slate),
         WallpaperChoice("mist_lilac", "Soft Frost", R.drawable.wp_mist_lilac),
-        WallpaperChoice("night_ink", "Ink Glass", R.drawable.wp_night_ink),
-        WallpaperChoice("shore_gold", "Champagne Glass", R.drawable.wp_shore_gold)
+        WallpaperChoice("night_ink", "Ink Glass", R.drawable.wp_night_ink)
     )
 
     fun find(id: String?): WallpaperChoice? =

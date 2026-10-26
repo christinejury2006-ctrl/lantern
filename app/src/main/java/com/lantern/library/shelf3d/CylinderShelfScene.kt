@@ -128,6 +128,15 @@ class CylinderShelfScene(
         val WOOD_WALL = floatArrayOf(0.34f, 0.21f, 0.13f)
         val WOOD_SHELF = floatArrayOf(0.46f, 0.30f, 0.19f)
         val WOOD_FLOOR = floatArrayOf(0.28f, 0.18f, 0.11f)
+
+        /** Lux. A sunlit room is about a hundred thousand; Filament's camera is set for daylight. */
+        const val SUN_LUX = 100_000f
+
+        /** A quarter of the sun, from in front of the case: the shade side, made readable. */
+        const val FILL_LUX = 26_000f
+
+        /** The room itself. Low enough that the sun still shapes everything in the case. */
+        const val AMBIENT_LUX = 32_000f
     }
 
     override fun onCreate(engine: Engine, scene: Scene) {
@@ -250,7 +259,7 @@ class CylinderShelfScene(
             // round like a built-in. The picks stand in it.
             addAlcove(
                 engine, scene, res, vertices, indices,
-                woodMaterial, bookMaterial, lampMaterial, artwork
+                woodMaterial, bookMaterial, lampMaterial, artwork, grain
             )
             addLights(engine, scene, res)
         } catch (t: Throwable) {
@@ -512,7 +521,8 @@ class CylinderShelfScene(
         woodMaterial: Material,
         bookMaterial: Material,
         lampMaterial: Material,
-        artwork: Texture
+        artwork: Texture,
+        grain: Texture
     ) {
         val slots = perRow.coerceAtLeast(1)
         // The alcove sits at the front of the drum, where the picks are placed.
@@ -552,13 +562,13 @@ class CylinderShelfScene(
         listOf(-1f, 1f).forEach { side ->
             addAlcovePart(
                 engine, scene, res, vertices, indices,
-                woodInstance(woodMaterial, res),
+                woodInstance(woodMaterial, res, grain),
                 dx = side * alcoveWidth / 2f, dy = 0f, dz = -depth / 2f,
                 width = 0.016f, height = height, depth = depth
             )
         }
         addAlcovePart(
-            engine, scene, res, vertices, indices, woodInstance(woodMaterial, res),
+            engine, scene, res, vertices, indices, woodInstance(woodMaterial, res, grain),
             dx = 0f, dy = height / 2f, dz = -depth / 2f,
             width = alcoveWidth, height = 0.018f, depth = depth
         )
@@ -575,12 +585,24 @@ class CylinderShelfScene(
         )
     }
 
-    /** A wooden material instance for the alcove's casing. */
-    private fun woodInstance(material: Material, res: ShelfResources): MaterialInstance =
+    /**
+     * A wooden material instance for the alcove's casing.
+     *
+     * It binds the grain every bit as much as the carcass does. A material that declares a
+     * sampler and is handed an instance with nothing bound to it has no defined colour, and
+     * "undefined" on a driver means black as often as anything else.
+     */
+    private fun woodInstance(material: Material, res: ShelfResources, grain: Texture): MaterialInstance =
         material.createInstance().apply {
             setParameter("baseColor", WOOD_SHELF[0], WOOD_SHELF[1], WOOD_SHELF[2])
             setParameter("roughness", 0.62f)
             setParameter("metallic", 0f)
+            setParameter("uvScale", 6f, 6f)
+            setParameter(
+                "grainMap",
+                grain,
+                TextureSampler(TextureSampler.MagFilter.LINEAR, TextureSampler.WrapMode.REPEAT)
+            )
             res.track(this)
         }
 
@@ -647,31 +669,51 @@ class CylinderShelfScene(
     }
 
     private fun addLights(engine: Engine, scene: Scene, res: ShelfResources) {
+        // The sun: warm, high, and to one side, so every board has a lit top edge and a shadowed
+        // underside. That contrast is what a solid object looks like; a single flat wash makes
+        // the case read as a drawing however correct its geometry is.
         val sun = EntityManager.get().create()
         LightManager.Builder(LightManager.Type.DIRECTIONAL)
             .direction(sunDirection[0], sunDirection[1], sunDirection[2])
             .color(sunColor[0], sunColor[1], sunColor[2])
-            .intensity(90_000f)
+            .intensity(SUN_LUX)
             // Shadows are Step 4; a shadow map over a spinning drum needs its own tuning.
             .castShadows(false)
             .build(engine, sun)
         scene.addEntity(sun)
         sunEntity = sun
 
+        // A fill straight down the camera's line of sight. Without it every surface turned away
+        // from the sun is lit by the ambient term alone, and the inside of the case — which is
+        // most of what the reader is looking at — goes to near black.
+        val fill = EntityManager.get().create()
+        LightManager.Builder(LightManager.Type.DIRECTIONAL)
+            .direction(0.10f, -0.12f, -0.99f)
+            .color(1.0f, 0.90f, 0.80f)
+            .intensity(FILL_LUX)
+            .castShadows(false)
+            .build(engine, fill)
+        scene.addEntity(fill)
+        fillEntity = fill
+
         // Ambient fill from spherical harmonics. One band is the average radiance of the room
         // and needs exactly three floats; asking for three bands needs twenty-seven, and
         // passing nine throws ArrayIndexOutOfBoundsException at build time.
         //
-        // The value is in the same units the intensity scales: 0.30 x 30000 is about 9000 lux,
-        // roughly a tenth of the sun above, which is what a cosy room actually looks like.
-        val ambient = floatArrayOf(0.30f, 0.28f, 0.25f)
+        // These are radiance values, not a tint: multiplied by the intensity they come to a
+        // fifth of the sun, which is what a room with a window in it looks like, and what keeps
+        // the boards and the wall readable where the sun does not reach.
+        val ambient = floatArrayOf(0.62f, 0.56f, 0.48f)
         val indirect = IndirectLight.Builder()
             .irradiance(1, ambient)
-            .intensity(30_000f)
+            .intensity(AMBIENT_LUX)
             .build(engine)
         scene.indirectLight = indirect
         res.track(indirect)
     }
+
+    private var sunEntity = 0
+    private var fillEntity = 0
 
     private var sunEntity = 0
 
@@ -879,6 +921,10 @@ class CylinderShelfScene(
         if (sunEntity != 0) {
             EntityManager.get().destroy(sunEntity)
             sunEntity = 0
+        }
+        if (fillEntity != 0) {
+            EntityManager.get().destroy(fillEntity)
+            fillEntity = 0
         }
         staticEntities.forEach { EntityManager.get().destroy(it) }
         staticEntities.clear()

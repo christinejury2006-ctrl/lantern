@@ -26,7 +26,7 @@ object ShelfMaterials {
      * The compiled package is cached in filesDir, so a device that ran an older build would
      * otherwise keep loading a material that has no spine sampler in it.
      */
-    private const val VERSION = 5
+    private const val VERSION = 6
 
     /** A book: leather or cloth, with a paper fore-edge. */
     private const val BOOK = "book_pbr"
@@ -79,11 +79,20 @@ object ShelfMaterials {
         }
     """.trimIndent()
 
-    /** The woodwork: colour and roughness only, no texture. */
+    /**
+     * The woodwork: painted grain, tinted per part by the instance's base colour.
+     *
+     * This must stay identical to materials/wood_pbr.mat. The APK normally ships the matc-built
+     * version, and a fallback that declares different parameters is worse than no fallback: the
+     * scene sets `grainMap` and `uvScale` on every wooden part, and setting a parameter the
+     * material does not declare is not a warning Filament forgives.
+     */
     private val WOOD_FRAGMENT = """
         void material(inout MaterialInputs material) {
             prepareMaterial(material);
-            material.baseColor.rgb = materialParams.baseColor;
+            vec2 uv = getUV0() * materialParams.uvScale;
+            vec4 grain = texture(materialParams_grainMap, uv);
+            material.baseColor = vec4(materialParams.baseColor, 1.0) * grain;
             material.roughness = materialParams.roughness;
             material.metallic = materialParams.metallic;
         }
@@ -206,19 +215,31 @@ object ShelfMaterials {
             // relies on it: v = 0 is the top of a book and the top of its tile.
             .flipUV(false)
             .apply {
-                if (withArtwork) {
-                    uniformParameter(MaterialBuilder.UniformType.FLOAT2, "uvOffset")
-                    uniformParameter(MaterialBuilder.UniformType.FLOAT2, "uvScale")
-                    uniformParameter(MaterialBuilder.UniformType.FLOAT, "useArtwork")
-                    samplerParameter(
-                        MaterialBuilder.SamplerType.SAMPLER_2D,
-                        MaterialBuilder.SamplerFormat.FLOAT,
-                        MaterialBuilder.ParameterPrecision.DEFAULT,
-                        "spineMap"
-                    )
-                    material(fragment)
-                } else {
-                    material(WOOD_FRAGMENT)
+                when {
+                    withArtwork -> {
+                        uniformParameter(MaterialBuilder.UniformType.FLOAT2, "uvOffset")
+                        uniformParameter(MaterialBuilder.UniformType.FLOAT2, "uvScale")
+                        uniformParameter(MaterialBuilder.UniformType.FLOAT, "useArtwork")
+                        samplerParameter(
+                            MaterialBuilder.SamplerType.SAMPLER_2D,
+                            MaterialBuilder.SamplerFormat.FLOAT,
+                            MaterialBuilder.ParameterPrecision.DEFAULT,
+                            "spineMap"
+                        )
+                        material(fragment)
+                    }
+                    name == WOOD -> {
+                        // The grain tiles: a board is metres long and the texture is not.
+                        uniformParameter(MaterialBuilder.UniformType.FLOAT2, "uvScale")
+                        samplerParameter(
+                            MaterialBuilder.SamplerType.SAMPLER_2D,
+                            MaterialBuilder.SamplerFormat.FLOAT,
+                            MaterialBuilder.ParameterPrecision.DEFAULT,
+                            "grainMap"
+                        )
+                        material(WOOD_FRAGMENT)
+                    }
+                    else -> material(fragment)
                 }
             }
 

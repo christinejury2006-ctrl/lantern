@@ -190,10 +190,10 @@ object CylinderMath {
     fun radiusFor(count: Int): Float {
         if (count <= 0) return DRUM_RADIUS
         val needed = count * BOOK_WIDTH * BOOK_GAP / TWO_PI
-        // The floor only stops the drum collapsing to a point, where the carcass would have no
-        // radius left to stand on. It is deliberately small: a drum whose slots are barely wider
-        // than its books is a bookcase. One whose slots are three times wider than its books is a
-        // carousel, and two books on it read as flat cards rather than a shelf.
+        // The floor is what stops a small library collapsing into the middle of the screen: a
+        // drum measured off three books is 23 cm wide on a 46 cm screen, and three spines inside
+        // that arc overlap and show their side faces. A real case is bigger than its contents
+        // need, and the empty slots are what makes it read as a case.
         return if (needed > MIN_DRUM_RADIUS) needed else MIN_DRUM_RADIUS
     }
 
@@ -218,9 +218,6 @@ object CylinderMath {
         val byCircumference = kotlin.math.round(TWO_PI * radius / spacing).toInt()
         return maxOf(byCircumference, perRow, 1)
     }
-
-    /** The drum radius a tier of [perRow] books needs, never smaller than a real drum. */
-    fun radiusForRow(perRow: Int): Float = radiusFor(perRow)
 
     /** The camera's vertical field of view, in degrees. A phone-camera-like lens. */
     const val FOV_VERTICAL_DEGREES = 55f
@@ -418,10 +415,11 @@ object CylinderMath {
      *  - [GAP]: nothing, and the niche's tile is drawn there;
      *  - [EMPTY]: nothing at all.
      *
-     * Positions are filled a column at a time — all the tiers at slot 0, then all the tiers at
-     * slot 1 — so a small library stands as a few vertical runs of books, the way a case with
-     * room to spare actually looks, instead of a single book per tier adrift in the middle of the
-     * screen.
+     * Each tier is filled along the shelf, and the library is shared out over the tiers, so a
+     * small library stands as a run of books on the bottom shelf with the next shelf above it
+     * holding the next run. Walking the slots instead — one book per slot down the whole tier
+     * stack, as this used to — leaves a small library as one book adrift in the middle of every
+     * tier and the rest of the case empty.
      *
      * The picks go first, which puts them at the front of the case, then the niche, then the rest
      * of the library in order. Picks are capped at one less than a tier, so the picks and the

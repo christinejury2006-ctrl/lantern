@@ -362,12 +362,11 @@ class CylinderMathTest {
             assertTrue("radius must never shrink below the smallest drum",
                 radius >= CylinderMath.MIN_DRUM_RADIUS - 1e-6f)
         }
-        // A small drum is a small drum. Holding every library on the old 0.6 m minimum left a
-        // nine-slot tier with three times more empty arc than book on it, and the books read as
-        // flat cards rather than a shelf.
-        assertEquals(10 * CylinderMath.BOOK_WIDTH * CylinderMath.BOOK_GAP /
-            (2f * Math.PI.toFloat()), CylinderMath.radiusFor(10), 1e-5f)
-        // a large one does
+        // A small library gets the floor, not a drum measured off its own books: a drum only as
+        // big as its contents needs fills a few centimetres of the screen.
+        assertEquals(CylinderMath.MIN_DRUM_RADIUS, CylinderMath.radiusFor(10), 1e-6f)
+        assertEquals(CylinderMath.MIN_DRUM_RADIUS, CylinderMath.radiusFor(20), 1e-6f)
+        // a large one does grow
         assertTrue(CylinderMath.radiusFor(100) > 1.9f)
     }
 
@@ -445,18 +444,11 @@ class CylinderMathTest {
         val placement = CylinderMath.placementFor(
             count = 6, slots = slots, rows = 1, picks = listOf(0, 1, 2, 3, 4)
         )
-        // Positions are filled a column at a time, so the first tier's picks are NOT the first
-        // few entries: three picks, then the niche, then the rest. What matters is that only
-        // slots-1 picks can be picked up, that the niche exists, and that no book is lost.
-        val order = ArrayList<Int>()
-        for (slot in 0 until slots) {
-            for (position in placement.indices) {
-                if (position % slots != slot) continue
-                order.add(placement[position])
-            }
-        }
-        assertEquals(listOf(0, 1, 2), order.take(3))
-        assertEquals(CylinderMath.GAP, order[3])
+        // Tiers fill along the shelf, so the picks lead the first run, then the niche, then the
+        // rest follow on from where the picks left off. What matters is that only slots-1 picks
+        // can be picked up, that the niche exists, and that no book is lost.
+        assertEquals(listOf(0, 1, 2), placement.take(3))
+        assertEquals(CylinderMath.GAP, placement[3])
         assertEquals(listOf(0, 1, 2, 3, 4, 5), placement.filter { it >= 0 }.sorted())
     }
 

@@ -126,15 +126,24 @@ class FilamentShelfEngine(
 
             val e = Engine.create()
             engine = e
-            renderer = e.createRenderer()
+            val r = e.createRenderer()
+            renderer = r
             val s = e.createScene()
             scene = s
             val v = e.createView()
             view = v
             v.scene = s
-            // No bloom or anti-aliasing pass: the scene is a few hundred flat-shaded boxes,
-            // and each post-processing pass is a full-screen frame buffer copy.
-            v.isPostProcessingEnabled = false
+            // Post-processing stays on, and only for tone mapping. The sun in this scene is at
+            // daylight intensity and the fill lights are thousands of lux; without the tone
+            // mapping pass those values clip, and every lit board turns into a flat white
+            // shape with its edges burned away. Bloom and anti-aliasing are left off below.
+            v.isPostProcessingEnabled = true
+            r.clearOptions = Renderer.ClearOptions().apply {
+                // A warm near-black, not pure black: if the case ever leaves a gap, the frame
+                // reads as an unlit room rather than as a hole in the phone.
+                clearColor = doubleArrayOf(0.02, 0.014, 0.010, 1.0)
+                clear = true
+            }
 
             cameraEntity = EntityManager.get().create()
             camera = e.createCamera(cameraEntity).also { v.camera = it }

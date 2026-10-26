@@ -50,7 +50,8 @@ class CylinderRotationControllerTest {
         // a full-width swipe turns the drum by the view angle divided by the gain, and nothing
         // near a whole revolution
         c.onDrag(width.toFloat())
-        val expected = -2f * kotlin.math.tan(viewportHalfFov) / CylinderMath.trackingGain()
+        // Dragging right turns the drum the same way: the shelf follows the finger.
+        val expected = 2f * kotlin.math.tan(viewportHalfFov) / CylinderMath.trackingGain()
         assertEquals(expected, c.rotation, 1e-4f)
         assertTrue("a full swipe turned the drum too far", abs(c.rotation) < 1f)
     }

@@ -27,9 +27,9 @@ class CylinderRotationControllerTest {
         val c = controller()
         val moved = c.onDrag(100f)
         assertTrue(moved)
-        // dragging right rolls the surface right, which turns the drum the other way
-        assertTrue("a rightward drag must turn the drum anticlockwise", c.rotation < 0f)
-        assertEquals(-100f * c.radiansPerPixel(), c.rotation, 1e-6f)
+        // the surface follows the finger: dragging right carries the spines right
+        assertTrue("a rightward drag must carry the shelf right", c.rotation > 0f)
+        assertEquals(100f * c.radiansPerPixel(), c.rotation, 1e-6f)
     }
 
     @Test

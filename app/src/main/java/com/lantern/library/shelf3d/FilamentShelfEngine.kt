@@ -221,8 +221,11 @@ class FilamentShelfEngine(
         // does the same for the sides. Both are proportional to the distance, so the angle is
         // the same for a small library on a small drum and a large one on a wide drum.
         val distance = content.cameraDistance().coerceAtLeast(0.2f)
+        // About ten degrees of downward pitch, which is what puts the tops of the boards and the
+        // tops of the books into the frame. Without it a shelf of boxes shows only its front faces
+        // and reads as a flat picture however good the geometry is.
         camera?.lookAt(
-            (distance * 0.035).toDouble(), (distance * 0.10).toDouble(), 0.0,
+            (distance * 0.03).toDouble(), (distance * 0.18).toDouble(), 0.0,
             0.0, -(distance * 0.02).toDouble(), -distance.toDouble(),
             0.0, 1.0, 0.0
         )

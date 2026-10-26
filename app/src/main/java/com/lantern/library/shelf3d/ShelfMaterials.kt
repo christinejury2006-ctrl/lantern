@@ -34,6 +34,9 @@ object ShelfMaterials {
     /** The wooden carcass of the drum. */
     private const val WOOD = "wood_pbr"
 
+    /** The warm panel that lights the recommendation alcove. Unlit: it is a light, not a surface. */
+    private const val LAMP = "lamp_unlit"
+
     /**
      * A book: its binding colour, and the rectangle of the spine atlas holding its cover art.
      *
@@ -68,6 +71,14 @@ object ShelfMaterials {
         }
     """.trimIndent()
 
+    /** The lamp: one flat warm colour, unaffected by the room. */
+    private val LAMP_FRAGMENT = """
+        void material(inout MaterialInputs material) {
+            prepareMaterial(material);
+            material.baseColor = vec4(materialParams.baseColor, 1.0);
+        }
+    """.trimIndent()
+
     /** The woodwork: colour and roughness only, no texture. */
     private val WOOD_FRAGMENT = """
         void material(inout MaterialInputs material) {
@@ -91,7 +102,7 @@ object ShelfMaterials {
      */
     fun load(context: Context): Map<String, ByteArray> {
         val out = HashMap<String, ByteArray>(2)
-        for (name in listOf(BOOK, WOOD)) {
+        for (name in listOf(BOOK, WOOD, LAMP)) {
             out[name] = loadAsset(context, name) ?: fallBackToCompiling(context, name)
         }
         return out
@@ -124,6 +135,7 @@ object ShelfMaterials {
 
     const val BOOK_MATERIAL = BOOK
     const val WOOD_MATERIAL = WOOD
+    const val LAMP_MATERIAL = LAMP
 
     private fun loadOrCompile(context: Context, name: String): ByteArray {
         val file = File(context.filesDir, "${name}_v$VERSION.filamat")
@@ -153,11 +165,11 @@ object ShelfMaterials {
      * material: "book_pbr failed to compile" says which shader to look at, where a bare
      * IllegalStateException says nothing.
      */
-    private fun compile(name: String): ByteArray = if (name == BOOK) {
-        build(name, BOOK_FRAGMENT, withArtwork = true) ?: error("$name failed to compile")
-    } else {
-        build(name, WOOD_FRAGMENT, withArtwork = false) ?: error("$name failed to compile")
-    }
+    private fun compile(name: String): ByteArray = when (name) {
+        BOOK -> build(name, BOOK_FRAGMENT, withArtwork = true)
+        LAMP -> build(name, LAMP_FRAGMENT, withArtwork = false)
+        else -> build(name, WOOD_FRAGMENT, withArtwork = false)
+    } ?: error("$name failed to compile")
 
     /** Compiles one variant, returning null for a package matc rejected. */
     private fun build(name: String, fragment: String, withArtwork: Boolean): ByteArray? {
@@ -175,13 +187,19 @@ object ShelfMaterials {
             // MOBILE generates GLES and Vulkan shaders, so the package works whichever
             // backend the driver gives us.
             .platform(MaterialBuilder.Platform.MOBILE)
-            .shading(MaterialBuilder.Shading.LIT)
+            // The lamp is a light, not a surface: unlit, so the room's lighting cannot dim it.
+            .shading(if (name == LAMP) MaterialBuilder.Shading.UNLIT else MaterialBuilder.Shading.LIT)
             .name(name)
             // NONE keeps compilation quick; this shader has nothing to optimise away anyway.
             .optimization(MaterialBuilder.Optimization.NONE)
             .uniformParameter(MaterialBuilder.UniformType.FLOAT3, "baseColor")
-            .uniformParameter(MaterialBuilder.UniformType.FLOAT, "roughness")
-            .uniformParameter(MaterialBuilder.UniformType.FLOAT, "metallic")
+            .apply {
+                // The lamp is unlit: declaring roughness or metallic would make matc reject it.
+                if (name != LAMP) {
+                    uniformParameter(MaterialBuilder.UniformType.FLOAT, "roughness")
+                    uniformParameter(MaterialBuilder.UniformType.FLOAT, "metallic")
+                }
+            }
             // Winding must never be able to make a book disappear.
             .culling(MaterialBuilder.CullingMode.NONE)
             // UVs are authored top-down, like every image this app draws. The spine atlas

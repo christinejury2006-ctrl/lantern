@@ -102,6 +102,19 @@ class CylinderShelfScene(
     /** Which position each book entity stands at. */
     private val entityPosition = ArrayList<Int>(64)
 
+    /**
+     * Each book's own proportions, as multipliers on the unit box.
+     *
+     * A real shelf is not a row of identical blocks: bindings differ in thickness by a few
+     * millimetres and in height by a centimetre, and that variation is most of what makes a run of
+     * spines look collected rather than manufactured. Derived from the book's id, so a book is
+     * always the same book.
+     */
+    private val bookScale = ArrayList<FloatArray>(64)
+
+    /** The recommendation alcove, which follows the drum. */
+    private val alcoveParts = ArrayList<AlcovePart>(6)
+
     private companion object {
         const val TAG = "CylinderShelfScene"
 
@@ -147,6 +160,8 @@ class CylinderShelfScene(
             res.track(bookMaterial)
             val woodMaterial = buildMaterial(engine, ShelfMaterials.WOOD_MATERIAL)
             res.track(woodMaterial)
+            val lampMaterial = buildMaterial(engine, ShelfMaterials.LAMP_MATERIAL)
+            res.track(lampMaterial)
 
             // One grain texture for the whole carcass: boards, wall and floor differ only by the
             // colour and by how far the grain is stretched.
@@ -229,6 +244,12 @@ class CylinderShelfScene(
             val artwork = uploadAtlas(engine, spineAtlas)
             res.track(artwork)
             addBooks(engine, scene, res, vertices, indices, bookMaterial, artwork)
+            // The recommendation alcove: a lit recess at the front of the drum, following it
+            // round like a built-in. The picks stand in it.
+            addAlcove(
+                engine, scene, res, vertices, indices,
+                woodMaterial, bookMaterial, lampMaterial, artwork
+            )
             addLights(engine, scene, res)
         } catch (t: Throwable) {
             Log.e(TAG, "could not build the scene", t)
@@ -419,6 +440,9 @@ class CylinderShelfScene(
         colour: Int,
         roughness: Float
     ) {
+        // This book's own width, height and depth.
+        val scale = proportionsOf(bookId = placement.getOrNull(position) ?: position)
+
         val instance = material.createInstance()
         // Linear-ish base colour; sRGB would need a colour space conversion, and a slightly
         // desaturated leather reads better under the sun anyway.
@@ -465,7 +489,159 @@ class CylinderShelfScene(
         scene.addEntity(entity)
         bookEntities.add(entity)
         entityPosition.add(position)
+        bookScale.add(scale)
         transforms.add(engine.transformManager.getInstance(entity))
+    }
+
+    /**
+     * Builds the recommendation alcove: a shallow recess at the front of the drum.
+     *
+     * It is real geometry, not a picture of a nook. A back panel carrying the painted alcove art, two
+     * wooden side walls that give it depth, a top board, and a warm unlit lamp panel inside. It
+     * follows the drum, so it behaves like a bay built into the case rather than a panel laid over
+     * it, and the books picked for the reader stand in it.
+     */
+    private fun addAlcove(
+        engine: Engine,
+        scene: Scene,
+        res: ShelfResources,
+        vertices: VertexBuffer,
+        indices: IndexBuffer,
+        woodMaterial: Material,
+        bookMaterial: Material,
+        lampMaterial: Material,
+        artwork: Texture
+    ) {
+        val slots = perRow.coerceAtLeast(1)
+        // The alcove sits at the front of the drum, where the picks are placed.
+        alcoveSlot = 0
+        alcoveWidth = minOf(3f * CylinderMath.BOOK_WIDTH, CylinderMath.angleStep(slots) * radius * slots)
+        val height = CylinderMath.BOOK_HEIGHT * 1.20f
+        val depth = 0.075f
+
+        // Back panel: the painted alcove, so the recess reads as somewhere with a garden in it.
+        val back = bookMaterial.createInstance().apply {
+            setParameter("baseColor", 1f, 1f, 1f)
+            setParameter("roughness", 0.9f)
+            setParameter("metallic", 0f)
+            setParameter(
+                "spineMap", artwork,
+                TextureSampler(TextureSampler.MagFilter.LINEAR, TextureSampler.WrapMode.CLAMP_TO_EDGE)
+            )
+            val tile = spineAtlas?.nookTile
+            if (tile != null) {
+                setParameter("uvOffset", tile.u0, tile.v0)
+                setParameter("uvScale", tile.u1 - tile.u0, tile.v1 - tile.v0)
+                setParameter("useArtwork", 1f)
+            } else {
+                setParameter("uvOffset", 0f, 0f)
+                setParameter("uvScale", 1f, 1f)
+                setParameter("useArtwork", 0f)
+            }
+        }
+        res.track(back)
+        addAlcovePart(
+            engine, scene, res, vertices, indices, back,
+            dx = 0f, dy = 0f, dz = -depth,
+            width = alcoveWidth, height = height, depth = 0.012f
+        )
+
+        // Side walls, top board: the wooden casing that makes it a recess rather than a poster.
+        listOf(-1f, 1f).forEach { side ->
+            addAlcovePart(
+                engine, scene, res, vertices, indices,
+                woodInstance(woodMaterial, res),
+                dx = side * alcoveWidth / 2f, dy = 0f, dz = -depth / 2f,
+                width = 0.016f, height = height, depth = depth
+            )
+        }
+        addAlcovePart(
+            engine, scene, res, vertices, indices, woodInstance(woodMaterial, res),
+            dx = 0f, dy = height / 2f, dz = -depth / 2f,
+            width = alcoveWidth, height = 0.018f, depth = depth
+        )
+
+        // The lamp: an unlit warm panel under the top board, which is what lights the nook.
+        val lamp = lampMaterial.createInstance().apply {
+            setParameter("color", 1.0f, 0.74f, 0.42f)
+        }
+        res.track(lamp)
+        addAlcovePart(
+            engine, scene, res, vertices, indices, lamp,
+            dx = 0f, dy = height / 2f - 0.045f, dz = -0.012f,
+            width = alcoveWidth * 0.62f, height = 0.012f, depth = 0.03f
+        )
+    }
+
+    /** A wooden material instance for the alcove's casing. */
+    private fun woodInstance(material: Material, res: ShelfResources): MaterialInstance =
+        material.createInstance().apply {
+            setParameter("baseColor", WOOD_SHELF[0], WOOD_SHELF[1], WOOD_SHELF[2])
+            setParameter("roughness", 0.62f)
+            setParameter("metallic", 0f)
+            res.track(this)
+        }
+
+    /** Adds one box of the alcove, positioned in the alcove's own frame. */
+    private fun addAlcovePart(
+        engine: Engine,
+        scene: Scene,
+        res: ShelfResources,
+        vertices: VertexBuffer,
+        indices: IndexBuffer,
+        instance: MaterialInstance,
+        dx: Float,
+        dy: Float,
+        dz: Float,
+        width: Float,
+        height: Float,
+        depth: Float
+    ) {
+        val entity = EntityManager.get().create()
+        RenderableManager.Builder(1)
+            .geometry(0, RenderableManager.PrimitiveType.TRIANGLES, vertices, indices)
+            .material(0, instance)
+            .boundingBox(
+                Box(floatArrayOf(0f, 0f, 0f), floatArrayOf(width, height, depth))
+            )
+            .culling(false)
+            .build(engine, entity)
+        scene.addEntity(entity)
+        val transform = engine.transformManager.getInstance(entity)
+        alcoveParts.add(AlcovePart(entity, transform, dx, dy, dz, width, height, depth))
+        applyAlcove()
+    }
+
+    /** Which slot the alcove is built into, and how wide it is. */
+    private var alcoveSlot = 0
+    private var alcoveWidth = 0.3f
+
+    /**
+     * Places the alcove for the drum's current rotation.
+     *
+     * It is part of the case, so it turns with the books: each part is offset in the alcove's own
+     * frame and then rotated into the drum's.
+     */
+    private fun applyAlcove() {
+        val e = engine ?: return
+        if (alcoveParts.isEmpty()) return
+        val slots = perRow.coerceAtLeast(1)
+        val angle = CylinderMath.angleOf(alcoveSlot, slots, controller.rotation)
+        val degrees = CylinderMath.facingDegrees(angle)
+        val a = Math.toRadians(degrees.toDouble())
+        val c = kotlin.math.cos(a).toFloat()
+        val s2 = kotlin.math.sin(a).toFloat()
+        // The alcove's back sits behind the books' spines, in the drum's shell.
+        val baseX = CylinderMath.positionX(angle, radius)
+        val baseZ = CylinderMath.positionZ(angle, radius, axis)
+        val baseY = CylinderMath.rowY(0, rows) - CylinderMath.BOOK_HEIGHT / 2f + CylinderMath.BOOK_HEIGHT / 2f
+        val tm = e.transformManager
+        for (part in alcoveParts) {
+            val wx = baseX + c * part.dx + s2 * part.dz
+            val wz = baseZ - s2 * part.dx + c * part.dz
+            boxTransform(wx, baseY + part.dy, wz, degrees, part.width, part.height, part.depth)
+            if (part.transform != 0) tm.setTransform(part.transform, matrix)
+        }
     }
 
     private fun addLights(engine: Engine, scene: Scene, res: ShelfResources) {
@@ -552,10 +728,15 @@ class CylinderShelfScene(
             val x = CylinderMath.positionX(angle, radius)
             val z = CylinderMath.positionZ(angle, radius, axis)
             val degrees = CylinderMath.facingDegrees(angle)
-            buildTransform(x, CylinderMath.rowY(row, rows), z, degrees)
+            val scale = bookScale.getOrNull(i)
+            // A book stands on its board: a taller one grows upwards, not through the shelf.
+            val shrink = (scale?.get(1) ?: 1f) - 1f
+            val standing = CylinderMath.rowY(row, rows) + CylinderMath.BOOK_HEIGHT * shrink / 2f
+            buildTransform(x, standing, z, degrees, scale)
             val instance = transforms[i]
             if (instance != 0) tm.setTransform(instance, matrix)
         }
+        applyAlcove()
         val front = frontPosition()
         if (front != null && front != lastFrontIndex) {
             lastFrontIndex = front
@@ -563,17 +744,29 @@ class CylinderShelfScene(
         }
     }
 
+    /** The same matrix for an arbitrary box, used by the alcove's casing. */
+    private fun boxTransform(x: Float, y: Float, z: Float, yawDegrees: Float, sx: Float, sy: Float, sz: Float) {
+        val a = Math.toRadians(yawDegrees.toDouble())
+        val c = kotlin.math.cos(a).toFloat()
+        val s = kotlin.math.sin(a).toFloat()
+        java.util.Arrays.fill(matrix, 0f)
+        matrix[0] = c * sx; matrix[1] = 0f; matrix[2] = -s * sx; matrix[3] = 0f
+        matrix[4] = 0f; matrix[5] = sy; matrix[6] = 0f; matrix[7] = 0f
+        matrix[8] = s * sz; matrix[9] = 0f; matrix[10] = c * sz; matrix[11] = 0f
+        matrix[12] = x; matrix[13] = y; matrix[14] = z; matrix[15] = 1f
+    }
+
     /**
      * Translation then yaw then scale, in column-major order (Filament takes the same layout
      * as OpenGL). Written out rather than calling android.opengl.Matrix so nothing allocates.
      */
-    private fun buildTransform(x: Float, y: Float, z: Float, yawDegrees: Float) {
+    private fun buildTransform(x: Float, y: Float, z: Float, yawDegrees: Float, scale: FloatArray?) {
         val a = Math.toRadians(yawDegrees.toDouble())
         val c = kotlin.math.cos(a).toFloat()
         val s = kotlin.math.sin(a).toFloat()
-        val sx = CylinderMath.BOOK_WIDTH
-        val sy = CylinderMath.BOOK_HEIGHT
-        val sz = CylinderMath.BOOK_DEPTH
+        val sx = CylinderMath.BOOK_WIDTH * (scale?.get(0) ?: 1f)
+        val sy = CylinderMath.BOOK_HEIGHT * (scale?.get(1) ?: 1f)
+        val sz = CylinderMath.BOOK_DEPTH * (scale?.get(2) ?: 1f)
         java.util.Arrays.fill(matrix, 0f)
         // R_y(yaw) * S
         matrix[0] = c * sx;  matrix[1] = 0f; matrix[2] = -s * sx;  matrix[3] = 0f
@@ -697,4 +890,40 @@ class CylinderShelfScene(
         engine.flushAndWait()
         this.engine = null
     }
+
+/**
+ * One piece of the recommendation alcove: a wall, a top board or the lamp, plus where it sits in
+ * the alcove's own frame. The whole alcove is carried round the drum with the books.
+ */
+private class AlcovePart(
+    val entity: Int,
+    val transform: Int,
+    /** Lateral offset along the shelf, then height, then how far in front of the back wall. */
+    val dx: Float,
+    val dy: Float,
+    val dz: Float,
+    val width: Float,
+    val height: Float,
+    val depth: Float
+)
+
+/**
+ * A book's own width, height and depth multipliers.
+ *
+ * Deterministic in the book's index, so a book looks the same on every launch, and narrow enough
+ * that neighbouring spines still touch: a shelf is books of different sizes pressed together, not
+ * books adrift from each other.
+ */
+private fun proportionsOf(bookId: Int): FloatArray {
+    var h = bookId * 2654435761L
+    h = h xor (h ushr 13)
+    val a = abs((h % 1000L).toInt()) / 1000f
+    val b = abs((h / 1000L % 1000L).toInt()) / 1000f
+    val c = abs((h / 1_000_000L % 1000L).toInt()) / 1000f
+    return floatArrayOf(
+        0.88f + a * 0.26f, // thickness
+        0.94f + b * 0.10f, // height
+        0.92f + c * 0.16f // depth
+    )
+}
 }

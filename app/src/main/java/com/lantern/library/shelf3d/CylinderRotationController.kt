@@ -113,9 +113,11 @@ class CylinderRotationController(
     fun onDrag(dx: Float): Boolean {
         if (dx.isNaN() || dx == 0f) return false
         dragging = true
-        // A finger moving right rolls the drum right, which brings the book on the left into
-        // view: the surface moves with the finger, so the drum turns the opposite way.
-        rotation -= dx * radiansPerPixel
+        // The surface moves with the finger. A book at the front sits at positionX = R sin(angle),
+        // and its angle is the drum's rotation, so increasing the rotation is what carries the
+        // spines to the right as the finger goes right. This was inverted: dragging right used to
+        // walk the books left, against the hand.
+        rotation += dx * radiansPerPixel
         rotation = CylinderMath.wrapSigned(rotation)
         velocity = 0f
         snapTarget = null
@@ -130,7 +132,7 @@ class CylinderRotationController(
      */
     fun onRelease(velocityPxPerSecond: Float) {
         dragging = false
-        velocity = (-velocityPxPerSecond * radiansPerPixel).coerceIn(-maxVelocity, maxVelocity)
+        velocity = (velocityPxPerSecond * radiansPerPixel).coerceIn(-maxVelocity, maxVelocity)
         // A tiny flick, or a release after holding still, should not throw the drum.
         if (abs(velocity) < 0.35f) velocity = 0f
         isMoving = velocity != 0f || snapToBooks

@@ -715,8 +715,6 @@ class CylinderShelfScene(
     private var sunEntity = 0
     private var fillEntity = 0
 
-    private var sunEntity = 0
-
     // ---------------------------------------------------------------- frame
 
     /**

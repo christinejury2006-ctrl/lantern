@@ -74,7 +74,15 @@ class SpineAtlas(
         suspend fun build(
             context: Context,
             books: List<LibraryBook>,
-            colours: List<Int> = emptyList()
+            colours: List<Int> = emptyList(),
+            /**
+             * Whether to paint the title into the tile.
+             *
+             * False for the painted shelf, which draws titles itself: text drawn into a tile a
+             * few dozen pixels wide comes out as unreadable fragments, and the shelf can draw it
+             * at the size it is actually shown.
+             */
+            titles: Boolean = false
         ): SpineAtlas? = withContext(Dispatchers.IO) {
             if (books.isEmpty()) return@withContext null
 
@@ -129,7 +137,7 @@ class SpineAtlas(
                 }
 
                 canvas.drawRect(rect, scrimPaint)
-                drawSpineTitle(canvas, rect, book.title)
+                if (titles) drawSpineTitle(canvas, rect, book.title)
                 canvas.drawRect(
                     rect.left.toFloat(), rect.top.toFloat(),
                     (rect.right - 1).toFloat(), (rect.bottom - 1).toFloat(),

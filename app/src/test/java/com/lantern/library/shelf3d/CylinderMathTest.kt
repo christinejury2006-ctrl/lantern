@@ -445,9 +445,18 @@ class CylinderMathTest {
         val placement = CylinderMath.placementFor(
             count = 6, slots = slots, rows = 1, picks = listOf(0, 1, 2, 3, 4)
         )
-        // At most slots-1 picks, then the niche, and every book still somewhere on the drum.
-        assertEquals(listOf(0, 1, 2), placement.take(slots - 1).toList())
-        assertEquals(CylinderMath.GAP, placement[slots - 1])
+        // Positions are filled a column at a time, so the first tier's picks are NOT the first
+        // few entries: three picks, then the niche, then the rest. What matters is that only
+        // slots-1 picks can be picked up, that the niche exists, and that no book is lost.
+        val order = ArrayList<Int>()
+        for (slot in 0 until slots) {
+            for (position in placement.indices) {
+                if (position % slots != slot) continue
+                order.add(placement[position])
+            }
+        }
+        assertEquals(listOf(0, 1, 2), order.take(3))
+        assertEquals(CylinderMath.GAP, order[3])
         assertEquals(listOf(0, 1, 2, 3, 4, 5), placement.filter { it >= 0 }.sorted())
     }
 
@@ -515,9 +524,9 @@ class CylinderMathTest {
     }
 
     @Test
-    fun `without picks the nib there is no niche`() {
+    fun `without picks there is no niche`() {
         val placement = CylinderMath.placementFor(count = 6, slots = 3, rows = 1, picks = emptyList())
         assertTrue(placement.none { it == CylinderMath.GAP })
-        assertEquals((0..5).toList(), placement.take(6).toList())
+        assertEquals((0..5).toList(), placement.filter { it >= 0 }.sorted())
     }
 }

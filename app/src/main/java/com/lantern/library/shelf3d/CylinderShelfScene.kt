@@ -17,6 +17,7 @@ import com.google.android.filament.TextureSampler
 import com.google.android.filament.VertexBuffer
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.abs
 
 /**
  * The bookcase scene: books standing around a drum, a wooden plinth, a sun and a soft ambient

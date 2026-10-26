@@ -120,7 +120,6 @@ fun CylinderShelfScreen(
     }
 
     LaunchedEffect(books.size, picks) {
-        controller.setBookCount(books.size)
         // Compiling the two PBR shaders is the only slow step, and only on first launch.
         val result = withContext(Dispatchers.Default) {
             runCatching { ShelfMaterials.load(context) }
@@ -143,12 +142,27 @@ fun CylinderShelfScreen(
     val ready = materialBytes
     // Books per tier. The tiers share the drum's slots, so whether a tapped book is the one at
     // the front is a question about its slot, not about its index.
-    val perRow = remember(books.size, rows, pickIndices) {
+    val slots = remember(books.size, rows, pickIndices) {
         val bay = if (pickIndices.isEmpty()) 0 else 1
-        CylinderMath.perRowFor(books.size + bay, rows).coerceAtLeast(1)
+        // The same rule the scene uses, so the bay and the caption agree with what is drawn: never
+        // fewer slots than it takes to see a drum rather than two flat cards.
+        maxOf(
+            CylinderMath.perRowFor(books.size + bay, rows),
+            CylinderMath.MIN_SLOTS_PER_ROW
+        ).coerceAtLeast(1)
     }
-    val placement = remember(books.size, perRow, pickIndices) {
-        CylinderMath.placementFor(books.size, perRow, pickIndices)
+    val placement = remember(books.size, slots, rows, pickIndices) {
+        CylinderMath.placementFor(books.size, slots, rows, pickIndices)
+    }
+    // Which slots hold a book, so the drum only comes to rest on one of them.
+    val occupied = remember(placement, slots) {
+        (0 until slots).filter { slot ->
+            placement.indices.any { it % slots == slot && placement[it] >= 0 }
+        }.toIntArray()
+    }
+    LaunchedEffect(slots, occupied) {
+        controller.setBookCount(slots)
+        controller.setSnapSlots(occupied)
     }
     val front = books.getOrNull(frontIndex.coerceIn(0, (books.size - 1).coerceAtLeast(0)))
 
@@ -162,7 +176,7 @@ fun CylinderShelfScreen(
         }
         if (match >= 0) {
             // The whole point of the 3D shelf: the book comes to the reader, not the reverse.
-            val slot = CylinderMath.slotOfBook(match, placement, perRow)
+            val slot = CylinderMath.slotOfBook(match, placement, slots)
             if (slot >= 0) controller.revealBook(slot)
             frontIndex = match
             searching = false

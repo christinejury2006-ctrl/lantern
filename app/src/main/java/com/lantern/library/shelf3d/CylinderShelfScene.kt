@@ -123,9 +123,11 @@ class CylinderShelfScene(
         val FLOOR_Y = CylinderMath.BOOK_Y - CylinderMath.BOOK_HEIGHT / 2f - 0.035f
 
         /** Base colours for the room's woodwork, as linear values rather than sRGB. */
-        val WOOD_WALL = floatArrayOf(0.20f, 0.115f, 0.070f)
-        val WOOD_SHELF = floatArrayOf(0.26f, 0.150f, 0.090f)
-        val WOOD_FLOOR = floatArrayOf(0.16f, 0.093f, 0.058f)
+        // Linear tints, multiplied by the near-white grain. Dark enough to be walnut, light
+        // enough that the sun and the ambient fill actually show shape and grain in them.
+        val WOOD_WALL = floatArrayOf(0.34f, 0.21f, 0.13f)
+        val WOOD_SHELF = floatArrayOf(0.46f, 0.30f, 0.19f)
+        val WOOD_FLOOR = floatArrayOf(0.28f, 0.18f, 0.11f)
     }
 
     override fun onCreate(engine: Engine, scene: Scene) {
@@ -138,15 +140,14 @@ class CylinderShelfScene(
         // One extra position when there is a bay, for the niche between the picks and the rest of
         // the library.
         val bay = if (picks.isEmpty()) 0 else 1
-        // Never fewer slots than it takes to see a curve. Two books on a drum are two flat cards
-        // half a turn apart, which is what a small library used to look like.
-        perRow = maxOf(
-            CylinderMath.perRowFor(count + bay, rows),
-            CylinderMath.MIN_SLOTS_PER_ROW
-        ).coerceAtLeast(1)
+        // Slots are a property of the drum, not of the library: enough of them to go round the
+        // circumference at one book's width each, and never fewer than the books that need one.
+        // Taking them from the book count instead is what collapsed the case into one block.
+        val booksPerRow = CylinderMath.perRowFor(count + bay, rows).coerceAtLeast(1)
+        radius = CylinderMath.radiusFor(booksPerRow)
+        perRow = CylinderMath.slotsFor(booksPerRow, radius)
         // The drum is sized by the books on ONE row, not by the whole library: the tiers share
         // the same slots, so a tall case holds more books without widening.
-        radius = CylinderMath.radiusFor(perRow)
         axis = CylinderMath.axisForCase(perRow, rows)
         placement = CylinderMath.placementFor(count, perRow, rows, picks)
 

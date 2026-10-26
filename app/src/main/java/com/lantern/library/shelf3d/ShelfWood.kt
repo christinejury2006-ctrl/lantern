@@ -29,13 +29,16 @@ object ShelfWood {
         val bitmap = Bitmap.createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
 
-        // Base: a warm mid-brown. Instance colours multiply into this, so it is kept neutral.
+        // Near-white, because the shader multiplies this by the instance's base colour.
+        // A brown grain multiplied by a brown tint is almost black — which is exactly why the
+        // whole carcass came out unlit — so the colour lives in the tint and this carries only the
+        // grain's light and shade.
         canvas.drawRect(
             0f, 0f, SIZE.toFloat(), SIZE.toFloat(),
             Paint().apply {
                 shader = LinearGradient(
                     0f, 0f, 0f, SIZE.toFloat(),
-                    Color.rgb(168, 132, 96), Color.rgb(126, 94, 66),
+                    Color.rgb(246, 242, 236), Color.rgb(206, 199, 190),
                     Shader.TileMode.CLAMP
                 )
             }
@@ -50,9 +53,9 @@ object ShelfWood {
             val period = 60f + random.nextFloat() * 140f
             val phase = random.nextFloat() * 6.28f
             line.color = if (random.nextBoolean()) {
-                Color.argb(28 + random.nextInt(30), 70, 44, 26)
+                Color.argb(30 + random.nextInt(34), 120, 96, 74)
             } else {
-                Color.argb(22 + random.nextInt(24), 226, 198, 160)
+                Color.argb(26 + random.nextInt(26), 255, 252, 246)
             }
             var x = 0f
             while (x < SIZE) {
@@ -74,21 +77,21 @@ object ShelfWood {
                     Paint(Paint.ANTI_ALIAS_FLAG).apply {
                         style = Paint.Style.STROKE
                         strokeWidth = 1.2f
-                        color = Color.argb(70, 62, 38, 22)
+                        color = Color.argb(60, 128, 104, 82)
                     }
                 )
             }
             canvas.drawCircle(cx, cy, 4f, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.argb(120, 40, 22, 12)
+                color = Color.argb(110, 96, 74, 56)
             })
         }
 
         // A darker band at the edge of each board, which is what a panel looks like under varnish.
         canvas.drawRect(0f, 0f, SIZE.toFloat(), 3f, Paint().apply {
-            color = Color.argb(60, 40, 22, 12)
+            color = Color.argb(70, 110, 88, 68)
         })
         canvas.drawRect(0f, SIZE - 3f, SIZE.toFloat(), SIZE.toFloat(), Paint().apply {
-            color = Color.argb(60, 40, 22, 12)
+            color = Color.argb(70, 110, 88, 68)
         })
 
         return bitmap

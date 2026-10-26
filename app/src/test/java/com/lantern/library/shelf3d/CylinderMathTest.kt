@@ -461,29 +461,49 @@ class CylinderMathTest {
     }
 
     @Test
-    fun `a small library stands in runs down the tiers`() {
-        // Six books over four tiers used to be one book per tier, adrift in the middle of the
-        // screen. Filling a column at a time, the same six books stand two deep on three slots,
-        // which is a case with room to spare rather than a carousel.
-        val slots = CylinderMath.MIN_SLOTS_PER_ROW
-        val rows = 4
-        val placement = CylinderMath.placementFor(count = 6, slots = slots, rows = rows, picks = emptyList())
-        // Books are in the first six positions of the fill order: slot 0 rows 0..3, then slot 1
-        // rows 0..1.
-        assertEquals(0, placement[0 * slots + 0])
-        assertEquals(3, placement[3 * slots + 0])
-        assertEquals(4, placement[0 * slots + 1])
-        assertEquals(5, placement[1 * slots + 1])
-        // and the rest of the drum is empty rather than full of books stacked on top of each other
-        assertEquals(CylinderMath.EMPTY, placement[0 * slots + 2])
+    fun `a small library stands in a run along each tier`() {
+        // Six books over two tiers is three spines in a row on each shelf, not one book adrift in
+        // the middle of four tiers. Slots come from the drum, so most of the circle stays empty —
+        // which is what a shelf with room to spare looks like.
+        val slots = CylinderMath.slotsFor(perRow = 3, radius = CylinderMath.radiusFor(3))
+        val rows = 2
+        val placement = CylinderMath.placementFor(6, slots, rows, picks = emptyList())
+        assertEquals(slots * rows, placement.size)
+        assertTrue("a drum of this size should hold far more than three", slots > 8)
+        // three books, shoulder to shoulder, at the start of each tier
+        assertEquals(listOf(0, 1, 2), placement.take(3).toList())
+        assertEquals(listOf(3, 4, 5), placement.drop(slots).take(3).toList())
+        assertEquals(CylinderMath.EMPTY, placement[3])
+        assertEquals(CylinderMath.EMPTY, placement[slots + 3])
         assertEquals(6, placement.count { it >= 0 })
+    }
+
+    @Test
+    fun `the drum is a drum, whatever the library size`() {
+        // The case collapsed because a tier of three books was given a 0.16 m drum: three spines
+        // inside a 23 cm arc of a 46 cm screen, piled on top of each other in the middle.
+        for (count in listOf(1, 3, 6, 12, 40, 100, 300)) {
+            for (rows in 1..4) {
+                val booksPerRow = CylinderMath.perRowFor(count, rows).coerceAtLeast(1)
+                val radius = CylinderMath.radiusFor(booksPerRow)
+                val slots = CylinderMath.slotsFor(booksPerRow, radius)
+                assertTrue("count $count rows $rows gave a ${radius} m drum",
+                    radius >= CylinderMath.MIN_DRUM_RADIUS - 1e-6f)
+                assertTrue("count $count rows $rows gave $slots slots for $booksPerRow books",
+                    slots >= booksPerRow)
+                // one book's width of circumference per slot, so spines never overlap
+                assertEquals(1f, (slots * CylinderMath.BOOK_WIDTH * CylinderMath.BOOK_GAP) /
+                    (2f * Math.PI.toFloat() * radius), 0.12f)
+            }
+        }
     }
 
     @Test
     fun `every book is placed exactly once`() {
         for (count in listOf(1, 3, 6, 12, 40, 100)) {
             for (rows in 1..4) {
-                val slots = maxOf(CylinderMath.perRowFor(count, rows), CylinderMath.MIN_SLOTS_PER_ROW)
+                val booksPerRow = CylinderMath.perRowFor(count, rows).coerceAtLeast(1)
+                val slots = CylinderMath.slotsFor(booksPerRow, CylinderMath.radiusFor(booksPerRow))
                 val placement = CylinderMath.placementFor(count, slots, rows, picks = listOf(0))
                 val books = placement.filter { it >= 0 }.sorted()
                 assertEquals("count $count rows $rows", (0 until count).toList(), books)
@@ -502,15 +522,16 @@ class CylinderMathTest {
     }
 
     @Test
-    fun `a tier never has fewer slots than it takes to see a curve`() {
+    fun `slots are never wider than the books that stand in them`() {
         for (count in 1..30) {
             for (rows in 1..4) {
-                val slots = maxOf(CylinderMath.perRowFor(count, rows), CylinderMath.MIN_SLOTS_PER_ROW)
-                assertTrue("count $count rows $rows gave $slots slots",
-                    slots >= CylinderMath.MIN_SLOTS_PER_ROW)
-                // and the drum is packed: a slot is never much wider than a book
-                val arc = CylinderMath.bookArcRadians(CylinderMath.radiusFor(slots))
-                assertTrue(arc <= CylinderMath.angleStep(slots) + 1e-5f)
+                val booksPerRow = CylinderMath.perRowFor(count, rows).coerceAtLeast(1)
+                val radius = CylinderMath.radiusFor(booksPerRow)
+                val slots = CylinderMath.slotsFor(booksPerRow, radius)
+                // The arc a book occupies must fit inside its slot, or the books interpenetrate.
+                val arc = CylinderMath.bookArcRadians(radius)
+                assertTrue("count $count rows $rows: spine $arc of slot ${CylinderMath.angleStep(slots)}",
+                    arc <= CylinderMath.angleStep(slots) + 1e-5f)
             }
         }
     }

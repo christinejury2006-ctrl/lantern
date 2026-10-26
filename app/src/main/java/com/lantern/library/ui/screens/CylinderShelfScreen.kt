@@ -144,12 +144,10 @@ fun CylinderShelfScreen(
     // the front is a question about its slot, not about its index.
     val slots = remember(books.size, rows, pickIndices) {
         val bay = if (pickIndices.isEmpty()) 0 else 1
-        // The same rule the scene uses, so the bay and the caption agree with what is drawn: never
-        // fewer slots than it takes to see a drum rather than two flat cards.
-        maxOf(
-            CylinderMath.perRowFor(books.size + bay, rows),
-            CylinderMath.MIN_SLOTS_PER_ROW
-        ).coerceAtLeast(1)
+        // The same rule the scene uses, so the bay and the caption agree with what is drawn: slots
+        // come from the drum's circumference, never from the size of the library.
+        val booksPerRow = CylinderMath.perRowFor(books.size + bay, rows).coerceAtLeast(1)
+        CylinderMath.slotsFor(booksPerRow, CylinderMath.radiusFor(booksPerRow))
     }
     val placement = remember(books.size, slots, rows, pickIndices) {
         CylinderMath.placementFor(books.size, slots, rows, pickIndices)

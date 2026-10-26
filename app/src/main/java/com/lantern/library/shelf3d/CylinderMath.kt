@@ -181,6 +181,11 @@ object CylinderMath {
      * keeps every book's slot wider than the book, and because [axisFor] follows the radius,
      * the front book stays the same distance from the camera — so the shelf simply gets wider
      * and flatter as it fills, instead of the books getting smaller.
+     *
+     * There is a floor on the radius, and it is a large one: a drum only as big as its books
+     * needs is a drum you can hold in one hand, and on screen its whole visible face is a few
+     * centimetres wide, so the books pile into the middle of the frame. A real revolving case is
+     * bigger than its contents needs, and its empty slots are what the case looks like.
      */
     fun radiusFor(count: Int): Float {
         if (count <= 0) return DRUM_RADIUS
@@ -196,16 +201,26 @@ object CylinderMath {
      * The narrowest drum that can be built: the wall behind the books has to keep a positive
      * radius, and the camera has to stay outside the drum.
      */
-    const val MIN_DRUM_RADIUS = 0.16f
+    const val MIN_DRUM_RADIUS = 0.5f
 
     /**
-     * The fewest slots a tier is given, however few books there are.
+     * How many slots a tier has, for a tier holding [perRow] books on a drum of [radius].
      *
-     * Slots come from the library, but a tier with two slots is two books half a turn apart: the
-     * front one fills the middle of the screen and the case has no curve to show. Nine slots keep
-     * three or four spines in view at once, which is what makes it read as a drum.
+     * Slots are a property of the drum, not of the library: the circumference divided by the width
+     * a book needs. Deriving them from the book count instead is what collapsed the case — three
+     * books on a 0.16 m drum sat inside a 23 cm arc of a 46 cm screen, so they piled into one
+     * block in the middle with their side faces showing.
+     *
+     * A tier always has at least one slot per book, so a large library still fits.
      */
-    const val MIN_SLOTS_PER_ROW = 8
+    fun slotsFor(perRow: Int, radius: Float, spacing: Float = BOOK_WIDTH * BOOK_GAP): Int {
+        if (spacing <= 0f || radius <= 0f) return perRow.coerceAtLeast(1)
+        val byCircumference = kotlin.math.round(TWO_PI * radius / spacing).toInt()
+        return maxOf(byCircumference, perRow, 1)
+    }
+
+    /** The drum radius a tier of [perRow] books needs, never smaller than a real drum. */
+    fun radiusForRow(perRow: Int): Float = radiusFor(perRow)
 
     /** The camera's vertical field of view, in degrees. A phone-camera-like lens. */
     const val FOV_VERTICAL_DEGREES = 55f
@@ -427,9 +442,14 @@ object CylinderMath {
         // that is in the library but not on the drum is a book the reader cannot reach.
         val tiers = maxOf(rows.coerceAtLeast(1), ceil(order.size / width.toFloat()).toInt())
         val out = IntArray(width * tiers) { EMPTY }
+        // The library is shared out over the tiers, and each tier holds its books in one
+        // unbroken run from the left: books stand shoulder to shoulder along a shelf. Filling a
+        // column at a time instead put one book on each of four tiers and left every column's
+        // upper shelves empty, which is not what a shelf with six books looks like.
+        val perTier = minOf(width, ceil(order.size / tiers.toFloat()).toInt().coerceAtLeast(1))
         var next = 0
-        for (slot in 0 until width) {
-            for (row in 0 until tiers) {
+        for (row in 0 until tiers) {
+            for (slot in 0 until perTier) {
                 if (next >= order.size) return out
                 out[row * width + slot] = order[next++]
             }

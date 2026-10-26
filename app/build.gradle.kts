@@ -61,7 +61,16 @@ android {
             if (signingConfigs.findByName("stableUpdate") != null) {
                 signingConfig = signingConfigs.getByName("stableUpdate")
             }
-            isMinifyEnabled = false
+            // On, and kept green by CI rather than by hope. R8 is the one step that can turn a
+            // build that works into an APK that dies on the phone: it renames classes and strips
+            // fields it cannot prove are used, and Filament reaches its own Java classes and
+            // their native pointers by name from C++. app/proguard-rules.pro keeps that bridge
+            // intact, and the build workflow assembles this exact variant on every push and reads
+            // the DEX back to prove the rules held.
+            isMinifyEnabled = true
+            // Unused drawables and strings go too. Assets are untouched by this: the compiled
+            // shaders are read from assets/materials/ by file name.
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

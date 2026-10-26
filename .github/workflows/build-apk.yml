@@ -215,6 +215,91 @@ jobs:
           done
           if [ "$missing" -ne 0 ]; then exit 1; fi
 
+      # R8 is the one step that can turn a working build into an APK that dies on the phone: it
+      # renames classes and strips fields it cannot prove are used, while Filament's C++ side
+      # looks its own Java classes and their native pointers up by name. So the real, minified
+      # release APK is assembled on every push, and the DEX is read back afterwards. A missing
+      # keep rule fails here, in the build, instead of shipping an APK whose shelf dies with
+      # UnsatisfiedLinkError on first frame.
+      - name: Build the minified release APK and check R8 kept Filament intact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOOGLE_BOOKS_API_KEY: ${{ secrets.GOOGLE_BOOKS_API_KEY }}
+          LORE_BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          chmod +x gradlew
+          set +e
+          ./gradlew assembleRelease --no-daemon --stacktrace > gradle-release.log 2>&1
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            {
+              echo "The minified release build failed. R8 — obfuscation, shrinking, or a missing"
+              echo "keep rule — is the usual cause; the debug APK built fine."
+              echo '```'
+              grep -E "^e: |error:|Missing class|What went wrong|Caused by|Exception|R8|Warning" \
+                gradle-release.log | head -n 60
+              echo '```'
+              echo "Last 30 lines:"
+              echo '```'
+              tail -n 30 gradle-release.log
+              echo '```'
+            } > release-failure.md
+            head -c 60000 release-failure.md > release-failure.trimmed.md
+            gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+              -F body=@release-failure.trimmed.md >/dev/null 2>&1 || true
+            echo "::error title=Minified release build failed::See the commit comment. R8 is the usual cause."
+            exit "$code"
+          fi
+
+          apk="$(ls app/build/outputs/apk/release/*.apk | head -n 1)"
+          echo "release APK: $apk ($(du -h "$apk" | cut -f1))"
+          rm -rf dexcheck && mkdir -p dexcheck
+          unzip -o -q "$apk" 'classes*.dex' -d dexcheck
+          dexdump="$ANDROID_HOME/build-tools/34.0.0/dexdump"
+          dump=dexcheck/dump.txt
+          : > "$dump"
+          for dex in dexcheck/classes*.dex; do "$dexdump" -f "$dex" >> "$dump" 2>/dev/null; done
+
+          missing=0
+          for cls in Engine Renderer Scene View Camera LightManager RenderableManager \
+                     VertexBuffer IndexBuffer Material MaterialInstance Texture TextureSampler \
+                     IndirectLight EntityManager Filament Box SwapChain; do
+            if grep -q "Lcom/google/android/filament/$cls;" "$dump"; then
+              echo "OK: com.google.android.filament.$cls kept its name"
+            else
+              echo "::error title=R8 renamed Filament::com.google.android.filament.$cls is missing or obfuscated; the shelf cannot start."
+              missing=$((missing + 1))
+            fi
+          done
+          # The pointer field is the other half of the bridge: the native side reads it by name.
+          if grep -q "mNativeObject" "$dump"; then
+            echo "OK: mNativeObject survives"
+          else
+            echo "::error title=R8 stripped the native pointer::mNativeObject is gone; every engine call would dereference nothing."
+            missing=$((missing + 1))
+          fi
+          if [ "$missing" -ne 0 ]; then
+            {
+              echo "R8 broke the bridge to Filament's C++ in the release APK. Add or fix a keep rule"
+              echo "in app/proguard-rules.pro; -keep class com.google.android.filament.** { *; } is"
+              echo "the one that matters."
+              echo '```'
+              grep -c "Class descriptor" "$dump" 2>/dev/null | sed 's/^/classes in the release DEX: /'
+              echo '```'
+            } > release-keep.md
+            gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+              -F body=@release-keep.md >/dev/null 2>&1 || true
+            exit 1
+          fi
+          echo "::notice title=Release APK::R8 kept Filament intact; $(du -h "$apk" | cut -f1) minified release APK."
+
+      - name: Upload the minified release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lore-release-minified
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: warn
+
       - name: Report a missing material
         if: failure()
         env:

@@ -148,6 +148,11 @@ class CylinderShelfScene(
             val woodMaterial = buildMaterial(engine, ShelfMaterials.WOOD_MATERIAL)
             res.track(woodMaterial)
 
+            // One grain texture for the whole carcass: boards, wall and floor differ only by the
+            // colour and by how far the grain is stretched.
+            val grain = uploadWoodGrain(engine)
+            res.track(grain)
+
             // The carcass wall stands just behind the backs of the books.
             val wallRadius = radius - CylinderMath.BOOK_DEPTH / 2f - 0.008f
 
@@ -166,7 +171,10 @@ class CylinderShelfScene(
                     engine, scene, res, plinthMesh, woodMaterial,
                     center = floatArrayOf(0f, boardY, -axis),
                     halfExtent = floatArrayOf(radius + 0.1f, 0.1f, radius + 0.1f),
-                    color = WOOD_SHELF
+                    color = WOOD_SHELF,
+                    grain = grain,
+                    // Boards: grain running along the shelf, stretched around the ring.
+                    grainRepeat = 3.5f
                 )
             }
 
@@ -191,7 +199,10 @@ class CylinderShelfScene(
                 engine, scene, res, wallMesh, woodMaterial,
                 center = floatArrayOf(0f, (wallTop + wallBottom) / 2f, -axis),
                 halfExtent = floatArrayOf(wallRadius + 0.1f, (wallTop - wallBottom) / 2f, wallRadius + 0.1f),
-                color = WOOD_WALL
+                color = WOOD_WALL,
+                grain = grain,
+                // The wall is tall: stretch the grain vertically so it reads as panelling.
+                grainRepeat = 1.6f
             )
 
             // A floor, so the bottom of the frame is a room rather than a void. Only the strip
@@ -208,7 +219,9 @@ class CylinderShelfScene(
                 engine, scene, res, floorMesh, woodMaterial,
                 center = floatArrayOf(0f, FLOOR_Y, -axis),
                 halfExtent = floatArrayOf(floorRadius, 0.05f, floorRadius),
-                color = WOOD_FLOOR
+                color = WOOD_FLOOR,
+                grain = grain,
+                grainRepeat = 4.0f
             )
 
             // Spine artwork. A single 1x1 texture stands in when there is no atlas, because
@@ -256,12 +269,21 @@ class CylinderShelfScene(
         material: Material,
         center: FloatArray,
         halfExtent: FloatArray,
-        color: FloatArray
+        color: FloatArray,
+        grain: Texture,
+        /** Grain repeat per metre of surface, so boards and wall do not share one giant knot. */
+        grainRepeat: Float = 2.5f
     ) {
         val instance = material.createInstance().also {
             it.setParameter("baseColor", color[0], color[1], color[2])
             it.setParameter("roughness", 0.62f)
             it.setParameter("metallic", 0.0f)
+            it.setParameter("uvScale", grainRepeat, grainRepeat)
+            it.setParameter(
+                "grainMap",
+                grain,
+                TextureSampler(TextureSampler.MagFilter.LINEAR, TextureSampler.WrapMode.REPEAT)
+            )
         }
         res.track(instance)
         val vb = res.track(vertexBuffer(engine, mesh))
@@ -299,6 +321,33 @@ class CylinderShelfScene(
             .format(Texture.InternalFormat.SRGB8_A8)
             .build(engine)
 
+        val bytes = ByteBuffer.allocateDirect(source.width * source.height * 4)
+            .order(ByteOrder.nativeOrder())
+        source.copyPixelsToBuffer(bytes)
+        bytes.flip()
+        pendingBuffers.add(bytes)
+        texture.setImage(
+            engine, 0,
+            Texture.PixelBufferDescriptor(bytes, Texture.Format.RGBA, Texture.Type.UBYTE)
+        )
+        return texture
+    }
+
+    /**
+     * Uploads the painted grain as a repeating texture.
+     *
+     * REPEAT rather than CLAMP_TO_EDGE: a board is metres long and the texture is not, so the only
+     * way to avoid one enormous knot on every shelf is to tile it.
+     */
+    private fun uploadWoodGrain(engine: Engine): Texture {
+        val source = ShelfWood.bitmap()
+        val texture = Texture.Builder()
+            .width(source.width)
+            .height(source.height)
+            .levels(1)
+            .sampler(Texture.Sampler.SAMPLER_2D)
+            .format(Texture.InternalFormat.SRGB8_A8)
+            .build(engine)
         val bytes = ByteBuffer.allocateDirect(source.width * source.height * 4)
             .order(ByteOrder.nativeOrder())
         source.copyPixelsToBuffer(bytes)
@@ -456,6 +505,9 @@ class CylinderShelfScene(
      *
      * Called from the render thread on every surface change, so it must stay trivial.
      */
+    /** The front rank of books stands this far in front of the camera. */
+    override fun cameraDistance(): Float = (axis - radius).coerceAtLeast(0.2f)
+
     override fun onResize(width: Int, height: Int) {
         if (width <= 0 || height <= 0) return
         halfFovH = CylinderMath.halfFovH(

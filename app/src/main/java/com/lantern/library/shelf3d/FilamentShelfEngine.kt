@@ -57,6 +57,15 @@ class FilamentShelfEngine(
         fun onResize(width: Int, height: Int)
 
         /**
+         * How far in front of the camera the shelf's front rank of books stands, in metres.
+         *
+         * The camera is tilted by a fixed angle, so it needs to know how far away the thing it is
+         * looking at is: a fixed look-at point would put the tilt in a different place for every
+         * library size.
+         */
+        fun cameraDistance(): Float = 1f
+
+        /**
          * Called before each frame. Returns true if the scene is still animating, which keeps
          * the loop alive; false lets the loop stop until something asks for a frame again.
          */
@@ -202,6 +211,20 @@ class FilamentShelfEngine(
             0.02,
             30.0,
             Camera.Fov.VERTICAL
+        )
+        // Look very slightly down and across at the case.
+        //
+        // Dead-on and centred, a shelf of boxes has no depth at all: every book shows the same
+        // face, all the boards are edge-on, and the picture is indistinguishable from a flat
+        // drawing. A few degrees of pitch puts the tops of the boards and the tops of the books
+        // in view, which is the cue that says "this is a solid object". A degree or two of yaw
+        // does the same for the sides. Both are proportional to the distance, so the angle is
+        // the same for a small library on a small drum and a large one on a wide drum.
+        val distance = content.cameraDistance().coerceAtLeast(0.2f)
+        camera?.lookAt(
+            (distance * 0.035).toDouble(), (distance * 0.10).toDouble(), 0.0,
+            0.0, -(distance * 0.02).toDouble(), -distance.toDouble(),
+            0.0, 1.0, 0.0
         )
         v.viewport = Viewport(0, 0, width, height)
     }

@@ -1,20 +1,28 @@
-// The woodwork of the case: colour and roughness only, no texture.
+// The woodwork of the case: painted grain, tinted per part by the instance's base colour.
+//
+// One texture serves the boards, the wall and the floor: they differ only by baseColor and by how
+// far the grain is stretched, which is a per-instance uniform.
 material {
     name : wood_pbr,
     shadingModel : lit,
+    requires : [ uv0 ],
     culling : none,
     flipUV : false,
     parameters : [
         { type : float3, name : baseColor },
         { type : float, name : roughness },
-        { type : float, name : metallic }
+        { type : float, name : metallic },
+        { type : float2, name : uvScale },
+        { type : sampler2d, name : grainMap }
     ]
 }
 
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        material.baseColor.rgb = materialParams.baseColor;
+        vec2 uv = getUV0() * materialParams.uvScale;
+        vec4 grain = texture(materialParams.grainMap, uv);
+        material.baseColor = vec4(materialParams.baseColor, 1.0) * grain;
         material.roughness = materialParams.roughness;
         material.metallic = materialParams.metallic;
     }

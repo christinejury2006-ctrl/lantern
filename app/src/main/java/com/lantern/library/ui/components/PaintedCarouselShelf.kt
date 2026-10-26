@@ -1,7 +1,7 @@
 package com.lantern.library.ui.components
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.splineBasedDecay
+import androidx.compose.animation.core.exponentialDecay
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -24,8 +24,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.imageResource
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import com.lantern.library.R
@@ -80,13 +79,20 @@ fun PaintedCarouselShelf(
     modifier: Modifier = Modifier
 ) {
     val scope = rememberCoroutineScope()
-    val art = imageResource(R.drawable.shelf_art).asImageBitmap()
+    val context = LocalContext.current
+    // Decoded straight from resources rather than through a painter: this is a bitmap to draw,
+    // not something to compose.
+    val art = remember {
+        android.graphics.BitmapFactory
+            .decodeResource(context.resources, R.drawable.shelf_art)
+            .asImageBitmap()
+    }
     val sheet = remember(atlas) { atlas?.bitmap?.asImageBitmap() }
 
     // Where the case has been turned to, in pixels of shelf.
     val turn = remember { Animatable(0f) }
-    val density = LocalDensity.current
-    val decay = remember(density) { splineBasedDecay<Float>(density) }
+    // A throw slows in proportion to its speed: the same curve a heavy shelf would follow.
+    val decay = remember { exponentialDecay<Float>(frictionMultiplier = 1.4f) }
 
     // The case's size on screen, needed by the drag and tap handlers as well as the drawing.
     var caseSize by remember { mutableStateOf(Size.Zero) }

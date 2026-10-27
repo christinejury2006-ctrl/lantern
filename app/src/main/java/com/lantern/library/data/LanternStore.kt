@@ -1180,6 +1180,15 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    suspend fun ensureBookAvailable(bookId: String): LibraryBook? {
+        val current = book(bookId) ?: return null
+        val ready = withContext(Dispatchers.IO) { ensureCached(current) }
+        if (ready == null) withContext(Dispatchers.Main) {
+            toast(if (current.driveFileId.isNullOrBlank()) "This book has no cloud backup yet." else "Could not download this book. Check your connection and Drive access.")
+        }
+        return ready
+    }
+
     private suspend fun ensureCached(book: LibraryBook): LibraryBook? {
         if (book.origin == BookOrigin.BUNDLED || book.format == BookFormat.TEXT) return book
         val local = book.filePath?.let { File(it) }

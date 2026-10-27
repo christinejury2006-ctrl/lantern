@@ -1298,7 +1298,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 book.filePath?.let { path -> File(path).let { it.exists() && it.length() > 0L } } == true
         }
         if (candidates.isEmpty()) return
-        val uploaded = withDrive { token, owner ->
+        val uploadOutcome = withDriveOutcome { token, owner ->
             when (val folder = DriveLibrary.ensureFolder(token, owner)) {
                 is DriveOutcome.Ok -> {
                     val results = ArrayList<Pair<String, String>>()
@@ -1307,7 +1307,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                         if (!file.exists() || file.length() <= 0L) continue
                         when (val result = DriveLibrary.upload(token, folder.value, book, file)) {
                             is DriveOutcome.Ok -> results += book.id to result.value
-                            DriveOutcome.Unauthorized -> return@withDrive DriveOutcome.Unauthorized
+                            DriveOutcome.Unauthorized -> return@withDriveOutcome DriveOutcome.Unauthorized
                             DriveOutcome.Failed -> Unit
                         }
                     }
@@ -1317,6 +1317,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 DriveOutcome.Failed -> DriveOutcome.Failed
             }
         } ?: return
+        val uploaded = when (uploadOutcome) {
+            is DriveOutcome.Ok -> uploadOutcome.value
+            DriveOutcome.Unauthorized, DriveOutcome.Failed -> return
+        }
         if (uploaded.isEmpty()) return
         withContext(Dispatchers.Main) {
             uploaded.forEach { (bookId, fileId) ->

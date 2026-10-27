@@ -37,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -53,6 +54,8 @@ import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.InkSoft
 import com.lantern.library.ui.theme.NightText
 import com.lantern.library.ui.theme.Playfair
+import org.json.JSONArray
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -71,14 +74,33 @@ private fun CatalogBrowser(title: String, subtitle: String, theme: ReaderTheme, 
     val dark = theme == ReaderTheme.DARK
     val ink = if (dark) NightText else Ink
     val mute = if (dark) Color(0xFFD0D6DE) else InkSoft
+    val context = LocalContext.current
+    val searchPrefs = remember { context.getSharedPreferences("lore_search", android.content.Context.MODE_PRIVATE) }
+    val trending = remember {
+        runCatching {
+            context.assets.open("hot_search.json").bufferedReader().use { reader ->
+                val arr = JSONArray(reader.readText())
+                (0 until arr.length()).map { arr.optString(it).trim() }.filter { it.isNotBlank() }
+            }
+        }.getOrDefault(listOf("billionaire", "werewolf", "romance", "fantasy", "Rich Dad Poor Dad", "Married to the Devil's Son"))
+    }
+    var history by remember {
+        mutableStateOf(searchPrefs.getString("history", "").orEmpty().split("\\n").filter { it.isNotBlank() }.take(8))
+    }
     var query by remember { mutableStateOf("") }
     var topic by remember { mutableStateOf(initialTopic) }
     var results by remember { mutableStateOf<List<CatalogBook>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     LaunchedEffect(query, topic) {
+        delay(300)
         loading = true
         results = withContext(Dispatchers.IO) { runCatching { Gutendex.search(query, topic) }.getOrDefault(emptyList()) }
         loading = false
+        val clean = query.trim()
+        if (clean.length >= 2 && results.isNotEmpty()) {
+            history = (listOf(clean) + history.filterNot { it.equals(clean, ignoreCase = true) }).take(8)
+            searchPrefs.edit().putString("history", history.joinToString("\\n")).apply()
+        }
     }
     AuroraBackdrop(theme) {
         LazyVerticalGrid(columns = GridCells.Fixed(2), modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp, 18.dp, 18.dp, 96.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -94,6 +116,36 @@ private fun CatalogBrowser(title: String, subtitle: String, theme: ReaderTheme, 
                                 if (query.isEmpty()) Text("Search titles…", color = mute, fontSize = 15.sp)
                                 inner()
                             })
+                        }
+                    }
+                    Spacer(Modifier.height(14.dp))
+                    Text("TRENDING SEARCHES", color = mute, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(7.dp))
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        trending.forEach { term ->
+                            Box(Modifier.clip(RoundedCornerShape(18.dp)).background(Color(0xCCFFFFFF)).clickable {
+                                query = term
+                                topic = null
+                            }.padding(horizontal = 13.dp, vertical = 9.dp), contentAlignment = Alignment.Center) {
+                                Text(term, color = ink, fontSize = 12.sp, maxLines = 1, softWrap = false)
+                            }
+                        }
+                    }
+                    if (history.isNotEmpty()) {
+                        Spacer(Modifier.height(12.dp))
+                        Text("HISTORY", color = mute, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.height(7.dp))
+                        history.forEach { term ->
+                            Row(
+                                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable {
+                                    query = term
+                                    topic = null
+                                }.padding(vertical = 9.dp, horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Filled.Search, null, tint = mute, modifier = Modifier.size(16.dp))
+                                Text(term, color = ink, fontSize = 13.sp, modifier = Modifier.padding(start = 10.dp))
+                            }
                         }
                     }
                     Spacer(Modifier.height(14.dp))

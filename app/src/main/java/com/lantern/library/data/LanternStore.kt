@@ -987,13 +987,13 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
 
     fun openForReading(book: LibraryBook, then: (LibraryBook?) -> Unit) {
         viewModelScope.launch {
-            if (!book.localFileAvailable) {
-                toast("Import this book on this phone to read it.")
-                then(null)
-                return@launch
-            }
             val ready = withContext(Dispatchers.IO) { ensureCached(book) }
-            if (ready == null) toast("Could not open this book")
+            if (ready == null) {
+                toast(
+                    if (book.driveFileId.isNullOrBlank()) "This book has no cloud backup yet."
+                    else "Could not restore this book. Check your connection and Drive access."
+                )
+            }
             then(ready)
         }
     }

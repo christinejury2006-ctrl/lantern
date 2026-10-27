@@ -234,7 +234,8 @@ internal fun LanternRoot(store: LanternStore) {
                         book, store.readingPrefs, { store.setPrefs(it) }, back,
                         { p, n -> store.markRead(book.id, p, n) }, { store.addBookmark(book.id, it) },
                         store.readerAppearance, { store.saveReaderAppearance(it) },
-                        store.bookmarksFor(book.id)
+                        store.bookmarksFor(book.id),
+                        onEnsureAvailable = { store.ensureBookAvailable(book.id) }
                     )
                 }
             }

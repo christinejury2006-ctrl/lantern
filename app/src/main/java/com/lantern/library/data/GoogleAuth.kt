@@ -17,7 +17,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 object GoogleAuth {
-    const val DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+    const val DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.appdata"
 
     private fun options(): GoogleSignInOptions =
         GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)

@@ -48,7 +48,8 @@ import com.lantern.library.data.Gutendex
 import com.lantern.library.data.GoogleBooks
 import com.lantern.library.data.DiscoveryBook
 import com.lantern.library.data.ReaderTheme
-import com.lantern.library.ui.components.RoomBackdrop
+import com.lantern.library.ui.components.NookBackdrop
+import com.lantern.library.ui.theme.nookPalette
 import com.lantern.library.ui.components.CoverFace
 import com.lantern.library.ui.components.GlassCard
 import com.lantern.library.ui.theme.Coral
@@ -108,7 +109,7 @@ private fun DiscoveryBrowser(theme: ReaderTheme, onOpen: (DiscoveryBook) -> Unit
             prefs.edit().putString("history", history.joinToString("\n")).apply()
         }
     }
-    AuroraBackdrop(theme) {
+    NookBackdrop(nookPalette(theme)) {
         LazyVerticalGrid(columns = GridCells.Fixed(2), modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(18.dp, 18.dp, 18.dp, 96.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -208,7 +209,7 @@ private fun CatalogBrowser(title: String, subtitle: String, theme: ReaderTheme, 
             searchPrefs.edit().putString("history", history.joinToString("\n")).apply()
         }
     }
-    RoomBackdrop(dark) {
+    NookBackdrop(nookPalette(dark)) {
         LazyVerticalGrid(columns = GridCells.Fixed(2), modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp, 18.dp, 18.dp, 96.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item(span = { GridItemSpan(2) }) {
                 Column {

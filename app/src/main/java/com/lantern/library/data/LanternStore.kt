@@ -1020,6 +1020,25 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) { syncFirebaseAccount(acc, announce = true) }
     }
 
+    /**
+     * Syncs now, on the reader's word.
+     *
+     * Three separate things happen and they are reported separately: files are uploaded, the
+     * account snapshot is merged with the cloud copy, and the Firestore mirror is refreshed.
+     * The toast only claims success once [runAccountSync] has actually come back with a merge.
+     */
+    fun syncNow() {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!account.signedIn) {
+                withContext(Dispatchers.Main) { toast("Sign in to sync your library.") }
+                return@launch
+            }
+            connectDrive(quiet = true, pullAccount = false)
+            runAccountSync(announce = true)
+            syncFirebaseAccount(null, announce = false)
+        }
+    }
+
     fun requestDriveConnect() {
         driveConsentPrompted = false
         viewModelScope.launch(Dispatchers.IO) { connectDrive(quiet = false, pullAccount = true) }

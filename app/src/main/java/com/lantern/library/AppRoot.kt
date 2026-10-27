@@ -50,12 +50,16 @@ import com.lantern.library.data.LibraryAppearance
 import com.lantern.library.data.ReaderTheme
 import com.lantern.library.data.Recommendations
 import com.lantern.library.ui.components.FadeToast
+import com.lantern.library.ui.components.NookBottomBar
+import com.lantern.library.ui.components.NookTabs
+import com.lantern.library.ui.theme.nookPalette
 import com.lantern.library.ui.screens.AppearanceEditor
 import com.lantern.library.ui.screens.BookDetailsOverlay
 import com.lantern.library.ui.screens.InterestOnboardingScreen
 import com.lantern.library.ui.screens.CylinderShelfScreen
 import com.lantern.library.ui.screens.LibraryScreen
 import com.lantern.library.ui.screens.ProfileScreen
+import com.lantern.library.ui.screens.ReadingNookScreen
 import com.lantern.library.ui.screens.ReaderScreen
 import com.lantern.library.ui.screens.SearchScreen
 import com.lantern.library.ui.screens.StudioScreen
@@ -77,6 +81,7 @@ internal fun strongGutendexMatch(book: DiscoveryBook, hits: List<CatalogBook>): 
 }
 
 private sealed class Route {
+    object Home : Route()
     object Library : Route()
     object Studio : Route()
     object Search : Route()
@@ -86,7 +91,7 @@ private sealed class Route {
 
 @Composable
 internal fun LanternRoot(store: LanternStore) {
-    var tab by remember { mutableStateOf<Route>(Route.Library) }
+    var tab by remember { mutableStateOf<Route>(Route.Home) }
     var shelf3D by remember { mutableStateOf(false) }
     var details by remember { mutableStateOf<DiscoveryBook?>(null) }
     var libraryAppearOpen by remember { mutableStateOf(false) }
@@ -176,6 +181,26 @@ internal fun LanternRoot(store: LanternStore) {
                     onCancel = {}
                 )
             } else when (val r = tab) {
+                Route.Home -> ReadingNookScreen(
+                    books = store.books,
+                    picks = store.forYou,
+                    account = store.account,
+                    theme = theme,
+                    picksBusy = store.forYouBusy,
+                    picksFailed = store.forYouFailed,
+                    onOpenBook = { book ->
+                        store.openForReading(book) { ready ->
+                            if (ready != null) tab = Route.Reader(ready.id)
+                        }
+                    },
+                    onOpenPick = { pick -> getDiscovery(pick) },
+                    onSearch = { tab = Route.Search },
+                    onShelf = { shelf3D = true },
+                    onStudio = { tab = Route.Studio },
+                    onRefreshPicks = { store.refreshForYou() },
+                    onNotifications = { tab = Route.Profile },
+                    onSeeAll = { tab = Route.Library }
+                )
                 Route.Library -> LibraryScreen(
                     books = store.books,
                     onOpen = { book ->
@@ -234,7 +259,8 @@ internal fun LanternRoot(store: LanternStore) {
                     { store.requestDriveConnect() },
                     { store.openInterestEditor() },
                     { libraryAppearOpen = true },
-                    { shelf3D = true }
+                    { shelf3D = true },
+                    { store.syncNow() }
                 )
                 is Route.Reader -> {
                     val book = store.book(r.id)
@@ -291,27 +317,28 @@ internal fun LanternRoot(store: LanternStore) {
 
 @Composable
 private fun BottomBar(theme: ReaderTheme, current: Route, onTab: (Route) -> Unit, modifier: Modifier = Modifier) {
-    val dark = theme == ReaderTheme.DARK
-    val ink = if (dark) NightText else Ink
-    Row(
-        modifier.fillMaxWidth().navigationBarsPadding().padding(12.dp).clip(RoundedCornerShape(24.dp))
-            .background(if (dark) Color(0xF21A1109) else Color(0xF2F1E3CC))
-            .border(1.dp, Color(0x66C8A96B), RoundedCornerShape(24.dp))
-            .padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly
-    ) {
-        TabIcon(Icons.Filled.Home, "Library", current is Route.Library, ink) { onTab(Route.Library) }
-        TabIcon(Icons.Filled.Create, "Studio", current is Route.Studio, ink) { onTab(Route.Studio) }
-        TabIcon(Icons.Filled.Search, "Explore", current is Route.Search, ink) { onTab(Route.Search) }
-        TabIcon(Icons.Filled.Person, "You", current is Route.Profile, ink) { onTab(Route.Profile) }
+    // Four tabs, as the nook has: the room, discovery, the physical case, and the reader
+    // themselves. Studio is not a tab — it is a tool reached from the nook's header, so the bar
+    // stays a description of where you are rather than a menu of everything.
+    val selected = when (current) {
+        is Route.Home, is Route.Studio, is Route.Reader -> "home"
+        is Route.Search -> "explore"
+        is Route.Library -> "library"
+        is Route.Profile -> "you"
     }
+    NookBottomBar(
+        palette = nookPalette(theme),
+        tabs = NookTabs,
+        selected = selected,
+        onSelect = { key ->
+            when (key) {
+                "home" -> onTab(Route.Home)
+                "explore" -> onTab(Route.Search)
+                "library" -> onTab(Route.Library)
+                else -> onTab(Route.Profile)
+            }
+        },
+        modifier = modifier
+    )
 }
 
-@Composable
-private fun TabIcon(icon: ImageVector, label: String, on: Boolean, ink: Color, click: () -> Unit) {
-    val tint = if (on) Brass else (if (ink.luminance() > 0.5f) Color(0xFF5E4A36) else ink.copy(0.55f))
-    Column(Modifier.clickable(onClick = click).padding(horizontal = 10.dp, vertical = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Icon(icon, label, tint = tint, modifier = Modifier.size(22.dp))
-        Text(label, color = tint, fontSize = 10.sp)
-    }
-}

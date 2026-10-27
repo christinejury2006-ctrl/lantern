@@ -1,3 +1,0 @@
-Temporary GitHub write-access test.
-Created by ChatGPT on 2026-10-27 to verify repository write permissions.
-This file is intended to be deleted after verification.

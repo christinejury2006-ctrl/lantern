@@ -208,7 +208,7 @@ internal fun LanternRoot(store: LanternStore) {
                     onMoveCollect = { id, d -> store.webMoveCollect(id, d) },
                     onFetchCollection = { store.webFetchCollection() }
                 )
-                Route.Search -> SearchScreen(theme) { remote -> store.download(remote) { book -> store.openForReading(book) { ready -> if (ready != null) tab = Route.Reader(ready.id) } } }
+                Route.Search -> SearchScreen(theme) { remote -> getDiscovery(remote) }
                 Route.Profile -> if (libraryAppearOpen) {
                     AppearanceEditor(
                         title = "Library Appearance",

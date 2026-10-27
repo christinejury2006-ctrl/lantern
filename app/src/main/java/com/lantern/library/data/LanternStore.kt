@@ -1273,10 +1273,55 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         )
     }
 
+
+    /**
+     * Back up local imported/downloaded EPUBs and PDFs before syncing their metadata.
+     * A book only receives a cloud file ID after Drive confirms the upload succeeded.
+     * Existing IDs are retained and local files are never removed by this operation.
+     */
+    private suspend fun uploadAvailableBooks() {
+        val candidates = withContext(Dispatchers.Main) {
+            synchronized(libraryLock) { books.toList() }
+        }.filter { book ->
+            book.origin != BookOrigin.BUNDLED &&
+                book.format != BookFormat.TEXT &&
+                book.driveFileId.isNullOrBlank() &&
+                book.filePath?.let { path -> File(path).let { it.exists() && it.length() > 0L } } == true
+        }
+        if (candidates.isEmpty()) return
+        val uploaded = withDrive { token, owner ->
+            when (val folder = DriveLibrary.ensureFolder(token, owner)) {
+                is DriveOutcome.Ok -> {
+                    val results = ArrayList<Pair<String, String>>()
+                    for (book in candidates) {
+                        val file = book.filePath?.let(::File) ?: continue
+                        if (!file.exists() || file.length() <= 0L) continue
+                        when (val result = DriveLibrary.upload(token, folder.value, book, file)) {
+                            is DriveOutcome.Ok -> results += book.id to result.value
+                            DriveOutcome.Unauthorized, DriveOutcome.Failed -> Unit
+                        }
+                    }
+                    results
+                }
+                DriveOutcome.Unauthorized, DriveOutcome.Failed -> emptyList()
+            }
+        } ?: return
+        if (uploaded.isEmpty()) return
+        withContext(Dispatchers.Main) {
+            uploaded.forEach { (bookId, fileId) ->
+                val latest = book(bookId) ?: return@forEach
+                if (latest.driveFileId.isNullOrBlank()) {
+                    upsert(latest.copy(driveFileId = fileId, pendingUpload = false))
+                }
+            }
+        }
+    }
+
     private suspend fun runAccountSync(announce: Boolean) {
         if (!account.signedIn || account.provider != "google") return
         if (GoogleAuth.accountId(getApplication<Application>()).isNullOrBlank()) return
         if (!networkReady()) return
+        uploadAvailableBooks()
         val local = withContext(Dispatchers.Main) { currentSnapshot() }
         val cloudOutcome = withDriveOutcome { token, owner ->
             when (val folder = DriveLibrary.ensureFolder(token, owner)) {

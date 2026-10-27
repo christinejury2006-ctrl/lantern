@@ -1307,12 +1307,14 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                         if (!file.exists() || file.length() <= 0L) continue
                         when (val result = DriveLibrary.upload(token, folder.value, book, file)) {
                             is DriveOutcome.Ok -> results += book.id to result.value
-                            DriveOutcome.Unauthorized, DriveOutcome.Failed -> Unit
+                            DriveOutcome.Unauthorized -> return@withDrive DriveOutcome.Unauthorized
+                            DriveOutcome.Failed -> Unit
                         }
                     }
-                    results
+                    DriveOutcome.Ok(results)
                 }
-                DriveOutcome.Unauthorized, DriveOutcome.Failed -> emptyList()
+                DriveOutcome.Unauthorized -> DriveOutcome.Unauthorized
+                DriveOutcome.Failed -> DriveOutcome.Failed
             }
         } ?: return
         if (uploaded.isEmpty()) return

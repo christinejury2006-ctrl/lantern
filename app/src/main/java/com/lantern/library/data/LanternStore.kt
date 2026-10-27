@@ -1010,6 +1010,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             return
         }
         viewModelScope.launch(Dispatchers.IO) { connectDrive(quiet = false, pullAccount = true) }
+        viewModelScope.launch(Dispatchers.IO) { syncFirebaseAccount(acc, announce = true) }
     }
 
     fun requestDriveConnect() {
@@ -1033,6 +1034,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             try {
                 DriveLibrary.clearCachedFolder()
                 GoogleAuth.signOutAndClearToken(activity, getApplication())
+                FirestoreAccountRepository.signOut()
             } finally {
                 googleAccountKey = null
                 withContext(Dispatchers.Main) {
@@ -1197,6 +1199,38 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         snapshotAt = System.currentTimeMillis()
         prefs.edit().putLong("snapshotAt", snapshotAt).putBoolean("sync_dirty", true).apply()
         scheduleSync()
+        scheduleFirebaseSync()
+    }
+
+    private fun scheduleFirebaseSync() {
+        val gen = ++firebaseSyncGen
+        viewModelScope.launch(Dispatchers.IO) {
+            delay(8_000)
+            if (gen != firebaseSyncGen || !FirestoreAccountRepository.isSignedIn()) return@launch
+            syncFirebaseAccount(null, announce = false)
+        }
+    }
+
+    private var firebaseSyncGen = 0
+
+    private suspend fun syncFirebaseAccount(account: GoogleSignInAccount?, announce: Boolean) {
+        try {
+            if (account != null) FirestoreAccountRepository.signIn(account)
+            if (!FirestoreAccountRepository.isSignedIn()) return
+            val local = withContext(Dispatchers.Main) { currentSnapshot() }
+            val cloud = AccountSync.fromJson(FirestoreAccountRepository.readSnapshot())
+            val merged = AccountSync.merge(local, cloud)
+            withContext(Dispatchers.Main) { applySnapshot(merged) }
+            FirestoreAccountRepository.writeSnapshot(AccountSync.toJson(merged))
+            if (announce) withContext(Dispatchers.Main) { toast("Firebase library sync complete") }
+        } catch (e: Exception) {
+            if (announce) withContext(Dispatchers.Main) {
+                val message = e.message.orEmpty()
+                toast(if (message.contains("OAuth client ID") || message.contains("ID token"))
+                    "Firebase needs its Web OAuth client ID. Google Drive sync remains available."
+                else "Firebase sync unavailable. Your local library and Drive sync are preserved.")
+            }
+        }
     }
 
     private fun scheduleSync() {

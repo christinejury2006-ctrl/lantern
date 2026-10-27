@@ -92,6 +92,9 @@ private sealed class Route {
 @Composable
 internal fun LanternRoot(store: LanternStore) {
     var tab by remember { mutableStateOf<Route>(Route.Home) }
+    // Where closing a book goes back to. A book opened from the nook belongs to the nook, not to
+    // the library tab, so the reader returns to wherever it was opened from.
+    var readerBack by remember { mutableStateOf<Route>(Route.Home) }
     var shelf3D by remember { mutableStateOf(false) }
     var details by remember { mutableStateOf<DiscoveryBook?>(null) }
     var libraryAppearOpen by remember { mutableStateOf(false) }
@@ -146,6 +149,7 @@ internal fun LanternRoot(store: LanternStore) {
         val owned = store.books.firstOrNull { Recommendations.inLibrary(book, listOf(it)) }
         if (owned != null) {
             details = null
+            readerBack = tab
             store.openForReading(owned) { ready -> if (ready != null) tab = Route.Reader(ready.id) }
             return
         }
@@ -157,6 +161,7 @@ internal fun LanternRoot(store: LanternStore) {
                 val hit = strongGutendexMatch(book, hits)
                 if (hit != null) {
                     details = null
+                    readerBack = tab
                     store.download(hit) { opened -> tab = Route.Reader(opened.id) }
                 } else if (!openDiscoveryLink(book)) {
                     store.toast("No free edition found")
@@ -189,6 +194,7 @@ internal fun LanternRoot(store: LanternStore) {
                     picksBusy = store.forYouBusy,
                     picksFailed = store.forYouFailed,
                     onOpenBook = { book ->
+                        readerBack = Route.Home
                         store.openForReading(book) { ready ->
                             if (ready != null) tab = Route.Reader(ready.id)
                         }
@@ -204,6 +210,7 @@ internal fun LanternRoot(store: LanternStore) {
                 Route.Library -> LibraryScreen(
                     books = store.books,
                     onOpen = { book ->
+                        readerBack = Route.Library
                         store.openForReading(book) { ready ->
                             if (ready != null) tab = Route.Reader(ready.id)
                         }
@@ -217,8 +224,9 @@ internal fun LanternRoot(store: LanternStore) {
                     web = store.web,
                     studioBooks = store.books.filter { it.id.startsWith("web_") },
                     onOpenBook = { made ->
+                        readerBack = Route.Studio
                         store.openForReading(made) { ready ->
-                            if (ready != null) tab = Route.Reader(ready.id, fromStudio = true)
+                            if (ready != null) tab = Route.Reader(ready.id)
                         }
                     },
                     onAddFile = { addFile() },
@@ -235,7 +243,10 @@ internal fun LanternRoot(store: LanternStore) {
                     onSaveMeta = { t, a, s, img -> store.webSaveMeta(t, a, s, img) },
                     onSelectCover = { store.webSelectCover(it) },
                     onCompile = { store.webCompile() },
-                    onPreview = { store.webOpenPreview { ready -> if (ready != null) tab = Route.Reader(ready.id, fromStudio = true) } },
+                    onPreview = {
+                        readerBack = Route.Studio
+                        store.webOpenPreview { ready -> if (ready != null) tab = Route.Reader(ready.id) }
+                    },
                     onAddLibrary = { store.webAddToLibrary() },
                     onToggleCollect = { store.webToggleCollect(it) },
                     onSelectCollectAll = { store.webSelectCollectAll(it) },
@@ -264,7 +275,7 @@ internal fun LanternRoot(store: LanternStore) {
                 )
                 is Route.Reader -> {
                     val book = store.book(r.id)
-                    val back = { tab = if (r.fromStudio) Route.Studio else Route.Library }
+                    val back = { tab = if (r.fromStudio) Route.Studio else readerBack }
                     if (book == null) back()
                     else ReaderScreen(
                         book, store.readingPrefs, { store.setPrefs(it) }, back,
@@ -280,6 +291,7 @@ internal fun LanternRoot(store: LanternStore) {
                     books = store.books,
                     onOpenBook = { book ->
                         shelf3D = false
+                        readerBack = Route.Home
                         store.openForReading(book) { ready ->
                             if (ready != null) tab = Route.Reader(ready.id)
                         }

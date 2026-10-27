@@ -98,6 +98,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -405,8 +406,8 @@ fun ReaderScreen(
 
     val accent = LoreMint
     val chromeOp = appearance.look.chromeOpacity
-    val chromeBar = readerChromeBar(chromeOp)
-    val chromePanel = readerChromePanel(chromeOp)
+    val chromeBar = readerChromeBar(chromeOp, dark)
+    val chromePanel = readerChromePanel(chromeOp, dark)
     val pageTap = Modifier.chromeTap(enabled = !menuOpen, onTap = { toggleChrome() })
 
     AppearanceLayer(appearance.look, dark, contentWash = false) {
@@ -530,6 +531,7 @@ fun ReaderScreen(
                 charging = batteryCharging,
                 ink = ink,
                 chrome = chromeOp,
+                dark = dark,
                 modifier = Modifier.clickable { toggleChrome() }
             )
             if (chrome) {
@@ -544,8 +546,12 @@ fun ReaderScreen(
                         }.padding(8.dp)
                     )
                     Text(
-                        "Book Shelf", Modifier.weight(1f), color = ink,
-                        fontFamily = Playfair, fontSize = 20.sp, textAlign = TextAlign.Center
+                        book.title.ifBlank { "Reading" },
+                        Modifier.weight(1f), color = ink,
+                        fontFamily = Playfair, fontSize = 17.sp,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Spacer(Modifier.width(40.dp))
                 }
@@ -852,11 +858,19 @@ private fun Modifier.chromeTap(enabled: Boolean, onTap: () -> Unit): Modifier {
 }
 
 @Composable
-private fun GlassStatus(time: String, percent: Int, charging: Boolean, ink: Color, chrome: Float, modifier: Modifier) {
+private fun GlassStatus(
+    time: String,
+    percent: Int,
+    charging: Boolean,
+    ink: Color,
+    chrome: Float,
+    dark: Boolean,
+    modifier: Modifier
+) {
     Row(
         modifier
             .clip(RoundedCornerShape(20.dp))
-            .background(readerChromeBar(chrome))
+            .background(readerChromeBar(chrome, dark))
             .border(1.dp, Color(0x66FFFFFF), RoundedCornerShape(20.dp))
             .padding(horizontal = 12.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,

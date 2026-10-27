@@ -116,7 +116,10 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.material:material-icons-core")
+    // The full icon set: the nook uses Explore, LibraryBooks and AutoAwesome, none of which are
+    // in icons-core. R8 strips the two thousand icons that are not referenced, so the release
+    // cost is measured in kilobytes, not megabytes.
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.activity:activity-compose:1.8.2")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")

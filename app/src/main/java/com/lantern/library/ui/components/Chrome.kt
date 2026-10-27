@@ -180,14 +180,25 @@ fun LorePillButton(label: String, onClick: () -> Unit) {
 }
 
 @Composable
-fun readerChromeBar(opacity: Float): Color {
+/**
+ * The reader's chrome, in the page's own light.
+ *
+ * These used to be fixed dark greys, which is why a cream page in light mode had a black bar
+ * sitting on it like something from another app. A bar over paper should be warm and nearly
+ * opaque; a bar over a night page should be the nook's navy glass. [opacity] is the reader's own
+ * chromeOpacity setting, so the bars still fade towards the page when the reader wants the text
+ * to have the screen to itself.
+ */
+fun readerChromeBar(opacity: Float, dark: Boolean = true): Color {
     val t = if (opacity.isFinite()) opacity.coerceIn(0f, 1f) else 0.5f
-    return Color(0xFF1C1C24).copy(alpha = 0.34f + 0.61f * t)
+    val base = if (dark) Color(0xFF0E1424) else Color(0xFFF7EFE6)
+    return base.copy(alpha = 0.40f + 0.58f * t)
 }
 
-fun readerChromePanel(opacity: Float): Color {
+fun readerChromePanel(opacity: Float, dark: Boolean = true): Color {
     val t = if (opacity.isFinite()) opacity.coerceIn(0f, 1f) else 0.5f
-    return Color(0xFF2B2B2B).copy(alpha = 0.40f + 0.55f * t)
+    val base = if (dark) Color(0xFF141C30) else Color(0xFFFFFAF4)
+    return base.copy(alpha = 0.55f + 0.44f * t)
 }
 
 @Composable

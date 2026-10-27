@@ -85,7 +85,7 @@ private fun CatalogBrowser(title: String, subtitle: String, theme: ReaderTheme, 
         }.getOrDefault(listOf("billionaire", "werewolf", "romance", "fantasy", "Rich Dad Poor Dad", "Married to the Devil's Son"))
     }
     var history by remember {
-        mutableStateOf(searchPrefs.getString("history", "").orEmpty().split("\\n").filter { it.isNotBlank() }.take(8))
+        mutableStateOf(searchPrefs.getString("history", "").orEmpty().split("\n").filter { it.isNotBlank() }.take(8))
     }
     var query by remember { mutableStateOf("") }
     var topic by remember { mutableStateOf(initialTopic) }
@@ -99,7 +99,7 @@ private fun CatalogBrowser(title: String, subtitle: String, theme: ReaderTheme, 
         val clean = query.trim()
         if (clean.length >= 2 && results.isNotEmpty()) {
             history = (listOf(clean) + history.filterNot { it.equals(clean, ignoreCase = true) }).take(8)
-            searchPrefs.edit().putString("history", history.joinToString("\\n")).apply()
+            searchPrefs.edit().putString("history", history.joinToString("\n")).apply()
         }
     }
     AuroraBackdrop(theme) {

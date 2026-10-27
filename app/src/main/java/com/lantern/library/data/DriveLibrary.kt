@@ -14,8 +14,7 @@ import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 object DriveLibrary {
-    private const val FOLDER_NAME = "Lore Library"
-    private const val FOLDER_MIME = "application/vnd.google-apps.folder"
+    private const val APP_DATA_FOLDER = "appDataFolder"
     private const val FILES = "https://www.googleapis.com/drive/v3/files"
     private const val UPLOAD = "https://www.googleapis.com/upload/drive/v3/files"
     private val jsonType = "application/json; charset=UTF-8".toMediaType()
@@ -42,51 +41,9 @@ object DriveLibrary {
     fun mimeFor(book: LibraryBook): String =
         if (book.format == BookFormat.PDF) "application/pdf" else "application/epub+zip"
 
-    fun ensureFolder(token: String, ownerKey: String? = null): DriveOutcome<String> {
-        synchronized(folderLock) {
-            if (ownerKey != null && cachedFolderId != null && cachedFolderOwner == ownerKey) {
-                return DriveOutcome.Ok(cachedFolderId!!)
-            }
-            if (cachedFolderOwner != ownerKey) {
-                cachedFolderId = null
-                cachedFolderOwner = null
-            }
-            when (val existing = query(
-                token,
-                "name='${escape(FOLDER_NAME)}' and mimeType='$FOLDER_MIME' and trashed=false"
-            )) {
-                QueryOutcome.Unauthorized -> return DriveOutcome.Unauthorized
-                QueryOutcome.Error -> return DriveOutcome.Failed
-                is QueryOutcome.Ok -> existing.ids.firstOrNull()?.let {
-                    if (ownerKey != null) {
-                        cachedFolderId = it
-                        cachedFolderOwner = ownerKey
-                    }
-                    return DriveOutcome.Ok(it)
-                }
-            }
-            val body = JSONObject()
-                .put("name", FOLDER_NAME)
-                .put("mimeType", FOLDER_MIME)
-                .toString()
-                .toRequestBody(jsonType)
-            val req = Request.Builder()
-                .url(FILES)
-                .header("Authorization", "Bearer $token")
-                .post(body)
-                .build()
-            val raw = executeRaw(req) ?: return DriveOutcome.Failed
-            if (raw.code == 401) return DriveOutcome.Unauthorized
-            if (!raw.ok || raw.body == null) return DriveOutcome.Failed
-            val id = JSONObject(raw.body).optString("id").takeIf { it.isNotBlank() }
-                ?: return DriveOutcome.Failed
-            if (ownerKey != null) {
-                cachedFolderId = id
-                cachedFolderOwner = ownerKey
-            }
-            return DriveOutcome.Ok(id)
-        }
-    }
+    /** Google Drive's hidden appDataFolder is private to this app and needs drive.appdata scope. */
+    fun ensureFolder(token: String, ownerKey: String? = null): DriveOutcome<String> =
+        DriveOutcome.Ok(APP_DATA_FOLDER)
 
     fun findByLoreId(token: String, loreId: String): LoreLookup {
         val q = "appProperties has { key='loreId' and value='${escape(loreId)}' } and trashed=false"
@@ -113,7 +70,7 @@ object DriveLibrary {
             }
             val meta = JSONObject()
                 .put("name", driveName(book))
-                .put("parents", JSONArray().put(folderId))
+                .put("parents", JSONArray().put(APP_DATA_FOLDER))
                 .put("appProperties", JSONObject().put("loreId", book.id))
             val multipart = MultipartBody.Builder()
                 .setType(relatedType)
@@ -268,7 +225,7 @@ object DriveLibrary {
     }
 
     private fun query(token: String, q: String): QueryOutcome {
-        val url = "$FILES?q=${URLEncoder.encode(q, "UTF-8")}&spaces=drive&fields=files(id)&pageSize=10"
+        val url = "$FILES?q=${URLEncoder.encode(q, "UTF-8")}&spaces=appDataFolder&fields=files(id)&pageSize=100"
         val req = Request.Builder()
             .url(url)
             .header("Authorization", "Bearer $token")

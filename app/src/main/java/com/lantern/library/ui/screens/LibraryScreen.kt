@@ -265,7 +265,7 @@ private fun ForYouShelf(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("For You", color = ink, fontFamily = Playfair, fontSize = 16.sp)
-                Text("Fresh picks for today", color = mute, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+                Text("12 picks based on your genres", color = mute, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
             }
             Text(
                 "Refresh",

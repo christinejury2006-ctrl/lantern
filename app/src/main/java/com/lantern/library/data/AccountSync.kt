@@ -241,6 +241,7 @@ object AccountSync {
             .put("category", b.category)
             .put("synopsis", b.synopsis)
             .put("remoteCover", cover)
+            .put("driveFileId", b.driveFileId ?: "")
     }
 
     private fun bookFromCloud(o: JSONObject): LibraryBook? {
@@ -266,7 +267,7 @@ object AccountSync {
             lastReadAt = o.optLong("lastReadAt", 0L),
             category = o.optString("category", "Library"),
             synopsis = o.optString("synopsis"),
-            driveFileId = null,
+            driveFileId = o.optString("driveFileId").ifBlank { null },
             pendingUpload = false
         )
     }

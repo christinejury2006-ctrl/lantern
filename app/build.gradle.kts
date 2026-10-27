@@ -18,6 +18,7 @@ android {
         versionName = "3.5.0"
         vectorDrawables.useSupportLibrary = true
         buildConfigField("String", "GOOGLE_BOOKS_API_KEY", "\"${escapeBuildConfig(resolveGoogleBooksApiKey())}\"")
+        buildConfigField("String", "FIREBASE_WEB_CLIENT_ID", "\"${escapeBuildConfig(resolveFirebaseWebClientId())}\"")
     }
 
     buildTypes {
@@ -55,6 +56,7 @@ dependencies {
     implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
     implementation("com.google.firebase:firebase-auth-ktx")
     implementation("com.google.firebase:firebase-firestore-ktx")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
     val composeBom = platform("androidx.compose:compose-bom:2023.10.01")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")
@@ -96,3 +98,16 @@ fun resolveGoogleBooksApiKey(): String {
 
 fun escapeBuildConfig(value: String): String =
     value.replace("\\", "\\\\").replace("\"", "\\\"")
+
+/** Firebase Auth requires the Web OAuth client ID from Firebase/Google Cloud. Configure via Gradle property or FIREBASE_WEB_CLIENT_ID environment variable. */
+fun resolveFirebaseWebClientId(): String {
+    val fromEnv = System.getenv("FIREBASE_WEB_CLIENT_ID")?.trim().orEmpty()
+    if (fromEnv.isNotEmpty()) return fromEnv
+    val fromProp = (findProperty("FIREBASE_WEB_CLIENT_ID") as? String)?.trim().orEmpty()
+    if (fromProp.isNotEmpty()) return fromProp
+    val file = rootProject.file("local.properties")
+    if (!file.exists()) return ""
+    val props = Properties()
+    file.inputStream().use { props.load(it) }
+    return props.getProperty("FIREBASE_WEB_CLIENT_ID")?.trim().orEmpty()
+}

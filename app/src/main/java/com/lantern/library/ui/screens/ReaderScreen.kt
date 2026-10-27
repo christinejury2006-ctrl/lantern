@@ -149,7 +149,8 @@ fun ReaderScreen(
     onBookmark: (Int) -> Unit,
     appearance: ReaderAppearance = ReaderAppearance(),
     onAppearance: (ReaderAppearance) -> Unit = {},
-    savedBookmarks: List<Int> = emptyList()
+    savedBookmarks: List<Int> = emptyList(),
+    onEnsureAvailable: suspend () -> LibraryBook? = { null }
 ) {
     val activity = LocalContext.current as Activity
     val family = LanternFonts.family(prefs.fontId)
@@ -242,12 +243,13 @@ fun ReaderScreen(
         ready = false
         error = null
         toc = emptyList()
+        val sourceBook = if (book.localFileAvailable) book else onEnsureAvailable() ?: book
         val loaded = withContext(Dispatchers.IO) {
             runCatching {
-                val file = book.filePath?.let { File(it) }
-                if (file == null || !file.exists()) {
-                    Triple(emptyList<Chapter>(), emptyList<TocEntry>(), "File is missing. Import it again." to 1)
-                } else when (book.format) {
+                val file = sourceBook.filePath?.let { File(it) }
+                if (file == null || !file.exists() || file.length() <= 0L) {
+                    Triple(emptyList<Chapter>(), emptyList<TocEntry>(), "This book is not available offline and could not be restored." to 1)
+                } else when (sourceBook.format) {
                     BookFormat.PDF -> {
                         val count = BookIo.pdfPageCount(file).coerceAtLeast(1)
                         Triple(emptyList<Chapter>(), BookIo.readPdfOutline(activity.applicationContext, file), null to count)

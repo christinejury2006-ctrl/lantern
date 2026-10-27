@@ -4,6 +4,7 @@ import java.util.Properties
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("com.google.gms.google-services")
 }
 
 // Declared before the google/android blocks: script properties initialise in order, so a
@@ -30,6 +31,7 @@ android {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
         buildConfigField("String", "GOOGLE_BOOKS_API_KEY", "\"${escapeBuildConfig(resolveGoogleBooksApiKey())}\"")
+        buildConfigField("String", "FIREBASE_WEB_CLIENT_ID", "\"${escapeBuildConfig(resolveFirebaseWebClientId())}\"")
     }
 
     // A stable signing key is what makes "download the new APK and install it" update the
@@ -105,6 +107,10 @@ android {
 }
 
 dependencies {
+    implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
+    implementation("com.google.firebase:firebase-auth-ktx")
+    implementation("com.google.firebase:firebase-firestore-ktx")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
     val composeBom = platform("androidx.compose:compose-bom:2023.10.01")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")
@@ -178,3 +184,15 @@ fun resolveSigningFile(): File? {
     val candidate = File(path)
     return if (candidate.exists()) candidate else null
 }
+
+/**
+ * Firebase Auth needs the Web OAuth client ID from Firebase/Google Cloud, not the Android one.
+ * Empty is a valid answer: the app then says so instead of failing to sign in silently.
+ */
+fun resolveFirebaseWebClientId(): String =
+    signingValue("FIREBASE_WEB_CLIENT_ID")
+        ?: Properties().also { props ->
+            val file = rootProject.file("local.properties")
+            if (file.exists()) file.inputStream().use { props.load(it) }
+        }.getProperty("FIREBASE_WEB_CLIENT_ID")?.trim().takeIf { !it.isNullOrEmpty() }
+        ?: ""

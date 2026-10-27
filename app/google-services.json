@@ -1,0 +1,28 @@
+{
+  "project_info": {
+    "project_number": "722804811654",
+    "project_id": "lore-digital-library",
+    "storage_bucket": "lore-digital-library.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:722804811654:android:a15c7376e6b7bbd139ee07",
+        "android_client_info": {
+          "package_name": "com.lantern.library"
+        }
+      },
+      "api_key": [
+        {
+          "current_key": "AIzaSyBQ6j6kyMSnb7zfPuCy-g3bBa1I32Td3Yg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

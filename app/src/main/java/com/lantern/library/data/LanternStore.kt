@@ -1017,6 +1017,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             return
         }
         viewModelScope.launch(Dispatchers.IO) { connectDrive(quiet = false, pullAccount = true) }
+        viewModelScope.launch(Dispatchers.IO) { syncFirebaseAccount(acc, announce = true) }
     }
 
     fun requestDriveConnect() {
@@ -1040,6 +1041,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             try {
                 DriveLibrary.clearCachedFolder()
                 GoogleAuth.signOutAndClearToken(activity, getApplication())
+                FirestoreAccountRepository.signOut()
             } finally {
                 googleAccountKey = null
                 withContext(Dispatchers.Main) {
@@ -1185,6 +1187,15 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    suspend fun ensureBookAvailable(bookId: String): LibraryBook? {
+        val current = book(bookId) ?: return null
+        val ready = withContext(Dispatchers.IO) { ensureCached(current) }
+        if (ready == null) withContext(Dispatchers.Main) {
+            toast(if (current.driveFileId.isNullOrBlank()) "This book has no cloud backup yet." else "Could not download this book. Check your connection and Drive access.")
+        }
+        return ready
+    }
+
     private suspend fun ensureCached(book: LibraryBook): LibraryBook? {
         if (book.origin == BookOrigin.BUNDLED || book.format == BookFormat.TEXT) return book
         val local = book.filePath?.let { File(it) }
@@ -1204,6 +1215,38 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         snapshotAt = System.currentTimeMillis()
         prefs.edit().putLong("snapshotAt", snapshotAt).putBoolean("sync_dirty", true).apply()
         scheduleSync()
+        scheduleFirebaseSync()
+    }
+
+    private fun scheduleFirebaseSync() {
+        val gen = ++firebaseSyncGen
+        viewModelScope.launch(Dispatchers.IO) {
+            delay(8_000)
+            if (gen != firebaseSyncGen || !FirestoreAccountRepository.isSignedIn()) return@launch
+            syncFirebaseAccount(null, announce = false)
+        }
+    }
+
+    private var firebaseSyncGen = 0
+
+    private suspend fun syncFirebaseAccount(account: GoogleSignInAccount?, announce: Boolean) {
+        try {
+            if (account != null) FirestoreAccountRepository.signIn(account)
+            if (!FirestoreAccountRepository.isSignedIn()) return
+            val local = withContext(Dispatchers.Main) { currentSnapshot() }
+            val cloud = AccountSync.fromJson(FirestoreAccountRepository.readSnapshot())
+            val merged = AccountSync.merge(local, cloud)
+            withContext(Dispatchers.Main) { applySnapshot(merged) }
+            FirestoreAccountRepository.writeSnapshot(AccountSync.toJson(merged))
+            if (announce) withContext(Dispatchers.Main) { toast("Firebase library sync complete") }
+        } catch (e: Exception) {
+            if (announce) withContext(Dispatchers.Main) {
+                val message = e.message.orEmpty()
+                toast(if (message.contains("OAuth client ID") || message.contains("ID token"))
+                    "Firebase needs its Web OAuth client ID. Google Drive sync remains available."
+                else "Firebase sync unavailable. Your local library and Drive sync are preserved.")
+            }
+        }
     }
 
     private fun scheduleSync() {
@@ -1246,10 +1289,61 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         )
     }
 
+
+    /**
+     * Back up local imported/downloaded EPUBs and PDFs before syncing their metadata.
+     * A book only receives a cloud file ID after Drive confirms the upload succeeded.
+     * Existing IDs are retained and local files are never removed by this operation.
+     */
+    private suspend fun uploadAvailableBooks() {
+        val candidates = withContext(Dispatchers.Main) {
+            synchronized(libraryLock) { books.toList() }
+        }.filter { book ->
+            book.origin != BookOrigin.BUNDLED &&
+                book.format != BookFormat.TEXT &&
+                book.driveFileId.isNullOrBlank() &&
+                book.filePath?.let { path -> File(path).let { it.exists() && it.length() > 0L } } == true
+        }
+        if (candidates.isEmpty()) return
+        val uploadOutcome = withDriveOutcome { token, owner ->
+            when (val folder = DriveLibrary.ensureFolder(token, owner)) {
+                is DriveOutcome.Ok -> {
+                    val results = ArrayList<Pair<String, String>>()
+                    for (book in candidates) {
+                        val file = book.filePath?.let(::File) ?: continue
+                        if (!file.exists() || file.length() <= 0L) continue
+                        when (val result = DriveLibrary.upload(token, folder.value, book, file)) {
+                            is DriveOutcome.Ok -> results += book.id to result.value
+                            DriveOutcome.Unauthorized -> return@withDriveOutcome DriveOutcome.Unauthorized
+                            DriveOutcome.Failed -> Unit
+                        }
+                    }
+                    DriveOutcome.Ok(results)
+                }
+                DriveOutcome.Unauthorized -> DriveOutcome.Unauthorized
+                DriveOutcome.Failed -> DriveOutcome.Failed
+            }
+        } ?: return
+        val uploaded = when (uploadOutcome) {
+            is DriveOutcome.Ok -> uploadOutcome.value
+            DriveOutcome.Unauthorized, DriveOutcome.Failed -> return
+        }
+        if (uploaded.isEmpty()) return
+        withContext(Dispatchers.Main) {
+            uploaded.forEach { (bookId, fileId) ->
+                val latest = book(bookId) ?: return@forEach
+                if (latest.driveFileId.isNullOrBlank()) {
+                    upsert(latest.copy(driveFileId = fileId, pendingUpload = false))
+                }
+            }
+        }
+    }
+
     private suspend fun runAccountSync(announce: Boolean) {
         if (!account.signedIn || account.provider != "google") return
         if (GoogleAuth.accountId(getApplication<Application>()).isNullOrBlank()) return
         if (!networkReady()) return
+        uploadAvailableBooks()
         val local = withContext(Dispatchers.Main) { currentSnapshot() }
         val cloudOutcome = withDriveOutcome { token, owner ->
             when (val folder = DriveLibrary.ensureFolder(token, owner)) {

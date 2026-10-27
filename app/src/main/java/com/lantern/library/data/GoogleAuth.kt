@@ -8,6 +8,7 @@ import com.google.android.gms.auth.UserRecoverableAuthException
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
+import com.lantern.library.BuildConfig
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.Scope
@@ -16,13 +17,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 object GoogleAuth {
-    const val DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+    const val DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.appdata"
 
     private fun options(): GoogleSignInOptions =
         GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
             .requestProfile()
             .requestScopes(Scope(DRIVE_FILE_SCOPE))
+            .apply { if (BuildConfig.FIREBASE_WEB_CLIENT_ID.isNotBlank()) requestIdToken(BuildConfig.FIREBASE_WEB_CLIENT_ID) }
             .build()
 
     fun client(activity: Activity): GoogleSignInClient =

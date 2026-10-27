@@ -2,6 +2,8 @@ name: Build debug APK
 
 on:
   workflow_dispatch:
+  push:
+    branches: ["L'Oréal"]
 
 jobs:
   build:
@@ -28,6 +30,7 @@ jobs:
       - name: Build debug APK
         env:
           GOOGLE_BOOKS_API_KEY: ${{ secrets.GOOGLE_BOOKS_API_KEY }}
+          FIREBASE_WEB_CLIENT_ID: ${{ secrets.FIREBASE_WEB_CLIENT_ID }}
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace

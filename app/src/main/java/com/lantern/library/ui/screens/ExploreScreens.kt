@@ -82,7 +82,7 @@ private fun DiscoveryBrowser(theme: ReaderTheme, onOpen: (DiscoveryBook) -> Unit
     var error by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     val prefs = remember { context.getSharedPreferences("lore_search", android.content.Context.MODE_PRIVATE) }
-    var history by remember { mutableStateOf(prefs.getString("history", "")!!.split("\\n").filter { it.isNotBlank() }.take(8)) }
+    var history by remember { mutableStateOf(prefs.getString("history", "")!!.split("\n").filter { it.isNotBlank() }.take(8)) }
     val trending = remember { listOf("Married to the Devil's Son", "billionaire", "werewolf", "Rich Dad Poor Dad", "romance", "mafia romance", "dark romance", "fantasy", "romantasy", "CEO romance") }
     LaunchedEffect(query) {
         val q = query.trim()
@@ -104,7 +104,7 @@ private fun DiscoveryBrowser(theme: ReaderTheme, onOpen: (DiscoveryBook) -> Unit
         loading = false
         if (results.isNotEmpty()) {
             history = (listOf(q) + history.filterNot { it.equals(q, true) }).take(8)
-            prefs.edit().putString("history", history.joinToString("\\n")).apply()
+            prefs.edit().putString("history", history.joinToString("\n")).apply()
         }
     }
     AuroraBackdrop(theme) {

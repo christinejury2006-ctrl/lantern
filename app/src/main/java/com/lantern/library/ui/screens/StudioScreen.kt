@@ -1,6 +1,8 @@
 package com.lantern.library.ui.screens
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -11,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
@@ -20,6 +23,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
@@ -113,6 +118,7 @@ fun StudioScreen(
 
 @Composable
 private fun WebEntry(dark: Boolean, ink: Color, mute: Color, onAnalyze: (String) -> Unit) {
+    val palette = nookPalette(dark)
     var url by remember { mutableStateOf("") }
     GlassCard(Modifier.fillMaxWidth().padding(top = 20.dp), dark, 18) {
         Column(Modifier.padding(16.dp)) {
@@ -160,6 +166,7 @@ private fun WebPane(
     onMoveCollect: (String, Int) -> Unit,
     onFetchCollection: () -> Unit
 ) {
+    val palette = nookPalette(dark)
     when (web.phase) {
         WebPhase.Fetching, WebPhase.Compiling -> {
             Text(
@@ -273,6 +280,7 @@ private fun CollectPane(
     onFetch: () -> Unit,
     onCancel: () -> Unit
 ) {
+    val palette = nookPalette(dark)
     val n = web.collection.count { it.selected }
     Text(web.title.ifBlank { "Untitled book" }, color = ink, fontFamily = Playfair, fontSize = 22.sp, modifier = Modifier.padding(top = 18.dp))
     Text("Choose which pages to include, then continue.", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
@@ -319,6 +327,7 @@ private fun MetaPane(
     onSaveMeta: (String, String, String, Boolean) -> Unit,
     onCancel: () -> Unit
 ) {
+    val palette = nookPalette(dark)
     var title by remember { mutableStateOf(web.title) }
     var author by remember { mutableStateOf(web.author) }
     var series by remember { mutableStateOf(web.series) }
@@ -372,6 +381,7 @@ private fun CoverPane(
     onCompile: () -> Unit,
     onCancel: () -> Unit
 ) {
+    val palette = nookPalette(dark)
     FieldLabel("Cover", mute)
     if (web.coverChoices.isEmpty()) {
         Text("No cover found. You can continue without one.", color = mute, fontSize = 13.sp)
@@ -403,6 +413,7 @@ private fun PreviewPane(
     onAddLibrary: () -> Unit,
     onCancel: () -> Unit
 ) {
+    val palette = nookPalette(dark)
     Spacer(Modifier.height(16.dp))
     CoverFace(web.title, null, web.coverPath, Modifier.width(140.dp).aspectRatio(0.68f), dark)
     Text(web.title.ifBlank { "Untitled" }, color = ink, fontFamily = Playfair, fontSize = 22.sp, modifier = Modifier.padding(top = 12.dp))
@@ -427,6 +438,7 @@ private fun FileReviewCard(
     onSend: (String, String) -> Unit,
     onCancel: () -> Unit
 ) {
+    val palette = nookPalette(dark)
     var title by remember(session.workingPath) { mutableStateOf(session.title) }
     var author by remember(session.workingPath) { mutableStateOf(session.author) }
     val formatLabel = when (session.format) {
@@ -454,6 +466,7 @@ private fun FileReviewCard(
 
 @Composable
 private fun CancelRow(dark: Boolean, ink: Color, mute: Color, busy: Boolean, onCancel: () -> Unit) {
+    val palette = nookPalette(dark)
     GlassCard(Modifier.fillMaxWidth().padding(top = 10.dp).clickable(enabled = !busy, onClick = onCancel), dark, 18) {
         Text("Cancel", color = ink, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
     }

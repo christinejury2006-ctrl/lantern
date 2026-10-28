@@ -195,6 +195,9 @@ fun AppearanceEditor(
 
 @Composable
 private fun SafeWallpaperThumb(id: String, selected: Boolean, onClick: () -> Unit) {
+    // These helpers are drawn on the editor's own surface, so they take the light voice; the
+    // editor's backdrop is what makes them read as selected.
+    val palette = nookPalette(false)
     val context = LocalContext.current
     var bmp by remember(id) { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(id) {
@@ -239,6 +242,7 @@ private fun FillChip(label: String, on: Boolean, ink: Color, click: () -> Unit) 
 
 @Composable
 private fun SwatchRow(selected: Long, ink: Color, onPick: (Long) -> Unit) {
+    val palette = nookPalette(false)
     Row(
         Modifier.horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(8.dp)

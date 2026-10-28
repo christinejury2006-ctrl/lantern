@@ -12,6 +12,20 @@
           "package_name": "com.lantern.library"
         }
       },
+      "oauth_client": [
+        {
+          "client_id": "722804811654-epfavkhsqljgn7jre9f4hmrhapmaubgs.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.lantern.library",
+            "certificate_hash": "a4d39f7c643785c14f5ddf599a107de2fbc58f8f"
+          }
+        },
+        {
+          "client_id": "722804811654-vs892rhnq4dqdks90rrrmokoddd1gq2e.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyBQ6j6kyMSnb7zfPuCy-g3bBa1I32Td3Yg"
@@ -19,7 +33,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "722804811654-vs892rhnq4dqdks90rrrmokoddd1gq2e.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }

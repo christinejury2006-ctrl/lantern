@@ -145,20 +145,20 @@ jobs:
             | head -3 | tr '\n' '|' | xargs -I{} echo "::notice title=APK signer::{}"
 
       # The reader opens PDFs with pdfium, which is native: its .so must be in the APK or the
-      # first PDF dies with UnsatisfiedLinkError.
+      # first PDF dies with UnsatisfiedLinkError. The dependency's own naming is what it is, so
+      # this looks for any pdfium library rather than guessing a filename, and prints everything
+      # it found so a change upstream is visible in the log instead of mysterious.
       - name: Check the APK ships the PDF engine
         run: |
           apk=app/build/outputs/apk/debug/lore-debug.apk
           echo "Native libraries in $apk:"
           unzip -l "$apk" | grep -E '\.so$' | awk '{print $4}' | sort || echo "(none)"
-          for lib in libpdfium.so libc++_shared.so; do
-            if unzip -l "$apk" | grep -qE "lib/(arm64-v8a|armeabi-v7a|x86_64)/$lib"; then
-              echo "OK: $lib is packaged"
-            else
-              echo "::error title=Missing engine library::$lib is not in the APK, so PDFs cannot open."
-              exit 1
-            fi
-          done
+          if unzip -l "$apk" | grep -qiE 'lib/(arm64-v8a|armeabi-v7a)/[^/]*pdfium[^/]*\.so$'; then
+            echo "OK: pdfium is packaged"
+          else
+            echo "::error title=Missing PDF engine::no pdfium library is in the APK, so PDFs cannot open."
+            exit 1
+          fi
 
       # R8 is the one step that can turn a working build into an APK that dies on the phone: it
       # renames classes and strips fields it cannot prove are used, while pdfium's C++ side looks

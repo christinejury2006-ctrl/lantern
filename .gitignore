@@ -16,6 +16,7 @@ captures/
 *.keystore
 *.jks
 *.p12
+keys/
 
 # Filament's material compiler, fetched by tools/compile-materials.sh
 .matc/

@@ -58,6 +58,30 @@ just like a store update. That needs two things, both handled by this repo:
 Tagging releases gives a permanent download: `git tag v3.5.1 && git push origin v3.5.1`
 publishes `lore-v3.5.1.apk` on the Releases page, already signed for in-place updates.
 
+### The key that is waiting to be installed
+
+A keystore has been generated and left in `keys/` in the working copy (ignored by git — this
+repository is public, and a committed signing key would let anyone sign an update your phone
+would accept). Its certificate SHA-1 is
+`A4:D3:9F:7C:64:37:85:C1:4F:5D:DF:59:9A:10:7D:E2:FB:C5:8F:8F`.
+
+Installing it is four commands, run once from the repository root:
+
+```sh
+gh secret set LORE_KEYSTORE_BASE64 -b "$(base64 -w0 keys/lore-update.p12)"
+gh secret set LORE_KEYSTORE_PASSWORD -b "$(cat keys/lore-update.pass)"
+gh secret set LORE_KEY_PASSWORD     -b "$(cat keys/lore-update.pass)"
+gh secret set LORE_KEY_ALIAS        -b "lore-update"
+```
+
+After that every build carries the same signature and installs over the last one. Keep `keys/`
+somewhere private: if it is lost, an installed Lore can only be replaced after an uninstall.
+
+Register the same SHA-1 in Firebase (Project settings → Your apps → `com.lantern.library` →
+Add fingerprint) and Google Sign-In stops failing with error 10. It has to be the *stable* key:
+while builds are signed with a throwaway key that is regenerated on every CI run, there is no
+fingerprint worth registering, because it changes every build.
+
 ## Building locally
 
 ```bash

@@ -20,9 +20,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.GenericShape
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -32,6 +34,8 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import kotlin.math.PI
@@ -203,9 +207,11 @@ fun LeafPager(
             fun creaseAt(y: Float) = creaseBase + creaseBow * sin(PI * y / h).toFloat()
             fun outerAt(y: Float) = outerBase + outerBow * sin(PI * y / h).toFloat()
 
-            val sheetShape = GenericShape { _, _ -> leftOf(::creaseAt, w, h) }
+            // Clips are plain paths: a Shape whose outline is the region we computed. This is the
+            // one job `Modifier.clip` can do that a transformed copy of the content cannot.
+            val sheetShape = PathShape { leftOf(::creaseAt, w, h) }
             val backPath = between({ tipBase }, ::creaseAt, w, h)
-            val backShape = GenericShape { _, _ -> backPath }
+            val backShape = PathShape { backPath }
 
             // 1. The page underneath — the one being revealed (forward) or kept (backward).
             Box(Modifier.fillMaxSize()) { pageContent(basePage, false) }
@@ -310,6 +316,12 @@ fun LeafPager(
             }
         }
     }
+}
+
+/** A clip region built from the curl geometry. */
+private class PathShape(private val build: () -> Path) : Shape {
+    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline =
+        Outline.Generic(build())
 }
 
 /** Segments the curved edges are sampled into. Cheap at 24, and smooth at any page size. */

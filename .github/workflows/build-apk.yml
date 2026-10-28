@@ -1,9 +1,7 @@
 name: Build debug APK
 
-# Every build carries a higher versionCode and (when the update key secrets are set) the
-# same signature, so installing a newer APK updates the app in place instead of forcing an
-# uninstall that wipes the library.
-
+# A single persistent signing key is required so newer APKs update in place.
+# Do not silently fall back to a throwaway runner debug key.
 permissions:
   contents: write
 
@@ -29,6 +27,33 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Require persistent update signing key
+        env:
+          LORE_KEYSTORE_BASE64: ${{ secrets.LORE_KEYSTORE_BASE64 }}
+          LORE_KEYSTORE_PASSWORD: ${{ secrets.LORE_KEYSTORE_PASSWORD }}
+          LORE_KEY_ALIAS: ${{ secrets.LORE_KEY_ALIAS }}
+          LORE_KEY_PASSWORD: ${{ secrets.LORE_KEY_PASSWORD }}
+        run: |
+          missing=0
+          for name in LORE_KEYSTORE_BASE64 LORE_KEYSTORE_PASSWORD LORE_KEY_ALIAS LORE_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error title=Missing signing secret::$name is not set. Configure the four LORE_KEYSTORE_* GitHub Actions secrets before building an installable APK."
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Refusing to generate an ephemeral signing key. It would change the APK fingerprint on the next build."
+            exit 1
+          fi
+          echo "$LORE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/lore-update.keystore"
+          {
+            echo "LORE_KEYSTORE_PATH=$RUNNER_TEMP/lore-update.keystore"
+            echo "LORE_KEYSTORE_PASSWORD=$LORE_KEYSTORE_PASSWORD"
+            echo "LORE_KEY_ALIAS=$LORE_KEY_ALIAS"
+            echo "LORE_KEY_PASSWORD=$LORE_KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+          echo "Persistent Lore update key configured."
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -38,30 +63,6 @@ jobs:
         run: |
           sdkmanager "platforms;android-34" "build-tools;34.0.0" "build-tools;30.0.3"
 
-      # Restores the one key that stays the same across builds. Without it, each runner
-      # generates a fresh debug key, Android sees a different signer, and refuses the
-      # update ("App not installed").
-      - name: Configure update signing key
-        env:
-          LORE_KEYSTORE_BASE64: ${{ secrets.LORE_KEYSTORE_BASE64 }}
-          LORE_KEYSTORE_PASSWORD: ${{ secrets.LORE_KEYSTORE_PASSWORD }}
-          LORE_KEY_ALIAS: ${{ secrets.LORE_KEY_ALIAS }}
-          LORE_KEY_PASSWORD: ${{ secrets.LORE_KEY_PASSWORD }}
-        run: |
-          if [ -n "$LORE_KEYSTORE_BASE64" ] && [ -n "$LORE_KEYSTORE_PASSWORD" ] \
-             && [ -n "$LORE_KEY_ALIAS" ] && [ -n "$LORE_KEY_PASSWORD" ]; then
-            echo "$LORE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/lore-update.keystore"
-            {
-              echo "LORE_KEYSTORE_PATH=$RUNNER_TEMP/lore-update.keystore"
-              echo "LORE_KEYSTORE_PASSWORD=$LORE_KEYSTORE_PASSWORD"
-              echo "LORE_KEY_ALIAS=$LORE_KEY_ALIAS"
-              echo "LORE_KEY_PASSWORD=$LORE_KEY_PASSWORD"
-            } >> "$GITHUB_ENV"
-            echo "Update key configured: this APK will install over the previous build."
-          else
-            echo "::warning title=No update signing key::LORE_KEYSTORE_BASE64 secrets are not set, so this APK is signed with a throwaway key. Installing it over an existing Lore build will fail with a signature mismatch and require an uninstall. Run tools/make-update-key.sh once to fix this."
-          fi
-
       - name: Run unit tests
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -69,67 +70,16 @@ jobs:
           FIREBASE_WEB_CLIENT_ID: ${{ secrets.FIREBASE_WEB_CLIENT_ID }}
         run: |
           chmod +x gradlew
-          set +e
-          ./gradlew testDebugUnitTest --no-daemon --stacktrace > gradle-tests.log 2>&1
-          code=$?
-          if [ "$code" -ne 0 ]; then
-            {
-              echo "Gradle unit test run failed."
-              echo '```'
-              grep -E "app/src.*\.kt|\.kts:.*error|^e: |error:|What went wrong|Caused by|Exception|Detail:|requires|minCompileSdk|Dependency|FAILED|AssertionError|expected:|but was:" gradle-tests.log | head -n 70
-              echo '```'
-              # The JUnit XML carries the assertion text that the log only name-checks.
-              if ls app/build/test-results/testDebugUnitTest/*.xml >/dev/null 2>&1; then
-                echo "Failing assertions:"
-                echo '```'
-                grep -h -A4 "<failure" app/build/test-results/testDebugUnitTest/*.xml \
-                  | sed -E 's/<[^>]+>//g' | grep -v '^[[:space:]]*$' | head -n 60
-                echo '```'
-              fi
-              echo "Last 30 lines:"
-              echo '```'
-              tail -n 30 gradle-tests.log
-              echo '```'
-            } > test-failure.md
-            head -c 60000 test-failure.md > test-failure.trimmed.md
-            gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
-              -F body=@test-failure.trimmed.md >/dev/null 2>&1 || true
-            echo "::error title=Unit tests failed::See the build-failure commit comment for the compiler output."
-          fi
-          tail -n 40 gradle-tests.log
-          exit "$code"
+          ./gradlew testDebugUnitTest --no-daemon --stacktrace
 
       - name: Build debug APK
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOOGLE_BOOKS_API_KEY: ${{ secrets.GOOGLE_BOOKS_API_KEY }}
-          # Monotonic across runs: a newer build always has a higher versionCode.
           LORE_BUILD_NUMBER: ${{ github.run_number }}
         run: |
           chmod +x gradlew
-          set +e
-          ./gradlew assembleDebug --no-daemon --stacktrace > gradle-build.log 2>&1
-          code=$?
-          if [ "$code" -ne 0 ]; then
-            # Actions log blobs are not always reachable from every client, so the useful
-            # part of the log is also posted as a commit comment where it can be read back.
-            {
-              echo "Gradle build failed."
-              echo '```'
-              grep -E "app/src.*\.kt|\.kts:.*error|^e: |error:|What went wrong|Caused by|Exception|Detail:|requires|minCompileSdk|Dependency" gradle-build.log | head -n 70
-              echo '```'
-              echo "Last 30 lines:"
-              echo '```'
-              tail -n 30 gradle-build.log
-              echo '```'
-            } > build-failure.md
-            head -c 60000 build-failure.md > build-failure.trimmed.md
-            gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
-              -F body=@build-failure.trimmed.md >/dev/null 2>&1 || true
-            echo "::error title=APK build failed::See the build-failure commit comment for the compiler output."
-          fi
-          tail -n 40 gradle-build.log
-          exit "$code"
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Rename APK
         run: |
@@ -141,14 +91,8 @@ jobs:
           apk=app/build/outputs/apk/debug/lore-debug.apk
           info="$("$ANDROID_HOME"/build-tools/34.0.0/aapt dump badging "$apk" | head -1)"
           echo "::notice title=APK built::$info"
-          "$ANDROID_HOME"/build-tools/34.0.0/apksigner verify --print-certs "$apk" \
-            | head -3 | tr '\n' '|' | xargs -I{} echo "::notice title=APK signer::{}"
+          "$ANDROID_HOME"/build-tools/34.0.0/apksigner verify --print-certs "$apk" | head -3
 
-      # Google Sign-In fails on the phone, not here, so this is where the two config facts that
-      # decide it get printed: which OAuth clients the Firebase project has (from the file the
-      # app is built with) and with which key this APK was signed. If the Android client is
-      # missing, the notice says so with the fingerprint to register; nothing here fails the
-      # build, because a build that cannot sign in is still a build.
       - name: Report Google Sign-In configuration
         run: |
           file=app/google-services.json
@@ -162,32 +106,23 @@ jobs:
           echo "::notice title=OAuth clients in google-services.json::android=$android web=$web"
           echo "::notice title=Web OAuth client id in the build::$web_id"
           if [ "$android" -eq 0 ]; then
-            echo "::warning title=Google Sign-In cannot work yet::google-services.json has no Android OAuth client, so Google rejects sign-in with error 10. Register the APK signer's SHA-1 (printed in the APK signer notice above) in Firebase, then download the file again."
+            echo "::warning title=Google Sign-In configuration::No Android OAuth client in google-services.json. Register this APK signer's SHA-1 in Firebase and download the updated file."
           fi
           if [ "$web" -eq 0 ]; then
-            echo "::warning title=No Web OAuth client::Firebase Auth needs the Web client to mint a session. Enabling Google Sign-In in Firebase creates it; it then appears in google-services.json."
+            echo "::warning title=Google Sign-In configuration::No Web OAuth client in google-services.json."
           fi
 
-      # The reader opens PDFs with pdfium, which is native: its .so must be in the APK or the
-      # first PDF dies with UnsatisfiedLinkError. The dependency's own naming is what it is, so
-      # this looks for any pdfium library rather than guessing a filename, and prints everything
-      # it found so a change upstream is visible in the log instead of mysterious.
       - name: Check the APK ships the PDF engine
         run: |
           apk=app/build/outputs/apk/debug/lore-debug.apk
-          echo "Native libraries in $apk:"
-          unzip -l "$apk" | grep -E '\.so$' | awk '{print $4}' | sort || echo "(none)"
+          unzip -l "$apk" | grep -E '\.so$' | awk '{print $4}' | sort || true
           if unzip -l "$apk" | grep -qiE 'lib/(arm64-v8a|armeabi-v7a)/[^/]*pdfium[^/]*\.so$'; then
             echo "OK: pdfium is packaged"
           else
-            echo "::error title=Missing PDF engine::no pdfium library is in the APK, so PDFs cannot open."
+            echo "::error title=Missing PDF engine::no pdfium library is in the APK."
             exit 1
           fi
 
-      # R8 is the one step that can turn a working build into an APK that dies on the phone: it
-      # renames classes and strips fields it cannot prove are used, while pdfium's C++ side looks
-      # its own Java classes and their native pointers up by name. So the real, minified release
-      # APK is assembled on every push and its DEX read back; a missing keep rule fails here.
       - name: Build the minified release APK and check R8 kept the native bridge
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -196,29 +131,7 @@ jobs:
           LORE_BUILD_NUMBER: ${{ github.run_number }}
         run: |
           chmod +x gradlew
-          set +e
-          ./gradlew assembleRelease --no-daemon --stacktrace > gradle-release.log 2>&1
-          code=$?
-          if [ "$code" -ne 0 ]; then
-            {
-              echo "The minified release build failed. R8 — obfuscation, shrinking, or a missing"
-              echo "keep rule — is the usual cause; the debug APK built fine."
-              echo '```'
-              grep -E "^e: |error:|Missing class|What went wrong|Caused by|Exception|R8|Warning" \
-                gradle-release.log | head -n 60
-              echo '```'
-              echo "Last 30 lines:"
-              echo '```'
-              tail -n 30 gradle-release.log
-              echo '```'
-            } > release-failure.md
-            head -c 60000 release-failure.md > release-failure.trimmed.md
-            gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
-              -F body=@release-failure.trimmed.md >/dev/null 2>&1 || true
-            echo "::error title=Minified release build failed::See the commit comment. R8 is the usual cause."
-            exit "$code"
-          fi
-
+          ./gradlew assembleRelease --no-daemon --stacktrace
           apk="$(ls app/build/outputs/apk/release/*.apk | head -n 1)"
           echo "release APK: $apk ($(du -h "$apk" | cut -f1))"
           rm -rf dexcheck && mkdir -p dexcheck
@@ -227,28 +140,11 @@ jobs:
           dump=dexcheck/dump.txt
           : > "$dump"
           for dex in dexcheck/classes*.dex; do "$dexdump" -f "$dex" >> "$dump" 2>/dev/null; done
-
           missing=0
-          for cls in com/shockwave/pdfium/PdfiumCore com/shockwave/pdfium/PdfDocument \
-                     com/google/firebase/auth/FirebaseAuth \
-                     com/google/firebase/firestore/FirebaseFirestore; do
-            if grep -q "L$cls;" "$dump"; then
-              echo "OK: $cls kept its name"
-            else
-              echo "::error title=R8 stripped a class the app needs::$cls is missing from the release DEX."
-              missing=$((missing + 1))
-            fi
+          for cls in com/shockwave/pdfium/PdfiumCore com/shockwave/pdfium/PdfDocument com/google/firebase/auth/FirebaseAuth com/google/firebase/firestore/FirebaseFirestore; do
+            if grep -q "L$cls;" "$dump"; then echo "OK: $cls kept its name"; else echo "::error title=R8 stripped required class::$cls"; missing=$((missing + 1)); fi
           done
-          if [ "$missing" -ne 0 ]; then
-            {
-              echo "R8 broke something the release APK needs. Add or fix a keep rule in"
-              echo "app/proguard-rules.pro; the pdfium block is the one that keeps the reader alive."
-            } > release-keep.md
-            gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
-              -F body=@release-keep.md >/dev/null 2>&1 || true
-            exit 1
-          fi
-          echo "::notice title=Release APK::R8 kept the native bridge; $(du -h "$apk" | cut -f1) minified release APK."
+          if [ "$missing" -ne 0 ]; then exit 1; fi
 
       - name: Upload the minified release APK
         uses: actions/upload-artifact@v4

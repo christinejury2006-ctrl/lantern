@@ -24,16 +24,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.lantern.library.data.InterestCatalog
 import com.lantern.library.data.ReaderTheme
-import com.lantern.library.ui.components.RoomBackdrop
-import com.lantern.library.ui.theme.Coral
-import com.lantern.library.ui.theme.Ink
-import com.lantern.library.ui.theme.InkSoft
-import com.lantern.library.ui.theme.NightText
-import com.lantern.library.ui.theme.Parchment
+import com.lantern.library.ui.components.GlassSurface
+import com.lantern.library.ui.components.NookBackdrop
 import com.lantern.library.ui.theme.Playfair
+import com.lantern.library.ui.theme.nookPalette
 
 @Composable
 fun InterestOnboardingScreen(
@@ -43,12 +41,9 @@ fun InterestOnboardingScreen(
     onContinue: (List<String>) -> Unit,
     onCancel: () -> Unit
 ) {
-    val dark = theme == ReaderTheme.DARK
-    // the backdrop is now a warm room, so text is parchment either way
-    val ink = Parchment
-    val mute = Color(0xFFC9B79F)
+    val palette = nookPalette(theme)
     val selected = remember(initial) { mutableStateListOf<String>().also { it.addAll(initial) } }
-    RoomBackdrop(dark) {
+    NookBackdrop(palette) {
         Column(
             Modifier
                 .fillMaxSize()
@@ -56,10 +51,10 @@ fun InterestOnboardingScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(20.dp, 28.dp, 20.dp, 28.dp)
         ) {
-            Text("What do you love to read?", color = ink, fontFamily = Playfair, fontSize = 28.sp)
+            Text("What do you love to read?", color = palette.ink, fontFamily = Playfair, fontSize = 28.sp)
             Text(
-                "Pick a few genres. For You is based only on these — not on books in your library.",
-                color = mute,
+                "Pick a few genres. Editor's Choice is based only on these — not on books in your library.",
+                color = palette.mute,
                 fontSize = 14.sp,
                 modifier = Modifier.padding(top = 8.dp, bottom = 20.dp)
             )
@@ -70,40 +65,48 @@ fun InterestOnboardingScreen(
                 ) {
                     row.forEach { interest ->
                         val on = interest.id in selected
-                        Text(
-                            interest.label,
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(22.dp))
-                                .background(if (on) Coral else Color(0x66FFFFFF))
-                                .clickable {
-                                    if (on) selected.remove(interest.id) else selected.add(interest.id)
-                                }
-                                .padding(horizontal = 12.dp, vertical = 12.dp),
-                            color = if (on) Color.White else ink,
-                            fontSize = 14.sp
-                        )
+                        GlassSurface(
+                            palette,
+                            Modifier.weight(1f),
+                            shape = RoundedCornerShape(20.dp),
+                            fill = if (on) palette.accent else palette.glass,
+                            onClick = {
+                                if (on) selected.remove(interest.id) else selected.add(interest.id)
+                            }
+                        ) {
+                            Text(
+                                interest.label,
+                                color = if (on) palette.accentInk else palette.ink,
+                                fontSize = 13.sp,
+                                fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 13.dp)
+                            )
+                        }
                     }
                     if (row.size == 1) Spacer(Modifier.weight(1f))
                 }
             }
             Spacer(Modifier.height(28.dp))
             val canGo = selected.isNotEmpty()
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(if (canGo) Coral else Color(0x55FFFFFF))
-                    .clickable(enabled = canGo) { onContinue(selected.toList()) }
-                    .padding(vertical = 14.dp),
-                contentAlignment = Alignment.Center
+            GlassSurface(
+                palette,
+                Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(22.dp),
+                fill = if (canGo) palette.accent else palette.glass,
+                onClick = { if (canGo) onContinue(selected.toList()) }
             ) {
-                Text("Continue", color = if (canGo) Color.White else mute, fontSize = 16.sp)
+                Text(
+                    if (canGo) "Continue" else "Choose at least one",
+                    color = if (canGo) palette.accentInk else palette.faint,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.align(Alignment.Center).padding(vertical = 15.dp)
+                )
             }
             if (allowCancel) {
                 Text(
                     "Cancel",
-                    color = mute,
+                    color = palette.mute,
                     fontSize = 14.sp,
                     modifier = Modifier
                         .align(Alignment.CenterHorizontally)

@@ -62,19 +62,30 @@ import com.lantern.library.ui.theme.Playfair
 import com.lantern.library.ui.theme.Sky
 import com.lantern.library.ui.theme.SlateHi
 import com.lantern.library.ui.theme.SourceSerif
+import com.lantern.library.ui.theme.nookPalette
 
-fun auroraBrush(dark: Boolean) = if (dark) Brush.verticalGradient(listOf(Color(0xFF3E4A5C), Color(0xFF4A5668), Color(0xFF3A4454)))
-else Brush.verticalGradient(listOf(Lilac, Periwinkle, Sky, Aqua))
-
+/**
+ * The nook's own backdrop, under the old name.
+ *
+ * Nothing in the app draws a flat aurora gradient any more — the room in Nook.kt replaced it —
+ * but keeping the name means a screen that still calls it gets the room rather than a purple
+ * wash, and nothing silently regresses to the old look.
+ */
 @Composable
 fun AuroraBackdrop(theme: ReaderTheme, content: @Composable BoxScope.() -> Unit) {
-    Box(Modifier.fillMaxSize().background(auroraBrush(theme == ReaderTheme.DARK)), content = content)
+    NookBackdrop(nookPalette(theme), content = content)
 }
 
+/**
+ * A pane of glass, in the nook's palette.
+ *
+ * Kept as a thin name over [GlassSurface] so every screen written before the redesign — Explore,
+ * the appearance editor, the toast — picks up the new glass without being rewritten. The old
+ * signature said `dark`; the palette now owns the colours.
+ */
 @Composable
 fun GlassCard(modifier: Modifier = Modifier, dark: Boolean = false, radius: Int = 22, content: @Composable BoxScope.() -> Unit) {
-    val fill = if (dark) Color(0x664A5568) else Color(0x99FFFFFF)
-    Box(modifier.shadow(10.dp, RoundedCornerShape(radius.dp), spotColor = Color(0x33000000)).clip(RoundedCornerShape(radius.dp)).background(fill).border(1.dp, if (dark) Color(0x33FFFFFF) else Color(0x66FFFFFF), RoundedCornerShape(radius.dp)), content = content)
+    GlassSurface(nookPalette(dark), modifier, shape = RoundedCornerShape(radius.dp), content = content)
 }
 
 @Composable
@@ -131,7 +142,12 @@ fun CoverFace(
 fun FadeToast(message: String?) {
     AnimatedVisibility(visible = message != null, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxWidth().padding(20.dp)) {
         GlassCard(Modifier.fillMaxWidth(), radius = 16) {
-            Text(message.orEmpty(), Modifier.align(Alignment.Center).padding(horizontal = 16.dp, vertical = 12.dp), color = Ink, fontSize = 14.sp)
+            Text(
+                message.orEmpty(),
+                Modifier.align(Alignment.Center).padding(horizontal = 16.dp, vertical = 12.dp),
+                color = nookPalette(false).ink,
+                fontSize = 14.sp
+            )
         }
     }
 }

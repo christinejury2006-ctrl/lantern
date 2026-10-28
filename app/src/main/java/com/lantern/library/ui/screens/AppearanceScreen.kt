@@ -48,11 +48,8 @@ import com.lantern.library.data.appearSwatches
 import com.lantern.library.ui.components.AppearanceLayer
 import com.lantern.library.ui.components.GlassCard
 import com.lantern.library.ui.components.argbColor
-import com.lantern.library.ui.theme.Coral
-import com.lantern.library.ui.theme.Ink
-import com.lantern.library.ui.theme.InkSoft
-import com.lantern.library.ui.theme.NightText
 import com.lantern.library.ui.theme.Playfair
+import com.lantern.library.ui.theme.nookPalette
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -65,10 +62,11 @@ fun AppearanceEditor(
     onDone: () -> Unit,
     chromeMode: Boolean = false
 ) {
-    val dark = theme == ReaderTheme.DARK
-    val ink = if (dark) NightText else Ink
-    val mute = if (dark) Color(0xFFD0D6DE) else InkSoft
-    val gold = Color(0xFFE8D9A8)
+    val palette = nookPalette(theme)
+    val dark = palette.dark
+    val ink = palette.ink
+    val mute = palette.mute
+    val gold = palette.accent
     val opacity = if (look.wallpaperOpacity.isFinite()) look.wallpaperOpacity.coerceIn(0f, 1f) else 0.32f
     val overlay = if (look.overlay.isFinite()) look.overlay.coerceIn(0f, 1f) else 0.28f
     val chrome = if (look.chromeOpacity.isFinite()) look.chromeOpacity.coerceIn(0f, 1f) else 0.5f
@@ -130,7 +128,7 @@ fun AppearanceEditor(
                             .background(Color(0x55FFFFFF))
                             .border(
                                 2.dp,
-                                if (!look.hasWallpaper) Coral else Color.Transparent,
+                                if (!look.hasWallpaper) palette.accent else Color.Transparent,
                                 RoundedCornerShape(10.dp)
                             )
                             .clickable { onChange(look.copy(wallpaperId = null, wallpaperUrl = null)) },
@@ -145,7 +143,7 @@ fun AppearanceEditor(
                             selected = on,
                             onClick = { onChange(look.copy(wallpaperId = item.id, wallpaperUrl = null)) }
                         )
-                        Text(item.label, color = if (on) Coral else mute, fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
+                        Text(item.label, color = if (on) palette.accent else mute, fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
                     }
                 }
             }
@@ -189,7 +187,7 @@ fun AppearanceEditor(
                 )
             }
             GlassCard(Modifier.fillMaxWidth().padding(top = 8.dp).clickable(onClick = onDone), dark, 18) {
-                Text("Done", color = Coral, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
+                Text("Done", color = palette.accent, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
             }
         }
     }
@@ -210,7 +208,7 @@ private fun SafeWallpaperThumb(id: String, selected: Boolean, onClick: () -> Uni
             .size(64.dp, 88.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(Color(0x55FFFFFF))
-            .border(2.dp, if (selected) Coral else Color.Transparent, RoundedCornerShape(10.dp))
+            .border(2.dp, if (selected) palette.accent else Color.Transparent, RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
     ) {
         if (paper != null && !paper.isRecycled) {
@@ -252,7 +250,7 @@ private fun SwatchRow(selected: Long, ink: Color, onPick: (Long) -> Unit) {
                     .size(32.dp)
                     .clip(CircleShape)
                     .background(argbColor(argb))
-                    .border(if (on) 2.dp else 1.dp, if (on) Coral else ink.copy(0.25f), CircleShape)
+                    .border(if (on) 2.dp else 1.dp, if (on) palette.accent else ink.copy(0.25f), CircleShape)
                     .clickable { onPick(argb) }
             )
         }

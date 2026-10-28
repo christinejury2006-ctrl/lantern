@@ -52,11 +52,9 @@ import com.lantern.library.ui.components.NookBackdrop
 import com.lantern.library.ui.theme.nookPalette
 import com.lantern.library.ui.components.CoverFace
 import com.lantern.library.ui.components.GlassCard
-import com.lantern.library.ui.theme.Coral
+import com.lantern.library.ui.theme.nookPalette
 import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.InkSoft
-import com.lantern.library.ui.theme.NightText
-import com.lantern.library.ui.theme.Parchment
 import com.lantern.library.ui.theme.Playfair
 import org.json.JSONArray
 import kotlinx.coroutines.delay
@@ -76,8 +74,9 @@ fun SearchScreen(theme: ReaderTheme, onOpen: (DiscoveryBook) -> Unit) {
 @Composable
 private fun DiscoveryBrowser(theme: ReaderTheme, onOpen: (DiscoveryBook) -> Unit) {
     val dark = theme == ReaderTheme.DARK
-    val ink = if (dark) NightText else Ink
-    val mute = if (dark) Color(0xFFD0D6DE) else InkSoft
+    val palette = nookPalette(dark)
+    val ink = palette.ink
+    val mute = palette.mute
     var query by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<List<DiscoveryBook>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
@@ -168,7 +167,7 @@ private fun DiscoveryBrowser(theme: ReaderTheme, onOpen: (DiscoveryBook) -> Unit
                         Text(book.title, color = ink, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         Text(book.authorLine, color = mute, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(if (book.publicDomain) "Public-domain edition" else "Preview / book details",
-                            color = if (book.publicDomain) Coral else mute, fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
+                            color = if (book.publicDomain) palette.accent else mute, fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
                     }
                 }
             }
@@ -179,8 +178,9 @@ private fun DiscoveryBrowser(theme: ReaderTheme, onOpen: (DiscoveryBook) -> Unit
 @Composable
 private fun CatalogBrowser(title: String, subtitle: String, theme: ReaderTheme, initialTopic: String?, onOpen: (CatalogBook) -> Unit) {
     val dark = theme == ReaderTheme.DARK
-    val ink = if (dark) NightText else Ink
-    val mute = if (dark) Color(0xFFD0D6DE) else InkSoft
+    val palette = nookPalette(dark)
+    val ink = palette.ink
+    val mute = palette.mute
     val context = LocalContext.current
     val searchPrefs = remember { context.getSharedPreferences("lore_search", android.content.Context.MODE_PRIVATE) }
     val trending = remember {
@@ -259,7 +259,7 @@ private fun CatalogBrowser(title: String, subtitle: String, theme: ReaderTheme, 
                     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Gutendex.topics.forEach { t ->
                             val on = topic == t && query.isEmpty()
-                            Box(Modifier.height(36.dp).clip(RoundedCornerShape(18.dp)).background(if (on) Coral else Color(0xCCFFFFFF)).clickable { topic = t; query = "" }.padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
+                            Box(Modifier.height(36.dp).clip(RoundedCornerShape(18.dp)).background(if (on) palette.accent else palette.glass).clickable { topic = t; query = "" }.padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
                                 Text(t, color = if (on) Color.White else ink, fontSize = 13.sp, maxLines = 1, softWrap = false)
                             }
                         }

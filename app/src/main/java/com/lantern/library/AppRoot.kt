@@ -56,7 +56,6 @@ import com.lantern.library.ui.theme.nookPalette
 import com.lantern.library.ui.screens.AppearanceEditor
 import com.lantern.library.ui.screens.BookDetailsOverlay
 import com.lantern.library.ui.screens.InterestOnboardingScreen
-import com.lantern.library.ui.screens.CylinderShelfScreen
 import com.lantern.library.ui.screens.LibraryScreen
 import com.lantern.library.ui.screens.ProfileScreen
 import com.lantern.library.ui.screens.ReadingNookScreen
@@ -95,7 +94,6 @@ internal fun LanternRoot(store: LanternStore) {
     // Where closing a book goes back to. A book opened from the nook belongs to the nook, not to
     // the library tab, so the reader returns to wherever it was opened from.
     var readerBack by remember { mutableStateOf<Route>(Route.Home) }
-    var shelf3D by remember { mutableStateOf(false) }
     var details by remember { mutableStateOf<DiscoveryBook?>(null) }
     var libraryAppearOpen by remember { mutableStateOf(false) }
     var pickerForStudio by remember { mutableStateOf(true) }
@@ -201,7 +199,7 @@ internal fun LanternRoot(store: LanternStore) {
                     },
                     onOpenPick = { pick -> getDiscovery(pick) },
                     onSearch = { tab = Route.Search },
-                    onShelf = { shelf3D = true },
+                    onShelf = { tab = Route.Library },
                     onStudio = { tab = Route.Studio },
                     onRefreshPicks = { store.refreshForYou() },
                     onNotifications = { tab = Route.Profile },
@@ -209,6 +207,7 @@ internal fun LanternRoot(store: LanternStore) {
                 )
                 Route.Library -> LibraryScreen(
                     books = store.books,
+                    theme = theme,
                     onOpen = { book ->
                         readerBack = Route.Library
                         store.openForReading(book) { ready ->
@@ -270,7 +269,6 @@ internal fun LanternRoot(store: LanternStore) {
                     { store.requestDriveConnect() },
                     { store.openInterestEditor() },
                     { libraryAppearOpen = true },
-                    { shelf3D = true },
                     { store.syncNow() }
                 )
                 is Route.Reader -> {
@@ -286,19 +284,6 @@ internal fun LanternRoot(store: LanternStore) {
                     )
                 }
             }
-            if (shelf3D) {
-                CylinderShelfScreen(
-                    books = store.books,
-                    onOpenBook = { book ->
-                        shelf3D = false
-                        readerBack = Route.Home
-                        store.openForReading(book) { ready ->
-                            if (ready != null) tab = Route.Reader(ready.id)
-                        }
-                    },
-                    onBack = { shelf3D = false }
-                )
-            }
             val detail = details
             if (detail != null && tab is Route.Library) {
                 BookDetailsOverlay(
@@ -310,7 +295,7 @@ internal fun LanternRoot(store: LanternStore) {
                     onGet = { getDiscovery(detail) }
                 )
             }
-            if (!needsOnboarding && tab !is Route.Reader && details == null && !shelf3D) {
+            if (!needsOnboarding && tab !is Route.Reader && details == null) {
                 BottomBar(theme, tab, { tab = it }, Modifier.align(Alignment.BottomCenter))
             }
             if (store.editingInterests && store.interestsChosen) {

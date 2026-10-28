@@ -54,7 +54,10 @@ private val NookLight = NookPalette(
     ink = Color(0xFF35272B),
     mute = Color(0xFF7C6870),
     faint = Color(0xFFAE9AA2),
-    accent = Color(0xFFC4796B),
+    // Deep terracotta rather than the pale rose the room is lit with: this token has to work as
+    // a button fill under white text *and* as link-coloured words on cream, and the pale one only
+    // clears one of those. The rose still lives in `aurora` and in the bokeh.
+    accent = Color(0xFF9E5349),
     accentInk = Color(0xFFFFFFFF),
     aurora = listOf(
         Color(0xFFFF9BB8), Color(0xFFB79CFF), Color(0xFF8ED9FF), Color(0xFF9AE6C8)

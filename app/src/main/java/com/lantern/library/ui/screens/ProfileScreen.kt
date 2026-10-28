@@ -58,7 +58,6 @@ fun ProfileScreen(
     onConnectDrive: () -> Unit = {},
     onEditInterests: () -> Unit = {},
     onLibraryAppearance: () -> Unit = {},
-    onOpenShelf3D: () -> Unit = {},
     onSyncNow: () -> Unit = {}
 ) {
     val palette = nookPalette(prefs.theme)
@@ -190,8 +189,6 @@ fun ProfileScreen(
                     }
                     Spacer(Modifier.height(12.dp))
                     NookButton(palette, "Library appearance", onLibraryAppearance, filled = false)
-                    Spacer(Modifier.height(8.dp))
-                    NookButton(palette, "Open the revolving case", onOpenShelf3D, filled = false)
                 }
             }
 

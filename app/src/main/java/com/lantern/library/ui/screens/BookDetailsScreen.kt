@@ -37,12 +37,11 @@ import androidx.compose.ui.unit.sp
 import com.lantern.library.data.DiscoveryBook
 import com.lantern.library.data.ReaderTheme
 import com.lantern.library.ui.components.CoverFace
-import com.lantern.library.ui.components.auroraBrush
-import com.lantern.library.ui.theme.Coral
-import com.lantern.library.ui.theme.Ink
-import com.lantern.library.ui.theme.InkSoft
-import com.lantern.library.ui.theme.NightText
+import com.lantern.library.ui.components.AuroraOrb
+import com.lantern.library.ui.components.GlassSurface
+import com.lantern.library.ui.components.NookBackdrop
 import com.lantern.library.ui.theme.Playfair
+import com.lantern.library.ui.theme.nookPalette
 
 @Composable
 fun BookDetailsOverlay(
@@ -53,13 +52,11 @@ fun BookDetailsOverlay(
     onWant: () -> Unit,
     onGet: () -> Unit
 ) {
-    val dark = theme == ReaderTheme.DARK
-    val ink = if (dark) NightText else Ink
-    val mute = if (dark) Color(0xFFD0D6DE) else InkSoft
-    val film = if (dark) Color(0x66404A5C) else Color(0x55EDE4F6)
+    val palette = nookPalette(theme)
+    val ink = palette.ink
+    val mute = palette.mute
     BackHandler(onBack = onDismiss)
-    Box(Modifier.fillMaxSize().background(auroraBrush(dark))) {
-        Box(Modifier.fillMaxSize().background(film))
+    NookBackdrop(palette) {
         Column(
             Modifier
                 .fillMaxSize()
@@ -81,11 +78,26 @@ fun BookDetailsOverlay(
                 Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(top = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                CoverFace(
-                    book.title, null, book.coverUrl,
-                    Modifier.width(168.dp).aspectRatio(0.68f), dark,
-                    book.coverUrls
-                )
+                // The cover stands in coloured light, as it does on the nook's pick cards.
+                Box(Modifier.width(190.dp).height(262.dp), contentAlignment = Alignment.Center) {
+                    AuroraOrb(palette, 150.dp, Modifier.align(Alignment.Center), blur = 34.dp)
+                    AuroraOrb(
+                        palette, 118.dp,
+                        Modifier.align(Alignment.Center).padding(start = 30.dp, top = 30.dp),
+                        blur = 28.dp
+                    )
+                    GlassSurface(palette, Modifier, shape = RoundedCornerShape(18.dp)) {
+                        Box(Modifier.padding(6.dp)) {
+                            CoverFace(
+                                book.title, null, book.coverUrl,
+                                Modifier.width(158.dp).aspectRatio(0.68f)
+                                    .clip(RoundedCornerShape(12.dp)),
+                                palette.dark,
+                                book.coverUrls
+                            )
+                        }
+                    }
+                }
                 Spacer(Modifier.height(16.dp))
                 Text(book.title, color = ink, fontFamily = Playfair, fontSize = 24.sp, textAlign = TextAlign.Center)
                 Text(
@@ -112,7 +124,7 @@ fun BookDetailsOverlay(
                         book.categories.take(8).forEach { cat ->
                             Text(
                                 cat,
-                                Modifier.clip(RoundedCornerShape(14.dp)).background(Color(0x33FFFFFF))
+                                Modifier.clip(RoundedCornerShape(14.dp)).background(palette.glass)
                                     .padding(horizontal = 10.dp, vertical = 6.dp),
                                 color = ink, fontSize = 11.sp, maxLines = 1
                             )
@@ -141,23 +153,37 @@ fun BookDetailsOverlay(
                 Text(source, color = mute, fontSize = 11.sp, modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 12.dp))
             }
             Row(Modifier.fillMaxWidth().padding(bottom = 8.dp, top = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    if (saved) "Saved" else "Want to Read",
-                    Modifier.weight(1f).clip(RoundedCornerShape(16.dp))
-                        .background(if (saved) Color(0x66FFFFFF) else Coral)
-                        .clickable(onClick = onWant)
-                        .padding(vertical = 13.dp),
-                    color = if (saved) ink else Color.White,
-                    fontSize = 14.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center
-                )
-                Text(
-                    if (book.publicDomain) "Read / Get Book" else "Get Book",
-                    Modifier.weight(1f).clip(RoundedCornerShape(16.dp))
-                        .background(Color(0x44FFFFFF))
-                        .clickable(onClick = onGet)
-                        .padding(vertical = 13.dp),
-                    color = ink, fontSize = 14.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center
-                )
+                GlassSurface(
+                    palette,
+                    Modifier.weight(1f),
+                    shape = RoundedCornerShape(18.dp),
+                    fill = if (saved) palette.glass else palette.accent,
+                    onClick = onWant
+                ) {
+                    Text(
+                        if (saved) "Saved" else "Want to Read",
+                        color = if (saved) ink else palette.accentInk,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp)
+                    )
+                }
+                GlassSurface(
+                    palette,
+                    Modifier.weight(1f),
+                    shape = RoundedCornerShape(18.dp),
+                    onClick = onGet
+                ) {
+                    Text(
+                        if (book.publicDomain) "Read / Get Book" else "Get Book",
+                        color = ink,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp)
+                    )
+                }
             }
         }
     }

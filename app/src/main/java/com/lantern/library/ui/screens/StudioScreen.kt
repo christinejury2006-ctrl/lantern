@@ -34,17 +34,14 @@ import com.lantern.library.studio.PageKind
 import com.lantern.library.studio.WebBlockType
 import com.lantern.library.studio.WebDraft
 import com.lantern.library.studio.WebPhase
-import com.lantern.library.ui.components.RoomBackdrop
 import com.lantern.library.ui.components.CoverFace
 import com.lantern.library.ui.components.GlassCard
-import com.lantern.library.ui.components.MiniShelf
-import com.lantern.library.ui.components.Spine
-import com.lantern.library.ui.theme.Coral
-import com.lantern.library.ui.theme.Ink
-import com.lantern.library.ui.theme.InkSoft
-import com.lantern.library.ui.theme.NightText
-import com.lantern.library.ui.theme.Parchment
+import com.lantern.library.ui.components.GlassSurface
+import com.lantern.library.ui.components.NookBackdrop
+import com.lantern.library.ui.components.NookProgress
+import com.lantern.library.ui.theme.NookPalette
 import com.lantern.library.ui.theme.Playfair
+import com.lantern.library.ui.theme.nookPalette
 
 @Composable
 fun StudioScreen(
@@ -74,12 +71,12 @@ fun StudioScreen(
     onMoveCollect: (String, Int) -> Unit,
     onFetchCollection: () -> Unit
 ) {
-    val dark = theme == ReaderTheme.DARK
-    // the backdrop is now a warm room, so text is parchment either way
-    val ink = Parchment
-    val mute = Color(0xFFC9B79F)
+    val palette = nookPalette(theme)
+    val dark = palette.dark
+    val ink = palette.ink
+    val mute = palette.mute
     val filePhase = session?.phase ?: StudioPhase.Idle
-    RoomBackdrop(dark) {
+    NookBackdrop(palette) {
         Column(
             Modifier
                 .fillMaxSize()
@@ -105,25 +102,9 @@ fun StudioScreen(
                     GlassCard(Modifier.fillMaxWidth().padding(top = 14.dp).clickable(onClick = onAddFile), dark, 18) {
                         Text("Add EPUB or PDF", color = ink, fontSize = 15.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp))
                     }
-                    // Books this Studio has made live on a little shelf of their own.
+                    // Books this Studio has made, on a little shelf of their own.
                     Spacer(Modifier.height(18.dp))
-                    MiniShelf(
-                        spines = studioBooks.map { book ->
-                            Spine(
-                                id = book.id,
-                                title = book.title,
-                                author = book.author,
-                                pages = book.pageCount,
-                                progress = book.progress,
-                                coverRes = book.localCover,
-                                coverUrl = book.remoteCover
-                            )
-                        },
-                        dark = dark,
-                        onOpen = { spine ->
-                            studioBooks.firstOrNull { it.id == spine.id }?.let(onOpenBook)
-                        }
-                    )
+                    StudioShelf(studioBooks, palette, onOpenBook)
                 }
             }
         }
@@ -152,7 +133,7 @@ private fun WebEntry(dark: Boolean, ink: Color, mute: Color, onAnalyze: (String)
         }
     }
     GlassCard(Modifier.fillMaxWidth().padding(top = 10.dp).clickable(enabled = url.isNotBlank()) { onAnalyze(url) }, dark, 18) {
-        Text("Analyze page", color = if (url.isNotBlank()) Coral else mute, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
+        Text("Analyze page", color = if (url.isNotBlank()) palette.accent else mute, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
     }
 }
 
@@ -189,7 +170,7 @@ private fun WebPane(
             CancelRow(dark, ink, mute, false, onCancel)
         }
         WebPhase.Failed -> {
-            Text(web.error ?: "Could not analyze that page.", color = Coral, fontSize = 14.sp, modifier = Modifier.padding(top = 20.dp))
+            Text(web.error ?: "Could not analyze that page.", color = palette.accent, fontSize = 14.sp, modifier = Modifier.padding(top = 20.dp))
             CancelRow(dark, ink, mute, false, onCancel)
         }
         WebPhase.Meta -> MetaPane(web, dark, ink, mute, onSaveMeta, onCancel)
@@ -209,7 +190,7 @@ private fun WebPane(
                 val on = ch.id == web.open?.id
                 Text(
                     "$mark  ${ch.title}",
-                    color = if (on) Coral else ink,
+                    color = if (on) palette.accent else ink,
                     fontSize = 15.sp,
                     modifier = Modifier.fillMaxWidth().clickable { onOpenChapter(ch.id) }.padding(vertical = 6.dp)
                 )
@@ -222,7 +203,7 @@ private fun WebPane(
                             Text(g.label, color = ink, fontSize = 14.sp)
                             Text(g.reason, color = mute, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
                             Row(Modifier.padding(top = 8.dp)) {
-                                Text("Keep", color = Coral, fontSize = 14.sp, modifier = Modifier.clickable { onFollowPossible(g.id) }.padding(end = 18.dp, top = 4.dp, bottom = 4.dp))
+                                Text("Keep", color = palette.accent, fontSize = 14.sp, modifier = Modifier.clickable { onFollowPossible(g.id) }.padding(end = 18.dp, top = 4.dp, bottom = 4.dp))
                                 Text("Ignore", color = ink, fontSize = 14.sp, modifier = Modifier.clickable { onIgnorePossible(g.id) }.padding(top = 4.dp, bottom = 4.dp))
                             }
                         }
@@ -259,7 +240,7 @@ private fun WebPane(
                         if (c.type == WebBlockType.Text) Text(c.text.take(400), color = ink, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
                         else CoverFace("Maybe content", null, c.localPath ?: c.imageUrl, Modifier.fillMaxWidth().padding(top = 8.dp).aspectRatio(0.75f), dark)
                         Row(Modifier.padding(top = 10.dp)) {
-                            Text("Keep", color = Coral, fontSize = 14.sp, modifier = Modifier.clickable { onKeep(c.id) }.padding(end = 18.dp, top = 4.dp, bottom = 4.dp))
+                            Text("Keep", color = palette.accent, fontSize = 14.sp, modifier = Modifier.clickable { onKeep(c.id) }.padding(end = 18.dp, top = 4.dp, bottom = 4.dp))
                             Text("Remove", color = ink, fontSize = 14.sp, modifier = Modifier.clickable { onRemove(c.id) }.padding(top = 4.dp, bottom = 4.dp))
                         }
                     }
@@ -269,7 +250,7 @@ private fun WebPane(
             GlassCard(Modifier.fillMaxWidth().padding(top = 18.dp).clickable(onClick = onBeginMeta), dark, 18) {
                 Text(
                     if (pending > 0) "Decide Unsure items first" else "Continue",
-                    color = if (pending > 0) mute else Coral,
+                    color = if (pending > 0) mute else palette.accent,
                     fontSize = 16.sp,
                     modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp)
                 )
@@ -297,7 +278,7 @@ private fun CollectPane(
     Text("Choose which pages to include, then continue.", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
     Text("$n of ${web.collection.size} selected", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
     Row(Modifier.padding(top = 12.dp)) {
-        Text("Select all", color = Coral, fontSize = 14.sp, modifier = Modifier.clickable { onSelectAll(true) }.padding(end = 18.dp, top = 4.dp, bottom = 4.dp))
+        Text("Select all", color = palette.accent, fontSize = 14.sp, modifier = Modifier.clickable { onSelectAll(true) }.padding(end = 18.dp, top = 4.dp, bottom = 4.dp))
         Text("Deselect all", color = ink, fontSize = 14.sp, modifier = Modifier.clickable { onSelectAll(false) }.padding(top = 4.dp, bottom = 4.dp))
     }
     FieldLabel("Pages", mute)
@@ -307,7 +288,7 @@ private fun CollectPane(
                 Row(Modifier.fillMaxWidth()) {
                     Text(
                         if (pick.selected) "✓" else "○",
-                        color = if (pick.selected) Coral else mute,
+                        color = if (pick.selected) palette.accent else mute,
                         fontSize = 18.sp,
                         modifier = Modifier.clickable { onToggle(pick.id) }.padding(end = 10.dp)
                     )
@@ -324,7 +305,7 @@ private fun CollectPane(
         }
     }
     GlassCard(Modifier.fillMaxWidth().padding(top = 10.dp).clickable(enabled = n > 0, onClick = onFetch), dark, 18) {
-        Text("Continue", color = if (n > 0) Coral else mute, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
+        Text("Continue", color = if (n > 0) palette.accent else mute, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
     }
     CancelRow(dark, ink, mute, false, onCancel)
 }
@@ -371,12 +352,12 @@ private fun MetaPane(
     Text("${web.chapters.size} chapters", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 14.dp))
     Text(
         if (images) "Images" else "Text",
-        color = Coral,
+        color = palette.accent,
         fontSize = 14.sp,
         modifier = Modifier.padding(top = 8.dp).clickable { images = !images }
     )
     GlassCard(Modifier.fillMaxWidth().padding(top = 18.dp).clickable { onSaveMeta(title, author, series, images) }, dark, 18) {
-        Text("Continue", color = Coral, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
+        Text("Continue", color = palette.accent, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
     }
     CancelRow(dark, ink, mute, false, onCancel)
 }
@@ -402,12 +383,12 @@ private fun CoverPane(
                 Modifier.width(120.dp).aspectRatio(0.68f).padding(bottom = 10.dp).clickable { onSelectCover(c.id) },
                 dark
             )
-            Text(if (on) "Selected · ${c.label}" else c.label, color = if (on) Coral else mute, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
+            Text(if (on) "Selected · ${c.label}" else c.label, color = if (on) palette.accent else mute, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
         }
         Text("Continue without cover", color = mute, fontSize = 13.sp, modifier = Modifier.clickable { onSelectCover(null) }.padding(vertical = 8.dp))
     }
     GlassCard(Modifier.fillMaxWidth().padding(top = 12.dp).clickable(onClick = onCompile), dark, 18) {
-        Text("Compile book", color = Coral, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
+        Text("Compile book", color = palette.accent, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
     }
     CancelRow(dark, ink, mute, false, onCancel)
 }
@@ -428,10 +409,10 @@ private fun PreviewPane(
     Text(web.author.ifBlank { "Unknown author" }, color = mute, fontSize = 14.sp)
     Text("${web.chapters.size} chapters", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
     GlassCard(Modifier.fillMaxWidth().padding(top = 20.dp).clickable(onClick = onPreview), dark, 18) {
-        Text("Preview / Open", color = Coral, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
+        Text("Preview / Open", color = palette.accent, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
     }
     GlassCard(Modifier.fillMaxWidth().padding(top = 10.dp).clickable(onClick = onAddLibrary), dark, 18) {
-        Text("Add to Library", color = Coral, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
+        Text("Add to Library", color = palette.accent, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
     }
     CancelRow(dark, ink, mute, false, onCancel)
 }
@@ -466,7 +447,7 @@ private fun FileReviewCard(
     Text("$formatLabel  ·  ${session.pageCount} pages", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 14.dp))
     val canSend = session.workingPath != null && !busy
     GlassCard(Modifier.fillMaxWidth().padding(top = 22.dp).clickable(enabled = canSend) { onSend(title, author) }, dark, 18) {
-        Text(if (busy) "Adding…" else "Send to Library", color = if (canSend) Coral else mute, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
+        Text(if (busy) "Adding…" else "Send to Library", color = if (canSend) palette.accent else mute, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp))
     }
     CancelRow(dark, ink, mute, busy, onCancel)
 }
@@ -481,4 +462,62 @@ private fun CancelRow(dark: Boolean, ink: Color, mute: Color, busy: Boolean, onC
 @Composable
 private fun FieldLabel(text: String, mute: Color) {
     Text(text, color = mute, fontSize = 12.sp, modifier = Modifier.padding(top = 14.dp, bottom = 6.dp))
+}
+
+/**
+ * The Studio's own shelf: only the books Studio made.
+ *
+ * Studio is how a reader turns a web page into a book, so the things it has produced need to be
+ * findable without hunting through the library. Three across, covers and progress, the same
+ * language as the nook.
+ */
+@Composable
+private fun StudioShelf(
+    books: List<LibraryBook>,
+    palette: NookPalette,
+    onOpen: (LibraryBook) -> Unit
+) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Made here", color = palette.ink, fontFamily = Playfair, fontSize = 16.sp, modifier = Modifier.weight(1f))
+            Text("${books.size} book${if (books.size == 1) "" else "s"}", color = palette.mute, fontSize = 11.sp)
+        }
+        if (books.isEmpty()) {
+            GlassSurface(palette, Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) {
+                Text(
+                    "Books you make will stand here.",
+                    color = palette.mute,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(16.dp)
+                )
+            }
+            return@Column
+        }
+        books.chunked(3).forEach { row ->
+            Row(
+                Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                row.forEach { book ->
+                    Column(Modifier.weight(1f)) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(0.72f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { onOpen(book) }
+                        ) {
+                            CoverFace(
+                                book.title, book.localCover, book.remoteCover,
+                                Modifier.fillMaxSize(), palette.dark
+                            )
+                        }
+                        Spacer(Modifier.height(5.dp))
+                        NookProgress(book.progress, palette)
+                    }
+                }
+                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+    }
 }

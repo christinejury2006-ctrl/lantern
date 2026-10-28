@@ -4,11 +4,21 @@ Native Android reader **and** a browser demo. Version **3.5.0**.
 
 ## What it does
 
-- **Library** — your books on a shelf, plus daily *For You* picks and a *Continue reading* shelf.
-- **Reader** — EPUB and PDF with a real page turn, bookmarks, themes and reading fonts.
+The app is **The Reading Nook**: a warm room with glass panels, in a daylight and a night voice.
+
+- **Home** — the nook. Your shelf as covers with your place under each one, Editor's Choice
+  standing in coloured light, and the book club.
+- **Explore** — search Google Books with a public-domain fallback, plus trending and recent
+  searches; public-domain titles download straight into the reader.
+- **Library** — every book you own, three across, with progress. Long-press to remove.
+- **Reader** — EPUB and PDF with a page turn, bookmarks, page themes and reading fonts.
+- **You** — account and sync, appearance, and reading interests.
 - **Studio** — paste one web page and turn a serialised story into a proper EPUB you can keep.
-- **Explore** — search Project Gutenberg's public-domain catalogue and download straight into the reader.
-- **You** — appearance, interests and optional Google Drive sync for library, progress and settings.
+  Reached from the sparkle button in the nook's masthead.
+
+Sync is optional and two-part: Firestore holds the library, reading progress, bookmarks and
+settings, and Google Drive's private application folder (`drive.appdata`) holds the EPUB and PDF
+files, so a reinstall can restore and open your books. Nothing leaves the phone until you sign in.
 
 ## Test in the browser (GitHub Pages)
 

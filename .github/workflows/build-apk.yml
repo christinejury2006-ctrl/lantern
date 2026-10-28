@@ -23,34 +23,6 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      # The shelf's PBR materials are compiled here, with Filament's own matc, and shipped as
-      # bytes in the APK. Compiling them on the phone was the flaw: a material that fails to
-      # compile there takes the whole scene with it, and the device has no way to tell anyone
-      # which line it choked on. matc fails the build instead.
-      - name: Compile the shelf materials
-        run: |
-          # pipefail, or bash reports tee's status and a failing compiler looks like a pass.
-          # That is how an empty materials directory reached an APK and a phone.
-          set -o pipefail
-          ./tools/compile-materials.sh 2>&1 | tee material-compile.log
-
-      # The runner's log lives on a host that cannot always be reached from where this is
-      # debugged, so the compiler's own words are posted as a commit comment as well.
-      - name: Report a material that would not compile
-        if: failure()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          {
-            echo "The shelf's materials did not compile, so the shelf would not have started."
-            echo '```'
-            tail -n 60 material-compile.log 2>/dev/null || echo "no compiler output captured"
-            echo '```'
-          } > material-failure.md
-          gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
-            -F body=@material-failure.md >/dev/null 2>&1 || true
-          echo "::error title=Materials failed::See the commit comment for matc's output."
-
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -172,62 +144,31 @@ jobs:
           "$ANDROID_HOME"/build-tools/34.0.0/apksigner verify --print-certs "$apk" \
             | head -3 | tr '\n' '|' | xargs -I{} echo "::notice title=APK signer::{}"
 
-      # The shelf draws with Filament, which is a native engine: the JNI libraries must be in
-      # the APK or the first engine call dies with UnsatisfiedLinkError. This checks both are
-      # present for the ABI the phone actually runs, and reports the ABI split so a silently
-      # missing arm64 slice is visible rather than suspected.
-      - name: Check the APK ships Filament's native libraries
+      # The reader opens PDFs with pdfium, which is native: its .so must be in the APK or the
+      # first PDF dies with UnsatisfiedLinkError.
+      - name: Check the APK ships the PDF engine
         run: |
           apk=app/build/outputs/apk/debug/lore-debug.apk
           echo "Native libraries in $apk:"
           unzip -l "$apk" | grep -E '\.so$' | awk '{print $4}' | sort || echo "(none)"
-          missing=0
-          for lib in libfilament-jni.so libfilamat-jni.so; do
+          for lib in libpdfium.so libc++_shared.so; do
             if unzip -l "$apk" | grep -qE "lib/(arm64-v8a|armeabi-v7a|x86_64)/$lib"; then
               echo "OK: $lib is packaged"
             else
-              echo "::error title=Missing engine library::$lib is not in the APK, so the shelf cannot start."
-              missing=1
+              echo "::error title=Missing engine library::$lib is not in the APK, so PDFs cannot open."
+              exit 1
             fi
           done
-          if [ "$missing" -ne 0 ]; then exit 1; fi
-
-      # The shelf asks for these by material name. A build that ships book.filamat when the app
-      # wants book_pbr.filamat looks completely healthy and then refuses to start on the phone,
-      # which is exactly what happened — so the file names are checked in the APK itself.
-      - name: Check the APK carries the compiled materials
-        id: materials
-        run: |
-          apk=app/build/outputs/apk/debug/lore-debug.apk
-          {
-            echo "workspace: $(pwd)"
-            echo "generated materials on disk:"
-            ls -l app/src/main/assets/materials || echo "(no such directory)"
-            echo "assets in the APK:"
-            unzip -l "$apk" | grep -E 'assets/' | head -20 || echo "(no assets at all)"
-          } > material-report.txt
-          cat material-report.txt
-          missing=0
-          for name in book_pbr wood_pbr; do
-            if unzip -l "$apk" | grep -qE "assets/materials/$name\.filamat"; then
-              echo "OK: $name.filamat is packaged"
-            else
-              echo "::error title=Missing material::assets/materials/$name.filamat is not in the APK, so the shelf cannot start."
-              missing=1
-            fi
-          done
-          if [ "$missing" -ne 0 ]; then exit 1; fi
 
       # R8 is the one step that can turn a working build into an APK that dies on the phone: it
-      # renames classes and strips fields it cannot prove are used, while Filament's C++ side
-      # looks its own Java classes and their native pointers up by name. So the real, minified
-      # release APK is assembled on every push, and the DEX is read back afterwards. A missing
-      # keep rule fails here, in the build, instead of shipping an APK whose shelf dies with
-      # UnsatisfiedLinkError on first frame.
-      - name: Build the minified release APK and check R8 kept Filament intact
+      # renames classes and strips fields it cannot prove are used, while pdfium's C++ side looks
+      # its own Java classes and their native pointers up by name. So the real, minified release
+      # APK is assembled on every push and its DEX read back; a missing keep rule fails here.
+      - name: Build the minified release APK and check R8 kept the native bridge
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOOGLE_BOOKS_API_KEY: ${{ secrets.GOOGLE_BOOKS_API_KEY }}
+          FIREBASE_WEB_CLIENT_ID: ${{ secrets.FIREBASE_WEB_CLIENT_ID }}
           LORE_BUILD_NUMBER: ${{ github.run_number }}
         run: |
           chmod +x gradlew
@@ -264,37 +205,26 @@ jobs:
           for dex in dexcheck/classes*.dex; do "$dexdump" -f "$dex" >> "$dump" 2>/dev/null; done
 
           missing=0
-          for cls in Engine Renderer Scene View Camera LightManager RenderableManager \
-                     VertexBuffer IndexBuffer Material MaterialInstance Texture TextureSampler \
-                     IndirectLight EntityManager Filament Box SwapChain; do
-            if grep -q "Lcom/google/android/filament/$cls;" "$dump"; then
-              echo "OK: com.google.android.filament.$cls kept its name"
+          for cls in com/shockwave/pdfium/PdfiumCore com/shockwave/pdfium/PdfDocument \
+                     com/google/firebase/auth/FirebaseAuth \
+                     com/google/firebase/firestore/FirebaseFirestore; do
+            if grep -q "L$cls;" "$dump"; then
+              echo "OK: $cls kept its name"
             else
-              echo "::error title=R8 renamed Filament::com.google.android.filament.$cls is missing or obfuscated; the shelf cannot start."
+              echo "::error title=R8 stripped a class the app needs::$cls is missing from the release DEX."
               missing=$((missing + 1))
             fi
           done
-          # The pointer field is the other half of the bridge: the native side reads it by name.
-          if grep -q "mNativeObject" "$dump"; then
-            echo "OK: mNativeObject survives"
-          else
-            echo "::error title=R8 stripped the native pointer::mNativeObject is gone; every engine call would dereference nothing."
-            missing=$((missing + 1))
-          fi
           if [ "$missing" -ne 0 ]; then
             {
-              echo "R8 broke the bridge to Filament's C++ in the release APK. Add or fix a keep rule"
-              echo "in app/proguard-rules.pro; -keep class com.google.android.filament.** { *; } is"
-              echo "the one that matters."
-              echo '```'
-              grep -c "Class descriptor" "$dump" 2>/dev/null | sed 's/^/classes in the release DEX: /'
-              echo '```'
+              echo "R8 broke something the release APK needs. Add or fix a keep rule in"
+              echo "app/proguard-rules.pro; the pdfium block is the one that keeps the reader alive."
             } > release-keep.md
             gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
               -F body=@release-keep.md >/dev/null 2>&1 || true
             exit 1
           fi
-          echo "::notice title=Release APK::R8 kept Filament intact; $(du -h "$apk" | cut -f1) minified release APK."
+          echo "::notice title=Release APK::R8 kept the native bridge; $(du -h "$apk" | cut -f1) minified release APK."
 
       - name: Upload the minified release APK
         uses: actions/upload-artifact@v4
@@ -302,20 +232,6 @@ jobs:
           name: Lore-release-minified
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: warn
-
-      - name: Report a missing material
-        if: failure()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          {
-            echo "The APK did not carry the compiled materials."
-            echo '```'
-            head -c 20000 material-report.txt 2>/dev/null || echo "no report captured"
-            echo '```'
-          } > material-missing.md
-          gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
-            -F body=@material-missing.md >/dev/null 2>&1 || true
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4

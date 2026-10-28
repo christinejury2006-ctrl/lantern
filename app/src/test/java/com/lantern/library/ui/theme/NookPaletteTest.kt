@@ -78,6 +78,32 @@ class NookPaletteTest {
     }
 
     @Test
+    fun `the reader's page is readable and is not the room`() {
+        // The reader paints its page from the palette, and a page is paper, not backdrop. Two
+        // things have to hold: the type is comfortable on it, and it is visibly a page rather
+        // than the rose of the room showing through.
+        for ((name, palette) in palettes()) {
+            val ratio = contrast(palette.ink, palette.page)
+            assertTrue("$name: type on the page is only ${"%.1f".format(ratio)}:1", ratio >= 7f)
+        }
+        // In daylight the page is paper lying on the rose room, so it is the brighter of the two;
+        // at night it merges into the room, which is what a page at 2 a.m. should do.
+        val light = nookPalette(ReaderTheme.LIGHT)
+        assertTrue(
+            "the day page is darker than the room behind it",
+            light.page.luminance() >= light.backdrop.first().luminance()
+        )
+    }
+
+    @Test
+    fun `a night page is dark and a day page is light`() {
+        val light = nookPalette(ReaderTheme.LIGHT).page
+        val dark = nookPalette(ReaderTheme.DARK).page
+        assertTrue("the day page is not light", light.luminance() > 0.85f)
+        assertTrue("the night page is not dark", dark.luminance() < 0.05f)
+    }
+
+    @Test
     fun `the two voices are actually different`() {
         // A regression that made both palettes the same would pass every contrast check above.
         val light = nookPalette(ReaderTheme.LIGHT)

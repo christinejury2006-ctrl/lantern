@@ -120,13 +120,9 @@ import com.lantern.library.ui.components.AppearanceLayer
 import com.lantern.library.ui.components.LeafPager
 import com.lantern.library.ui.components.readerChromeBar
 import com.lantern.library.ui.components.readerChromePanel
-import com.lantern.library.ui.theme.Ink
-import com.lantern.library.ui.theme.LoreMint
-import com.lantern.library.ui.theme.LoreOnMint
-import com.lantern.library.ui.theme.NightText
-import com.lantern.library.ui.theme.Paper
+import com.lantern.library.ui.theme.NookPalette
+import com.lantern.library.ui.theme.nookPalette
 import com.lantern.library.ui.theme.Playfair
-import com.lantern.library.ui.theme.SlatePage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
@@ -155,8 +151,15 @@ fun ReaderScreen(
 ) {
     val activity = LocalContext.current as Activity
     val family = LanternFonts.family(prefs.fontId)
-    val dark = prefs.readerTheme == ReaderTheme.DARK
-    val ink = if (dark) NightText else Ink
+    val palette = nookPalette(prefs.readerTheme)
+    val dark = palette.dark
+    // Every colour in the reader comes from the palette now: the page, the type, the bars and
+    // the panels. This is an appearance change only — the reading, the gestures, the menus and
+    // the page turn are exactly as they were.
+    val ink = palette.ink
+    val mute = palette.mute
+    // A recessed control: a chip that is not selected, or a switch's track.
+    val well = if (dark) palette.ink.copy(alpha = 0.10f) else palette.ink.copy(alpha = 0.06f)
     var chrome by remember { mutableStateOf(true) }
     var menu by remember { mutableStateOf(ReaderMenu.None) }
     val bookmarks = remember(book.id) {
@@ -404,14 +407,19 @@ fun ReaderScreen(
         if (menuOpen) closeMenus() else onBack()
     }
 
-    val accent = LoreMint
+    val accent = palette.accent
+    val onAccent = palette.accentInk
     val chromeOp = appearance.look.chromeOpacity
     val chromeBar = readerChromeBar(chromeOp, dark)
     val chromePanel = readerChromePanel(chromeOp, dark)
     val pageTap = Modifier.chromeTap(enabled = !menuOpen, onTap = { toggleChrome() })
 
     AppearanceLayer(appearance.look, dark, contentWash = false) {
-    Box(Modifier.fillMaxSize()) {
+    // Paper under the page. The appearance layer is the reader's own choice and stays exactly
+    // where it was; this only fills in what was missing when no wallpaper is set, so the text
+    // sits on paper rather than on the room's rose gradient. Choose a wallpaper and it shows.
+    val pageModifier = if (appearance.look.hasWallpaper) Modifier else Modifier.background(palette.page)
+    Box(Modifier.fillMaxSize().then(pageModifier)) {
         when {
             !ready -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("Opening…", color = ink, fontFamily = family)
@@ -468,7 +476,7 @@ fun ReaderScreen(
                         page = epubPage,
                         onPage = { epubPage = it },
                         enabled = !menuOpen,
-                        paper = if (dark) SlatePage else Paper,
+                        paper = palette.page,
                         modifier = Modifier.fillMaxSize()
                     ) { i ->
                         key(prefs.fontSizeSp, i) {
@@ -568,10 +576,10 @@ fun ReaderScreen(
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                ColBtn(Icons.Filled.List, "Chapters", ink, selected = menu == ReaderMenu.Chapters) {
+                ColBtn(Icons.Filled.List, "Chapters", palette, selected = menu == ReaderMenu.Chapters) {
                     toggleMenu(ReaderMenu.Chapters)
                 }
-                ColBtn(Icons.Filled.Search, "Navigate", ink, selected = menu == ReaderMenu.Nav) {
+                ColBtn(Icons.Filled.Search, "Navigate", palette, selected = menu == ReaderMenu.Nav) {
                     toggleMenu(ReaderMenu.Nav)
                 }
                 Column(
@@ -581,17 +589,17 @@ fun ReaderScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Box(
-                        Modifier.size(40.dp).clip(RoundedCornerShape(20.dp)).background(Color(0xFF2A2A34)),
+                        Modifier.size(40.dp).clip(RoundedCornerShape(20.dp)).background(well),
                         contentAlignment = Alignment.Center
                     ) {
-                        SunMoonIcon(dark, Color.White, Modifier.size(20.dp))
+                        SunMoonIcon(dark, ink, Modifier.size(20.dp))
                     }
-                    Text(if (dark) "Dark" else "Light", color = Color.White.copy(0.75f), fontSize = 10.sp)
+                    Text(if (dark) "Dark" else "Light", color = mute, fontSize = 10.sp)
                 }
-                ColBtn(Icons.Filled.Settings, "Settings", ink, selected = menu == ReaderMenu.Settings) {
+                ColBtn(Icons.Filled.Settings, "Settings", palette, selected = menu == ReaderMenu.Settings) {
                     toggleMenu(ReaderMenu.Settings)
                 }
-                ColBtn(Icons.Filled.Favorite, "Bookmarks", ink, selected = menu == ReaderMenu.Marks) {
+                ColBtn(Icons.Filled.Favorite, "Bookmarks", palette, selected = menu == ReaderMenu.Marks) {
                     val page = when {
                         prefs.swipeMode -> if (book.format == BookFormat.PDF) pager.currentPage else epubPage
                         book.format == BookFormat.PDF -> pdfList.firstVisibleItemIndex
@@ -645,9 +653,9 @@ fun ReaderScreen(
                         .verticalScroll(rememberScrollState())
                         .padding(16.dp)
                 ) {
-                    Text("Text & Screen Settings", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                    Text("Text & Screen Settings", color = ink, fontSize = 16.sp, fontWeight = FontWeight.Medium)
                     Spacer(Modifier.height(14.dp))
-                    Text("Brightness", color = Color.White.copy(0.85f), fontSize = 13.sp)
+                    Text("Brightness", color = mute, fontSize = 13.sp)
                     Slider(
                         prefs.brightness,
                         { onPrefs(prefs.copy(brightness = it)) },
@@ -656,7 +664,7 @@ fun ReaderScreen(
                     if (book.format == BookFormat.PDF) {
                         Text(
                             "Font size is for EPUB text. PDFs stay as printed.",
-                            color = Color.White.copy(0.7f), fontSize = 12.sp,
+                            color = mute, fontSize = 12.sp,
                             modifier = Modifier.padding(bottom = 8.dp)
                         )
                     } else {
@@ -671,30 +679,30 @@ fun ReaderScreen(
                                 Text(
                                     l,
                                     Modifier.weight(1f).clip(RoundedCornerShape(12.dp))
-                                        .background(if (on) LoreMint else Color(0xFF2A2A34))
+                                        .background(if (on) accent else well)
                                         .clickable { onPrefs(prefs.copy(fontSizeSp = s)) }.padding(10.dp),
-                                    color = if (on) LoreOnMint else Color.White, textAlign = TextAlign.Center
+                                    color = if (on) onAccent else ink, textAlign = TextAlign.Center
                                 )
                             }
                         }
-                        Text("Font", color = Color.White, modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
+                        Text("Font", color = ink, modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
                         LanternFonts.options.forEach { opt ->
                             val on = prefs.fontId == opt.id || (prefs.fontId == "times" && opt.id == "lora")
                             Text(
                                 opt.label,
                                 Modifier.fillMaxWidth().padding(bottom = 4.dp).clip(RoundedCornerShape(12.dp))
-                                    .background(if (on) LoreMint else Color(0xFF2A2A34))
+                                    .background(if (on) accent else well)
                                     .clickable { onPrefs(prefs.copy(fontId = opt.id)) }
                                     .padding(horizontal = 10.dp, vertical = 8.dp),
-                                color = if (on) LoreOnMint else Color.White,
+                                color = if (on) onAccent else ink,
                                 fontSize = 13.sp
                             )
                         }
                     }
-                    Text("Reading Mode", color = Color.White, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
-                    ModeSwitch("Swipe", "Scroll", prefs.swipeMode) { onPrefs(prefs.copy(swipeMode = it)) }
-                    Text("Page Orientation", color = Color.White, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
-                    ModeSwitch("Portrait", "Landscape", !prefs.landscape) { onPrefs(prefs.copy(landscape = !it)) }
+                    Text("Reading Mode", color = ink, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
+                    ModeSwitch("Swipe", "Scroll", prefs.swipeMode, palette) { onPrefs(prefs.copy(swipeMode = it)) }
+                    Text("Page Orientation", color = ink, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
+                    ModeSwitch("Portrait", "Landscape", !prefs.landscape, palette) { onPrefs(prefs.copy(landscape = !it)) }
                     Text(
                         "Appearance",
                         color = accent,
@@ -702,7 +710,7 @@ fun ReaderScreen(
                     )
                     Text(
                         "Reader background only. Library is unchanged.",
-                        color = Color.White.copy(0.7f),
+                        color = mute,
                         fontSize = 12.sp,
                         modifier = Modifier.padding(top = 4.dp)
                     )
@@ -749,10 +757,10 @@ fun ReaderScreen(
                         scrollState.maxValue <= 0 -> 0
                         else -> ((scrollState.value.toFloat() / scrollState.maxValue) * (pageCount - 1).coerceAtLeast(0)).toInt()
                     }
-                    Text("Navigate", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                    Text("Navigate", color = ink, fontSize = 15.sp, fontWeight = FontWeight.Medium)
                     Text(
                         "Page ${at + 1} of $pageCount",
-                        color = Color.White.copy(0.8f), fontSize = 13.sp,
+                        color = mute, fontSize = 13.sp,
                         modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
                     )
                     Slider(
@@ -762,10 +770,10 @@ fun ReaderScreen(
                         colors = SliderDefaults.colors(thumbColor = accent, activeTrackColor = accent)
                     )
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("First", color = Color.White, modifier = Modifier.clickable { go(0) }.padding(8.dp))
-                        Text("Previous", color = Color.White, modifier = Modifier.clickable { go(at - 1) }.padding(8.dp))
-                        Text("Next", color = Color.White, modifier = Modifier.clickable { go(at + 1) }.padding(8.dp))
-                        Text("Last", color = Color.White, modifier = Modifier.clickable { go(pageCount - 1) }.padding(8.dp))
+                        Text("First", color = ink, modifier = Modifier.clickable { go(0) }.padding(8.dp))
+                        Text("Previous", color = ink, modifier = Modifier.clickable { go(at - 1) }.padding(8.dp))
+                        Text("Next", color = ink, modifier = Modifier.clickable { go(at + 1) }.padding(8.dp))
+                        Text("Last", color = ink, modifier = Modifier.clickable { go(pageCount - 1) }.padding(8.dp))
                     }
                 }
             }
@@ -786,19 +794,19 @@ fun ReaderScreen(
                     .verticalScroll(rememberScrollState())
                     .padding(16.dp)
             ) {
-                Text("Chapters", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Text("Chapters", color = ink, fontSize = 15.sp, fontWeight = FontWeight.Medium)
                 val list = toc.filter { it.chapterIndex >= 0 }
                 if (list.isEmpty()) {
                     Text(
                         "No table of contents in this book.",
-                        color = Color.White.copy(0.75f), fontSize = 13.sp,
+                        color = mute, fontSize = 13.sp,
                         modifier = Modifier.padding(top = 8.dp)
                     )
                 } else {
                     list.forEach { entry ->
                         Text(
                             entry.title,
-                            color = Color.White,
+                            color = ink,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { goToChapter(entry.chapterIndex) }
@@ -821,18 +829,18 @@ fun ReaderScreen(
                     )
                     .padding(16.dp)
             ) {
-                Text("Bookmarks", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Text("Bookmarks", color = ink, fontSize = 15.sp, fontWeight = FontWeight.Medium)
                 if (bookmarks.isEmpty()) {
                     Text(
                         "None yet. Open Bookmarks to save this page.",
-                        color = Color.White.copy(0.75f), fontSize = 13.sp,
+                        color = mute, fontSize = 13.sp,
                         modifier = Modifier.padding(top = 8.dp)
                     )
                 } else {
                     bookmarks.distinct().sorted().forEach { p ->
                         Text(
                             "Page ${p + 1}",
-                            color = Color.White,
+                            color = ink,
                             modifier = Modifier.fillMaxWidth().clickable {
                                 go(p)
                                 closeMenus()
@@ -871,7 +879,7 @@ private fun GlassStatus(
         modifier
             .clip(RoundedCornerShape(20.dp))
             .background(readerChromeBar(chrome, dark))
-            .border(1.dp, Color(0x66FFFFFF), RoundedCornerShape(20.dp))
+            .border(1.dp, nookPalette(dark).glassEdge, RoundedCornerShape(20.dp))
             .padding(horizontal = 12.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -891,6 +899,7 @@ private fun BatteryGlyph(percent: Int, charging: Boolean, tint: Color, modifier:
         drawRoundRect(color = tint, size = body, cornerRadius = CornerRadius(2.dp.toPx()), style = Stroke(1.2.dp.toPx()))
         drawRect(color = tint, topLeft = Offset(body.width, h * 0.28f), size = Size(w * 0.14f, h * 0.44f))
         val fill = ((body.width - 3.dp.toPx()) * (percent / 100f)).coerceAtLeast(0f)
+        // Charging is a device state, not a theme colour: it stays green in both voices.
         val fillColor = if (charging) Color(0xFF8FDFB0) else tint
         if (fill > 0f) {
             drawRoundRect(
@@ -935,25 +944,32 @@ private fun SunMoonIcon(dark: Boolean, tint: Color, modifier: Modifier) {
 }
 
 @Composable
-private fun ModeSwitch(left: String, right: String, leftOn: Boolean, onLeft: (Boolean) -> Unit) {
+private fun ModeSwitch(
+    left: String,
+    right: String,
+    leftOn: Boolean,
+    palette: NookPalette,
+    onLeft: (Boolean) -> Unit
+) {
+    val well = if (palette.dark) palette.ink.copy(alpha = 0.10f) else palette.ink.copy(alpha = 0.06f)
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color(0xFF1C1C24)).padding(4.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(well).padding(4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
             left,
             Modifier.weight(1f).clip(RoundedCornerShape(14.dp))
-                .background(if (leftOn) LoreMint else Color.Transparent)
+                .background(if (leftOn) palette.accent else Color.Transparent)
                 .clickable { onLeft(true) }.padding(vertical = 10.dp),
-            color = if (leftOn) LoreOnMint else Color.White.copy(0.7f),
+            color = if (leftOn) palette.accentInk else palette.mute,
             textAlign = TextAlign.Center, fontSize = 13.sp
         )
         Text(
             right,
             Modifier.weight(1f).clip(RoundedCornerShape(14.dp))
-                .background(if (!leftOn) LoreMint else Color.Transparent)
+                .background(if (!leftOn) palette.accent else Color.Transparent)
                 .clickable { onLeft(false) }.padding(vertical = 10.dp),
-            color = if (!leftOn) LoreOnMint else Color.White.copy(0.7f),
+            color = if (!leftOn) palette.accentInk else palette.mute,
             textAlign = TextAlign.Center, fontSize = 13.sp
         )
     }
@@ -963,11 +979,11 @@ private fun ModeSwitch(left: String, right: String, leftOn: Boolean, onLeft: (Bo
 private fun ColBtn(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
-    tint: Color,
+    palette: NookPalette,
     selected: Boolean = false,
     onClick: () -> Unit
 ) {
-    val well = Color(0xFF2A2A34)
+    val well = if (palette.dark) palette.ink.copy(alpha = 0.10f) else palette.ink.copy(alpha = 0.06f)
     Column(
         Modifier.clickable(onClick = onClick).padding(4.dp, 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -977,12 +993,12 @@ private fun ColBtn(
                 .size(40.dp)
                 .clip(RoundedCornerShape(20.dp))
                 .background(well)
-                .then(if (selected) Modifier.border(2.dp, LoreMint, RoundedCornerShape(20.dp)) else Modifier),
+                .then(if (selected) Modifier.border(2.dp, palette.accent, RoundedCornerShape(20.dp)) else Modifier),
             contentAlignment = Alignment.Center
         ) {
-            Icon(icon, label, tint = if (selected) LoreMint else Color.White, modifier = Modifier.size(20.dp))
+            Icon(icon, label, tint = if (selected) palette.accent else palette.ink, modifier = Modifier.size(20.dp))
         }
-        Text(label, color = if (selected) LoreMint else Color.White.copy(0.75f), fontSize = 10.sp, maxLines = 1)
+        Text(label, color = if (selected) palette.accent else palette.mute, fontSize = 10.sp, maxLines = 1)
     }
 }
 

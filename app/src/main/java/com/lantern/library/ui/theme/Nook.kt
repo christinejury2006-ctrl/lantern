@@ -36,6 +36,15 @@ data class NookPalette(
     val aurora: List<Color>,
     /** The card face a book cover sits on when it has no artwork. */
     val coverFallback: Color,
+    /**
+     * The reader's page.
+     *
+     * Not the backdrop: a page is paper, and paper in the nook's daylight is warm white, not the
+     * rose of the room behind it. At night it is not black either — a black page is a screen,
+     * and the point of the reader is that it is not one — so it is a very deep ink-blue that the
+     * white type sits on without the glare a pale page would give at 2 a.m.
+     */
+    val page: Color,
     /** Where a photo of a room would be: the shadow under the bottom bar and cards. */
     val shadow: Color
 )
@@ -63,6 +72,7 @@ private val NookLight = NookPalette(
         Color(0xFFFF9BB8), Color(0xFFB79CFF), Color(0xFF8ED9FF), Color(0xFF9AE6C8)
     ),
     coverFallback = Color(0xFFEADFD8),
+    page = Color(0xFFFFFCF6),
     shadow = Color(0x33513A42)
 )
 
@@ -86,6 +96,7 @@ private val NookDark = NookPalette(
         Color(0xFFFF6FB0), Color(0xFF9C7BFF), Color(0xFF4FD8FF), Color(0xFF6EF0C0)
     ),
     coverFallback = Color(0xFF1E2740),
+    page = Color(0xFF0B1120),
     shadow = Color(0x66000000)
 )
 

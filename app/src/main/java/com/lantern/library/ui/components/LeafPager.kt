@@ -21,6 +21,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -54,6 +55,12 @@ fun LeafPager(
     paper: Color = Color(0xFFF7EFDF),
     pageContent: @Composable (Int) -> Unit
 ) {
+    // The sheet's shading is derived from the sheet's own colour, not painted in cream. A night
+    // page is deep ink-blue, and a cream highlight along its leading edge would read as a lit
+    // strip of another material. `lerp` keeps the curl believable on either kind of paper.
+    val fibre = lerp(paper, Color.Black, 0.34f)
+    val litEdge = lerp(paper, Color.White, 0.55f)
+    val shadedEdge = lerp(paper, Color.Black, 0.22f)
     if (pageCount <= 0) return
 
     val scope = rememberCoroutineScope()
@@ -193,7 +200,7 @@ fun LeafPager(
                     var y = 24f
                     while (y < size.height) {
                         drawLine(
-                            Color(0xFF8A7A5E),
+                            fibre,
                             Offset(0f, y),
                             Offset(size.width, y - 1.5f),
                             strokeWidth = 1f,
@@ -214,8 +221,8 @@ fun LeafPager(
                     drawRect(
                         Brush.horizontalGradient(
                             0f to Color.Transparent,
-                            0.55f to Color(0xFFFFFDF6).copy(alpha = 0.55f),
-                            1f to Color(0xFFD9C8A6).copy(alpha = 0.35f)
+                            0.55f to litEdge.copy(alpha = 0.55f),
+                            1f to shadedEdge.copy(alpha = 0.35f)
                         ),
                         topLeft = Offset(size.width - band, 0f),
                         size = Size(band, size.height)
@@ -234,9 +241,9 @@ fun LeafPager(
                         drawRect(
                             Brush.verticalGradient(
                                 listOf(
-                                    Color(0xFF120C06).copy(alpha = 0.10f * backness),
+                                    fibre.copy(alpha = 0.30f * backness),
                                     Color.Transparent,
-                                    Color(0xFF120C06).copy(alpha = 0.14f * backness)
+                                    fibre.copy(alpha = 0.42f * backness)
                                 )
                             )
                         )

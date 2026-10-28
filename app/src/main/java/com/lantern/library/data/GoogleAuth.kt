@@ -82,6 +82,38 @@ object GoogleAuth {
         }
     }
 
+    /**
+     * The SHA-1 of the certificate this build was actually signed with, formatted the way the
+     * Firebase console wants it (`AB:CD:...`).
+     *
+     * Google rejects the sign-in sheet with error 10 — "this app isn't registered" — when the
+     * Android OAuth client in the Firebase/Cloud project doesn't carry this fingerprint. That is a
+     * console setting, not something code can fix, so instead of a dead end the app reports the
+     * exact fingerprint to paste in. It is read from the APK's own signature, so it is always the
+     * one on the device and can never drift from the keystore CI signed with.
+     */
+    fun signingFingerprint(context: Context): String? = runCatching {
+        val pkg = context.packageName
+        val flags = android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES
+        val signatures = if (android.os.Build.VERSION.SDK_INT >= 28) {
+            context.packageManager.getPackageInfo(pkg, flags)?.signingInfo?.apkContentsSigners
+        } else {
+            @Suppress("DEPRECATION")
+            context.packageManager.getPackageInfo(pkg, android.content.pm.PackageManager.GET_SIGNATURES)
+                ?.signatures
+        }.orEmpty()
+        val cert = signatures.firstOrNull()?.toByteArray() ?: return@runCatching null
+        java.security.MessageDigest.getInstance("SHA-1")
+            .digest(cert)
+            .joinToString(":") { "%02X".format(it) }
+    }.getOrNull()
+
+    /** Package name plus fingerprint, ready to paste into Firebase → Project settings. */
+    fun registrationHint(context: Context): String {
+        val fp = signingFingerprint(context) ?: "unavailable"
+        return "Package: ${context.packageName}\nSHA-1: $fp"
+    }
+
     fun clearToken(context: Context, token: String) {
         runCatching { GoogleAuthUtil.clearToken(context, token) }
     }

@@ -50,6 +50,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -110,7 +114,6 @@ import com.lantern.library.data.BookIo
 import com.lantern.library.data.Chapter
 import com.lantern.library.data.LanternFonts
 import com.lantern.library.data.LibraryBook
-import com.lantern.library.data.Paginator
 import com.lantern.library.data.ReaderPage
 import com.lantern.library.data.TocEntry
 import com.lantern.library.data.ReaderAppearance
@@ -274,10 +277,24 @@ fun ReaderScreen(
         ready = true
     }
 
-    val pages = remember(chapters, prefs.fontSizeSp, book.id) {
-        if (book.format == BookFormat.PDF) emptyList()
-        else Paginator.pages(chapters, prefs.fontSizeSp, book.synopsis.ifBlank { "This book has no text yet." })
+    // Pagination is measured, not estimated: the page box is reported by the pager itself, and
+    // until the first layout pass has run the window size stands in for it so the first frame is
+    // already close. See `PageMeasure.kt` — the old character budget is what clipped the text.
+    val density = LocalDensity.current
+    val config = LocalConfiguration.current
+    var pageBox by remember(book.id) { mutableStateOf(IntSize.Zero) }
+    val estimatedBox = remember(config.screenWidthDp, config.screenHeightDp, density) {
+        with(density) {
+            IntSize(config.screenWidthDp.dp.roundToPx(), config.screenHeightDp.dp.roundToPx())
+        }
     }
+    val pages = rememberMeasuredPages(
+        chapters = chapters,
+        fallback = book.synopsis.ifBlank { "This book has no text yet." },
+        family = family,
+        fontSizeSp = prefs.fontSizeSp,
+        pageBox = if (pageBox.width > 0 && pageBox.height > 0) pageBox else estimatedBox
+    )
     val pageCount = if (book.format == BookFormat.PDF) pdfCount else pages.size.coerceAtLeast(1)
     val pager = rememberPagerState(
         initialPage = book.currentPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0)),
@@ -287,6 +304,11 @@ fun ReaderScreen(
     // not by a pager, so the reader owns the current page here.
     var epubPage by remember(book.id) {
         mutableStateOf(book.currentPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0)))
+    }
+    // A re-pagination (font size change, rotation, a different screen) can leave the remembered
+    // page index past the end of the book. Clamp it rather than showing a blank leaf.
+    LaunchedEffect(pageCount) {
+        if (epubPage > pageCount - 1) epubPage = (pageCount - 1).coerceAtLeast(0)
     }
     val scrollState = rememberScrollState()
     val pdfList = rememberLazyListState(
@@ -477,7 +499,7 @@ fun ReaderScreen(
                         onPage = { epubPage = it },
                         enabled = !menuOpen,
                         paper = palette.page,
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier.fillMaxSize().onSizeChanged { pageBox = it }
                     ) { i ->
                         key(prefs.fontSizeSp, i) {
                             PageLeaf(
@@ -1004,7 +1026,14 @@ private fun ColBtn(
 
 @Composable
 private fun PageLeaf(page: ReaderPage?, family: FontFamily, size: Float, ink: Color, modifier: Modifier) {
-    Column(modifier.padding(26.dp, 88.dp, 26.dp, 80.dp)) {
+    Column(
+        modifier.padding(
+            start = PagePadHorizontal,
+            top = PagePadTop,
+            end = PagePadHorizontal,
+            bottom = PagePadBottom
+        )
+    ) {
         if (page == null) {
             Text("…", color = ink, fontFamily = family)
             return
@@ -1014,15 +1043,27 @@ private fun PageLeaf(page: ReaderPage?, family: FontFamily, size: Float, ink: Co
                 page.chapterTitle, color = ink, fontFamily = family, fontSize = (size + 10).sp,
                 modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center
             )
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(PageTitleGap))
         }
-        page.paragraphs.forEachIndexed { i, para ->
-            if (i == 0 && page.showChapterTitle) Drop(para, family, size, ink)
-            else Text(
-                para, color = ink, fontFamily = family, fontSize = size.sp,
-                lineHeight = (size * 1.55f).sp, modifier = Modifier.padding(bottom = 12.dp)
-            )
-        }
+        // A page is a block of text, not a column of lines: the paragraphs flow into one
+        // justified measure rather than each starting a new, ragged line at the left edge. The
+        // old layout stacked every paragraph as its own Text, and on a page where the paginator
+        // had put a line or two in each, that read as one short line per paragraph — which is
+        // what the "text overflowing the page" screenshot actually was.
+        Text(
+            text = buildAnnotatedString {
+                page.paragraphs.forEachIndexed { i, para ->
+                    if (i > 0) append("\n\n")
+                    append(para.trim())
+                }
+            },
+            color = ink,
+            fontFamily = family,
+            fontSize = size.sp,
+            lineHeight = (size * 1.55f).sp,
+            textAlign = TextAlign.Justify,
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }
 

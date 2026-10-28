@@ -8,7 +8,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.lantern.library.data.StartupTrace
-import kotlin.concurrent.thread
 
 class MainActivity : ComponentActivity() {
     @Volatile
@@ -25,12 +24,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         StartupTrace.mark("super.onCreate")
 
-        thread(name = "LorePoster", isDaemon = true) {
-            LorePoster.decode(applicationContext)
-        }
-
         val handoff = View(this)
-        handoff.setBackgroundColor(Color.parseColor("#C8A1F3"))
+        handoff.setBackgroundColor(Color.parseColor("#FFF7F1"))
         setContentView(handoff)
         StartupTrace.mark("native setContentView")
 

@@ -52,14 +52,22 @@ data class NookPalette(
 /** The Reading Nook, in daylight: cream, rose light, and glass with a white edge. */
 private val NookLight = NookPalette(
     dark = false,
-    backdrop = listOf(Color(0xFFFFF7F1), Color(0xFFFBE9E7), Color(0xFFF6E3EA)),
+    // Daylight is where the colour has to be carried by hue rather than brightness: the room is
+    // already near-white, so the gradient moves cream → peach → rose-lilac instead of getting
+    // darker. Every stop still has to clear the contrast promises in `NookPaletteTest`, which is
+    // why the last one stops at roughly 0.81 luminance rather than going fully rose.
+    backdrop = listOf(Color(0xFFFFF8F2), Color(0xFFFDEAE4), Color(0xFFF7E4EC)),
     bokeh = listOf(
-        Color(0xFFFFD9BE), Color(0xFFFFC7D2), Color(0xFFD9F0E4),
-        Color(0xFFFFE9C7), Color(0xFFE9DDFF)
+        Color(0xFFFFC9A6), Color(0xFFFFB0C4), Color(0xFFB9EBD8),
+        Color(0xFFFFDFA6), Color(0xFFD8C6FF)
     ),
-    glass = Color(0xA6FFFFFF),
-    glassSheen = Color(0x66FFFFFF),
-    glassEdge = Color(0xCCFFFFFF),
+    // Glass in daylight is *less* opaque than it used to be, and the light still shows through it:
+    // the pane reads as a sheet of glass over coloured paper rather than as a white card with a
+    // wash on top. What makes it read is the rim and the specular sweep in `GlassSurface`, not the
+    // fill, so the fill can stay thin.
+    glass = Color(0x99FFFFFF),
+    glassSheen = Color(0x8CFFFFFF),
+    glassEdge = Color(0xE6FFFFFF),
     ink = Color(0xFF35272B),
     mute = Color(0xFF7C6870),
     faint = Color(0xFFAE9AA2),

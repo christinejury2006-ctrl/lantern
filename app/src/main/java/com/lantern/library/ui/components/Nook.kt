@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -74,12 +75,37 @@ fun NookBackdrop(
                 val radius = w * fr
                 drawCircle(
                     brush = Brush.radialGradient(
-                        colors = listOf(color.copy(alpha = if (palette.dark) 0.30f else 0.55f), Color.Transparent),
+                        colors = listOf(color.copy(alpha = if (palette.dark) 0.30f else 0.62f), Color.Transparent),
                         center = center,
                         radius = radius
                     ),
                     radius = radius,
                     center = center
+                )
+            }
+            // Daylight needs a second, wider pass. A near-white room and a few bright spots leaves
+            // a lot of unbroken paper; two enormous aurora-tinted gradients across the opposite
+            // diagonal give the flat middle something to be — which is what the glass panes then
+            // pick up. At night the bokeh is already doing this, so it is skipped there.
+            if (!palette.dark) {
+                val aurora = palette.aurora
+                drawRect(
+                    brush = Brush.linearGradient(
+                        colors = listOf(
+                            aurora[1].copy(alpha = 0.16f),
+                            Color.Transparent,
+                            aurora[2].copy(alpha = 0.14f)
+                        ),
+                        start = Offset(0f, 0f),
+                        end = Offset(w, h)
+                    )
+                )
+                drawRect(
+                    brush = Brush.linearGradient(
+                        colors = listOf(Color.Transparent, aurora[0].copy(alpha = 0.13f), Color.Transparent),
+                        start = Offset(w, 0f),
+                        end = Offset(0f, h)
+                    )
                 )
             }
         }
@@ -107,15 +133,48 @@ fun GlassSurface(
     val base = if (onClick != null) modifier.clip(shape).clickable(onClick = onClick) else modifier
     Box(
         base
+            // The pane has to sit *on* the room, not be printed into it: a lift under each sheet
+            // is the difference between glass and a painted rectangle. Daylight gets the stronger
+            // lift because the room behind it is bright enough that a flat pane disappears.
+            .shadow(
+                elevation = if (palette.dark) 10.dp else 16.dp,
+                shape = shape,
+                clip = false,
+                ambientColor = palette.shadow,
+                spotColor = palette.shadow
+            )
             .clip(shape)
             .background(fill)
+            // Wash one: the light caught along the top edge, as before.
             .background(
                 Brush.verticalGradient(
                     listOf(palette.glassSheen, Color.Transparent),
                     endY = 220f
                 )
             )
-            .border(1.dp, palette.glassEdge, shape),
+            // Wash two: a diagonal specular band. Real glass has one streak across the face where
+            // the window is; without it the pane is evenly lit milk, which is the tell that it is
+            // not glass at all.
+            .background(
+                Brush.linearGradient(
+                    colors = listOf(
+                        Color.Transparent,
+                        palette.glassSheen.copy(alpha = palette.glassSheen.alpha * 0.55f),
+                        Color.Transparent
+                    ),
+                    start = Offset(0f, 0f),
+                    end = Offset(1400f, 700f)
+                )
+            )
+            // The rim is a gradient, not a flat hairline: bright along the lit top edge, falling
+            // away at the bottom where the pane turns out of the light.
+            .border(
+                1.dp,
+                Brush.verticalGradient(
+                    listOf(palette.glassEdge, palette.glassEdge.copy(alpha = 0.28f))
+                ),
+                shape
+            ),
         content = content
     )
 }
@@ -211,7 +270,7 @@ fun NookBottomBar(
             palette,
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
             shape = RoundedCornerShape(30.dp),
-            fill = if (palette.dark) Color(0xCC0E1424) else Color(0xD9FFFFFF)
+            fill = if (palette.dark) Color(0xCC0E1424) else Color(0xC4FFFFFF)
         ) {
             Row(
                 Modifier.fillMaxWidth().padding(vertical = 10.dp, horizontal = 6.dp),

@@ -23,8 +23,10 @@ import androidx.compose.material.icons.filled.Create
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -38,7 +40,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lantern.library.data.CatalogBook
@@ -107,15 +111,44 @@ internal fun LanternRoot(store: LanternStore) {
             if (pickerForStudio) store.studioOpen(uri) else store.importUri(uri)
         } else if (pickerForStudio) store.studioCancelPick()
     }
+    // Error 10 means the console, not the code: the Android OAuth client is missing this build's
+    // signing fingerprint. Rather than a toast the reader can't act on, hold the exact package and
+    // SHA-1 that Google saw so they can be copied straight into Firebase.
+    var registerHint by remember { mutableStateOf<String?>(null) }
+    val clipboard = LocalClipboardManager.current
+    val signInContext = LocalContext.current
     val googleSignIn = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         when (val out = GoogleAuth.parseOutcome(res.data)) {
             is com.lantern.library.data.GoogleSignInOutcome.Ok -> store.onGoogleSignedIn(out.account)
             com.lantern.library.data.GoogleSignInOutcome.Cancelled -> store.toast("Google sign-in cancelled")
-            is com.lantern.library.data.GoogleSignInOutcome.Failed -> store.toast(
-                if (out.code == 10) "Google Sign-In isn't registered for this app yet (error 10)."
-                else "Google sign-in failed (${out.code})"
-            )
+            is com.lantern.library.data.GoogleSignInOutcome.Failed -> if (out.code == 10) {
+                registerHint = GoogleAuth.registrationHint(signInContext)
+            } else {
+                store.toast("Google sign-in failed (${out.code})")
+            }
         }
+    }
+    registerHint?.let { hint ->
+        AlertDialog(
+            onDismissRequest = { registerHint = null },
+            title = { Text("Google Sign-In isn't registered yet") },
+            text = {
+                Text(
+                    "Firebase rejected this build (error 10), so the sign-in sheet never opened. " +
+                        "Add this fingerprint to Firebase → Project settings → Your apps → " +
+                        "com.lantern.library → Add fingerprint, then download a fresh " +
+                        "google-services.json.\n\n$hint"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    clipboard.setText(AnnotatedString(hint))
+                    registerHint = null
+                    store.toast("Copied package + SHA-1")
+                }) { Text("Copy") }
+            },
+            dismissButton = { TextButton(onClick = { registerHint = null }) { Text("Close") } }
+        )
     }
     val driveConsent = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         store.onDriveConsentFinished()

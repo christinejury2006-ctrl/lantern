@@ -4,6 +4,6 @@
         android:type="linear"
         android:angle="270"
         android:startColor="@color/lore_launch_top"
-        android:centerColor="@color/lore_periwinkle"
-        android:endColor="@color/lore_aqua" />
+        android:centerColor="@color/lore_launch_mid"
+        android:endColor="@color/lore_launch_bottom" />
 </shape>

@@ -8,9 +8,11 @@ enum class AppearFill { Solid, Ombre }
 
 data class AppearLook(
     val fill: AppearFill = AppearFill.Ombre,
-    val solidArgb: Long = 0xFFE8B8F4,
-    val ombreStartArgb: Long = 0xFFE8B8F4,
-    val ombreEndArgb: Long = 0xFF6ED4C8,
+    // The nook's room, which is what a look with no choices made yet should be: warm cream to
+    // rose. The old lilac-to-mint defaults are still available as swatches.
+    val solidArgb: Long = 0xFFFFF7F1,
+    val ombreStartArgb: Long = 0xFFFFF7F1,
+    val ombreEndArgb: Long = 0xFFF6E3EA,
     val wallpaperId: String? = null,
     val wallpaperUrl: String? = null,
     val wallpaperOpacity: Float = 0.32f,
@@ -23,26 +25,27 @@ data class AppearLook(
     companion object {
         val libraryDefault = AppearLook(
             fill = AppearFill.Ombre,
-            solidArgb = 0xFFE8B8F4,
-            ombreStartArgb = 0xFFE8B8F4,
-            ombreEndArgb = 0xFF6ED4C8,
+            // The nook's own room: cream to rose, not the old lilac-to-mint.
+            solidArgb = 0xFFFFF7F1,
+            ombreStartArgb = 0xFFFFF7F1,
+            ombreEndArgb = 0xFFF6E3EA,
             wallpaperOpacity = 0.32f,
             overlay = 0.22f
         )
         val readerDefault = AppearLook(
             fill = AppearFill.Ombre,
-            solidArgb = 0xFFEDE4F6,
-            ombreStartArgb = 0xFFE8B8F4,
-            ombreEndArgb = 0xFF6ED4C8,
+            solidArgb = 0xFFFFF8EE,
+            ombreStartArgb = 0xFFFFF8EE,
+            ombreEndArgb = 0xFFF7E9DC,
             wallpaperOpacity = 0.50f,
             overlay = 0.18f,
             chromeOpacity = 0.5f
         )
         val darkDefault = AppearLook(
             fill = AppearFill.Ombre,
-            solidArgb = 0xFF3A4454,
-            ombreStartArgb = 0xFF3E4A5C,
-            ombreEndArgb = 0xFF2B2430,
+            solidArgb = 0xFF0B101F,
+            ombreStartArgb = 0xFF111A31,
+            ombreEndArgb = 0xFF16122A,
             wallpaperOpacity = 0.28f,
             overlay = 0.42f
         )
@@ -104,10 +107,15 @@ object WallpaperCatalog {
         id?.let { want -> items.firstOrNull { it.id == want } }
 }
 
+/**
+ * The swatches the appearance editor offers, in the nook's own order: the room's creams and
+ * roses first, then the deeper night tones, and the old pastels last as an option rather than
+ * the first thing offered.
+ */
 val appearSwatches = listOf(
-    0xFFE8B8F4, 0xFFC9B8F8, 0xFF7EC8E8, 0xFF6ED4C8,
-    0xFFF7F1E8, 0xFFFFF8EE, 0xFFF3E2B8, 0xFFE8A0C0,
-    0xFFE07A6A, 0xFF3A4454, 0xFF4A5668, 0xFF2B2430
+    0xFFFFF7F1, 0xFFFBE9E7, 0xFFF6E3EA, 0xFFF3E2B8,
+    0xFFE8A0C0, 0xFFE07A6A, 0xFF9E5349, 0xFFE9C27E,
+    0xFF111A31, 0xFF16122A, 0xFF2B2430, 0xFFE8B8F4
 )
 
 fun AppearLook.toJson(): JSONObject = JSONObject()

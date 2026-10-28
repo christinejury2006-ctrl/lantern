@@ -144,6 +144,30 @@ jobs:
           "$ANDROID_HOME"/build-tools/34.0.0/apksigner verify --print-certs "$apk" \
             | head -3 | tr '\n' '|' | xargs -I{} echo "::notice title=APK signer::{}"
 
+      # Google Sign-In fails on the phone, not here, so this is where the two config facts that
+      # decide it get printed: which OAuth clients the Firebase project has (from the file the
+      # app is built with) and with which key this APK was signed. If the Android client is
+      # missing, the notice says so with the fingerprint to register; nothing here fails the
+      # build, because a build that cannot sign in is still a build.
+      - name: Report Google Sign-In configuration
+        run: |
+          file=app/google-services.json
+          if [ -f "$file" ]; then
+            android=$(jq '[.client[].oauth_client[]? | select(.client_type == 1)] | length' "$file")
+            web=$(jq '[.client[].oauth_client[]? | select(.client_type == 3)] | length' "$file")
+            web_id=$(jq -r '([.client[].oauth_client[]? | select(.client_type == 3)][0].client_id) // "-"' "$file")
+          else
+            android=0; web=0; web_id="-"
+          fi
+          echo "::notice title=OAuth clients in google-services.json::android=$android web=$web"
+          echo "::notice title=Web OAuth client id in the build::$web_id"
+          if [ "$android" -eq 0 ]; then
+            echo "::warning title=Google Sign-In cannot work yet::google-services.json has no Android OAuth client, so Google rejects sign-in with error 10. Register the APK signer's SHA-1 (printed in the APK signer notice above) in Firebase, then download the file again."
+          fi
+          if [ "$web" -eq 0 ]; then
+            echo "::warning title=No Web OAuth client::Firebase Auth needs the Web client to mint a session. Enabling Google Sign-In in Firebase creates it; it then appears in google-services.json."
+          fi
+
       # The reader opens PDFs with pdfium, which is native: its .so must be in the APK or the
       # first PDF dies with UnsatisfiedLinkError. The dependency's own naming is what it is, so
       # this looks for any pdfium library rather than guessing a filename, and prints everything

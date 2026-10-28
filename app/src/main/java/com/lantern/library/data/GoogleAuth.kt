@@ -108,6 +108,33 @@ object GoogleAuth {
             .joinToString(":") { "%02X".format(it) }
     }.getOrNull()
 
+    /**
+     * Why Google sign-in cannot start on this build, or `null` when it should work.
+     *
+     * Checked before the sign-in sheet is launched, so the reader is told which console setting is
+     * missing while they are still looking at the screen they pressed. Everything here is a fact
+     * the app can establish for itself; nothing is guessed.
+     */
+    fun missingConfiguration(context: Context): String? {
+        if (BuildConfig.FIREBASE_WEB_CLIENT_ID.isBlank()) {
+            return "This build has no Web OAuth client ID, so Firebase cannot mint a session. " +
+                "In Firebase → Project settings → Your apps → com.lantern.library, add the SHA-1 " +
+                "below (Google Sign-In creates the Web client at the same time), download " +
+                "google-services.json again and rebuild — this build reads the Web client out of " +
+                "that file.\n\n" + registrationHint(context)
+        }
+        val status = runCatching {
+            com.google.android.gms.common.GoogleApiAvailability.getInstance()
+                .isGooglePlayServicesAvailable(context)
+        }.getOrNull()
+        if (status != null && status != com.google.android.gms.common.ConnectionResult.SUCCESS) {
+            return "Google Play Services is missing or out of date on this device " +
+                "(status $status), so the Google sign-in sheet cannot open. Update Play Services " +
+                "from the Play Store and try again."
+        }
+        return null
+    }
+
     /** Package name plus fingerprint, ready to paste into Firebase → Project settings. */
     fun registrationHint(context: Context): String {
         val fp = signingFingerprint(context) ?: "unavailable"

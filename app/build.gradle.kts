@@ -173,13 +173,43 @@ fun resolveSigningFile(): File? {
 }
 
 /**
- * Firebase Auth needs the Web OAuth client ID from Firebase/Google Cloud, not the Android one.
- * Empty is a valid answer: the app then says so instead of failing to sign in silently.
+ * Firebase Auth needs the *Web* OAuth client ID, not the Android one, to mint the ID token that
+ * `signInWithCredential` trades for a Firebase session.
+ *
+ * Three places are checked, in order, because the ID can arrive three legitimate ways:
+ *
+ * 1. an explicit property or CI secret, which wins;
+ * 2. `app/google-services.json` — the Google services plugin writes the Web client into it as an
+ *    `oauth_client` entry with `client_type: 3` once one exists in the project, so after the
+ *    console step the file alone is enough and no extra secret has to be kept in step with it;
+ * 3. nothing, which is a valid answer: the app then says precisely what is missing instead of
+ *    failing to sign in silently.
  */
-fun resolveFirebaseWebClientId(): String =
-    signingValue("FIREBASE_WEB_CLIENT_ID")
-        ?: Properties().also { props ->
-            val file = rootProject.file("local.properties")
-            if (file.exists()) file.inputStream().use { props.load(it) }
-        }.getProperty("FIREBASE_WEB_CLIENT_ID")?.trim().takeIf { !it.isNullOrEmpty() }
-        ?: ""
+fun resolveFirebaseWebClientId(): String {
+    signingValue("FIREBASE_WEB_CLIENT_ID")?.let { if (it.isNotBlank()) return it }
+    Properties().also { props ->
+        val file = rootProject.file("local.properties")
+        if (file.exists()) file.inputStream().use { props.load(it) }
+    }.getProperty("FIREBASE_WEB_CLIENT_ID")?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+    return webClientIdFromGoogleServices()
+}
+
+/** The `client_type: 3` (Web) OAuth client from google-services.json, or "" if there is none. */
+fun webClientIdFromGoogleServices(): String {
+    val file = rootProject.file("app/google-services.json")
+    if (!file.exists()) return ""
+    return try {
+        val root = groovy.json.JsonSlurper().parse(file) as? Map<*, *> ?: return ""
+        val clients = root["client"] as? List<*> ?: return ""
+        clients.asSequence()
+            .filterIsInstance<Map<*, *>>()
+            .flatMap { (it["oauth_client"] as? List<*> ?: emptyList<Any>()).asSequence() }
+            .filterIsInstance<Map<*, *>>()
+            .firstOrNull { (it["client_type"] as? Number)?.toInt() == 3 }
+            ?.let { it["client_id"] as? String }
+            ?.trim()
+            .orEmpty()
+    } catch (_: Exception) {
+        ""
+    }
+}

@@ -80,7 +80,27 @@ somewhere private: if it is lost, an installed Lore can only be replaced after a
 Register the same SHA-1 in Firebase (Project settings → Your apps → `com.lantern.library` →
 Add fingerprint) and Google Sign-In stops failing with error 10. It has to be the *stable* key:
 while builds are signed with a throwaway key that is regenerated on every CI run, there is no
-fingerprint worth registering, because it changes every build.
+fingerprint worth registering, because it changes every build. The build prints the signer's
+SHA-1 in the **APK signer** annotation, so the value to paste is always in the run summary.
+
+### Why Google Sign-In says "error 10"
+
+Google Sign-In needs two OAuth clients in the Firebase/Cloud project, and this repository's
+`app/google-services.json` currently has **neither**:
+
+| Client | Type | What creates it | What it is used for |
+| --- | --- | --- | --- |
+| Android | `client_type: 1` | Firebase → Project settings → Your apps → Add fingerprint | Lets Google trust this APK's package + signing certificate. **Missing it is error 10.** |
+| Web | `client_type: 3` | Enabling Google in Firebase Authentication | Mints the ID token that `signInWithCredential` trades for a Firebase session |
+
+Both are console actions; neither can be created from code or from CI. Once they exist, download
+`google-services.json` again and commit it — the build reads the Web client ID straight out of
+that file (an explicit `FIREBASE_WEB_CLIENT_ID` secret or `local.properties` entry still wins),
+so no extra configuration has to be kept in step.
+
+Until then the app does two things instead of failing silently: sign-in opens a dialog naming the
+exact setting that is missing with a Copy button for the package and SHA-1, and the build prints
+both clients, the Web client id and the APK's signer in its annotations.
 
 ## Building locally
 

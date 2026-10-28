@@ -500,11 +500,12 @@ fun ReaderScreen(
                         enabled = !menuOpen,
                         paper = palette.page,
                         modifier = Modifier.fillMaxSize().onSizeChanged { pageBox = it }
-                    ) { i ->
+                    ) { i, interactive ->
                         key(prefs.fontSizeSp, i) {
                             PageLeaf(
                                 pages.getOrNull(i), family, prefs.fontSizeSp, ink,
-                                Modifier.fillMaxSize().then(pageTap)
+                                Modifier.fillMaxSize()
+                                    .then(if (interactive) pageTap else Modifier)
                             )
                         }
                     }

@@ -226,7 +226,7 @@ fun LeafPager(
 private fun sheetClip(window: LeafWindow, w: Float, h: Float, measured: Boolean): Modifier {
     if (!measured || !window.drawing) return Modifier
     val geometry = CurlGeometry(w, h, window.curl)
-    return Modifier.clip(PathShape { leftOf(geometry.creaseAt, w, h) })
+    return Modifier.clip(PathShape { leftOf(geometry::creaseAt, w, h) })
 }
 
 /** Clip to the part of the page that has gone over, which is where its back is visible. */
@@ -234,7 +234,7 @@ private fun backClip(window: LeafWindow, w: Float, h: Float, measured: Boolean):
     if (!measured || !window.drawing) return Modifier
     val geometry = CurlGeometry(w, h, window.curl)
     val tip = 2f * geometry.centre - w
-    return Modifier.clip(PathShape { between({ tip }, geometry.creaseAt, w, h) })
+    return Modifier.clip(PathShape { between({ tip }, geometry::creaseAt, w, h) })
 }
 
 /**

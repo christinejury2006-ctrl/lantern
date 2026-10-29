@@ -15,10 +15,18 @@ import org.junit.Test
  */
 class SyncDeletionTest {
 
+    /**
+     * Timestamps are relative to the run, because a tombstone older than
+     * [Deletions.RETENTION_MS] is pruned on purpose. Epoch-second-scale values would be pruned in
+     * every test and hide the behaviour they are meant to pin.
+     */
+    private val now = System.currentTimeMillis()
+    private fun ago(minutes: Long) = now - minutes * 60_000L
+
     private fun book(
         id: String,
         title: String = "A Book",
-        addedAt: Long = 1_000L,
+        addedAt: Long = ago(120),
         page: Int = 0,
         pages: Int = 100,
         lastRead: Long = 0L,
@@ -63,7 +71,7 @@ class SyncDeletionTest {
         val bookA = book("a")
         val bookB = book("b")
         // Device A still has the snapshot from before the deletion; it deletes "a" and syncs.
-        val deviceA = snapshot(listOf(bookB), deletions = listOf(Tombstone("a", 1_500L)))
+        val deviceA = snapshot(listOf(bookB), deletions = listOf(Tombstone("a", ago(60))))
         // Device B has not synced since, so its own library still holds both books.
         val deviceB = snapshot(listOf(bookA, bookB))
 
@@ -76,11 +84,11 @@ class SyncDeletionTest {
     @Test
     fun `an offline device reconnecting with a stale snapshot does not resurrect the book`() {
         // The device's snapshot is older than the deletion and still lists the book.
-        val stale = snapshot(listOf(book("a"), book("b")), at = 900L)
+        val stale = snapshot(listOf(book("a"), book("b")), at = ago(600))
         val fromAccount = snapshot(
             listOf(book("b")),
-            deletions = listOf(Tombstone("a", 5_000L)),
-            at = 6_000L
+            deletions = listOf(Tombstone("a", ago(30))),
+            at = ago(20)
         )
         val merged = AccountSync.merge(stale, fromAccount)
         assertEquals(listOf("b"), merged.books.map { it.id })
@@ -92,27 +100,27 @@ class SyncDeletionTest {
 
     @Test
     fun `deleting twice is idempotent`() {
-        val one = Deletions.merge(listOf(Tombstone("a", 100L)), listOf(Tombstone("a", 100L)))
+        val one = Deletions.merge(listOf(Tombstone("a", ago(10))), listOf(Tombstone("a", ago(10))))
         assertEquals(1, one.size)
         val twice = AccountSync.merge(
             snapshot(emptyList(), deletions = one),
             snapshot(emptyList(), deletions = one)
         )
         assertEquals(1, twice.deletions.size)
-        assertEquals(100L, twice.deletions.single().deletedAt)
+        assertEquals(ago(10), twice.deletions.single().deletedAt)
     }
 
     @Test
     fun `a later deletion wins over an earlier one`() {
-        val merged = Deletions.merge(listOf(Tombstone("a", 100L)), listOf(Tombstone("a", 900L)))
-        assertEquals(900L, merged.single().deletedAt)
+        val merged = Deletions.merge(listOf(Tombstone("a", ago(10))), listOf(Tombstone("a", ago(1))))
+        assertEquals(ago(1), merged.single().deletedAt)
     }
 
     @Test
     fun `a book the reader re-imported after deleting it is not shadowed by the tombstone`() {
         // Deleted at t=1000; imported again at t=2000. The new copy is the reader's decision too.
-        val reAdded = book("a", addedAt = 2_000L)
-        val tombstoned = snapshot(emptyList(), deletions = listOf(Tombstone("a", 1_000L)))
+        val reAdded = book("a", addedAt = now)
+        val tombstoned = snapshot(emptyList(), deletions = listOf(Tombstone("a", ago(5))))
         val merged = AccountSync.merge(snapshot(listOf(reAdded)), tombstoned)
         assertEquals(listOf("a"), merged.books.map { it.id })
     }
@@ -127,7 +135,7 @@ class SyncDeletionTest {
         val cloud = snapshot(
             listOf(book("a"), keep),
             bookmarks = listOf(SavedBookmark("a", 3, 10L), SavedBookmark("b", 7, 20L)),
-            deletions = listOf(Tombstone("a", 5_000L))
+            deletions = listOf(Tombstone("a", ago(45)))
         )
         val merged = AccountSync.merge(local, cloud)
         assertEquals(listOf("b"), merged.books.map { it.id })
@@ -150,8 +158,8 @@ class SyncDeletionTest {
 
     @Test
     fun `two devices deleting different books both win`() {
-        val a = snapshot(listOf(book("c")), deletions = listOf(Tombstone("a", 1_000L)))
-        val b = snapshot(listOf(book("c"), book("a")), deletions = listOf(Tombstone("b", 1_100L)))
+        val a = snapshot(listOf(book("c")), deletions = listOf(Tombstone("a", ago(60))))
+        val b = snapshot(listOf(book("c")), deletions = listOf(Tombstone("b", ago(50))))
         val merged = AccountSync.merge(a, b)
         assertEquals(listOf("c"), merged.books.map { it.id })
         assertEquals(setOf("a", "b"), merged.deletions.map { it.bookId }.toSet())
@@ -208,11 +216,11 @@ class SyncDeletionTest {
     fun `two syncs merging the same pair in either order agree`() {
         // Concurrency is serialized by the app, but convergence must not depend on that: whoever
         // merges first, both devices must end up with the same library.
-        val a = snapshot(listOf(book("a", page = 10, lastRead = 500L), book("b")), at = 1_000L)
+        val a = snapshot(listOf(book("a", page = 10, lastRead = ago(600)), book("b")), at = ago(600))
         val b = snapshot(
-            listOf(book("a", page = 20, lastRead = 900L), book("c")),
-            deletions = listOf(Tombstone("b", 800L)),
-            at = 1_200L
+            listOf(book("a", page = 20, lastRead = ago(100)), book("c")),
+            deletions = listOf(Tombstone("b", ago(60))),
+            at = ago(100)
         )
         val ab = AccountSync.merge(a, b)
         val ba = AccountSync.merge(b, a)
@@ -228,12 +236,12 @@ class SyncDeletionTest {
     fun `deletions and verified sizes survive the snapshot round trip`() {
         val original = snapshot(
             listOf(book("a").copy(backupBytes = 123_456L)),
-            deletions = listOf(Tombstone("gone", 4_000L))
+            deletions = listOf(Tombstone("gone", ago(45)))
         )
         val json = AccountSync.toJson(original)
         val readBack = AccountSync.fromJson(json)
         assertTrue("the snapshot must parse", readBack != null)
-        assertEquals(4_000L, readBack!!.deletions.single().deletedAt)
+        assertEquals(ago(45), readBack!!.deletions.single().deletedAt)
         assertEquals("gone", readBack.deletions.single().bookId)
         assertEquals(123_456L, readBack.books.single().backupBytes)
         // A v1 snapshot (no deletions, no sizes) still loads: it simply has neither.

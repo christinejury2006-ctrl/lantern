@@ -191,8 +191,11 @@ object BackupAudit {
         return when {
             stored == BookBackupState.NOT_APPLICABLE -> BackupBadge.NOT_APPLICABLE
             uploading -> BackupBadge.UPLOADING
+            // A confirmed copy is either here (verified) or owed to this phone (restore). The two
+            // are different promises and must never be merged into one label.
             stored == BookBackupState.BACKED_UP ->
                 if (book.localFileAvailable) BackupBadge.VERIFIED else BackupBadge.RESTORE_REQUIRED
+            stored == BookBackupState.RESTORE_REQUIRED -> BackupBadge.RESTORE_REQUIRED
             stored == BookBackupState.FAILED -> if (online) BackupBadge.FAILED else BackupBadge.WAITING
             // Nothing in the account, nothing on the phone: a record and no file anywhere.
             book.driveFileId.isNullOrBlank() && !book.localFileAvailable -> BackupBadge.LOCAL_ONLY

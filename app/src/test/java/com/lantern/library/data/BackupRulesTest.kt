@@ -58,10 +58,26 @@ class BackupRulesTest {
 
     @Test
     fun `a confirmed book is not uploaded again`() {
+        // A confirmation only describes a book whose file is still here; the record without a
+        // local copy is the next test's case.
+        val file = java.io.File.createTempFile("lore-backup", ".epub")
+        try {
+            file.writeBytes(ByteArray(256))
+            val b = book(driveFileId = "d1", backupAt = 1_700_000_000_000L, filePath = file.absolutePath)
+            assertFalse(BackupRules.needsUpload(b, localFileExists = true))
+            assertEquals(BookBackupState.BACKED_UP, b.backupState)
+            assertTrue(BackupRules.restorable(b))
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
+    fun `a confirmed book whose file is gone needs a restore, not a backup`() {
         val b = book(driveFileId = "d1", backupAt = 1_700_000_000_000L)
-        assertFalse(BackupRules.needsUpload(b, localFileExists = true))
-        assertEquals(BookBackupState.BACKED_UP, b.backupState)
-        assertTrue(BackupRules.restorable(b))
+        assertEquals(BookBackupState.RESTORE_REQUIRED, b.backupState)
+        assertFalse(BackupRules.needsUpload(b, localFileExists = false))
+        assertTrue("it can still be fetched from the account", BackupRules.restorable(b))
     }
 
     @Test

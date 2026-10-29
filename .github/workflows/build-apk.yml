@@ -70,7 +70,20 @@ jobs:
           FIREBASE_WEB_CLIENT_ID: ${{ secrets.FIREBASE_WEB_CLIENT_ID }}
         run: |
           chmod +x gradlew
-          ./gradlew testDebugUnitTest --no-daemon --stacktrace
+          set +e
+          ./gradlew testDebugUnitTest --no-daemon --stacktrace > unit.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "----- compiler errors -----"
+            grep -E '^e: ' unit.log | head -15
+            echo "----- test failures -----"
+            grep -E '(FAILED|AssertionError|ComparisonFailure|expected:)' unit.log | head -20
+            compile=$(grep -E '^e: ' unit.log | head -8 | tr '\n' '|' | cut -c1-900)
+            tests=$(grep -E 'FAILED|AssertionError' unit.log | head -6 | tr '\n' '|' | cut -c1-900)
+            [ -n "$compile" ] && echo "::error title=Kotlin compile errors::$compile"
+            [ -n "$tests" ] && echo "::error title=Failing unit tests::$tests"
+          fi
+          exit $status
 
       - name: Build debug APK
         env:
@@ -79,7 +92,15 @@ jobs:
           LORE_BUILD_NUMBER: ${{ github.run_number }}
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          set +e
+          ./gradlew assembleDebug --no-daemon --stacktrace > debug-build.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            grep -E '^e: ' debug-build.log | head -15
+            compile=$(grep -E '^e: ' debug-build.log | head -8 | tr '\n' '|' | cut -c1-900)
+            [ -n "$compile" ] && echo "::error title=Debug build compile errors::$compile"
+          fi
+          exit $status
 
       - name: Rename APK
         run: |

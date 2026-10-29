@@ -303,7 +303,6 @@ internal fun LanternRoot(store: LanternStore) {
                     { store.signOut(activity) },
                     { store.requestDriveConnect() },
                     { store.openInterestEditor() },
-                    { libraryAppearOpen = true },
                     { store.syncNow() }
                 )
                 is Route.Reader -> {

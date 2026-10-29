@@ -168,6 +168,10 @@ fun SearchScreen(
             searched = false
             return@LaunchedEffect
         }
+        // Typing a title should not shell out to four catalogues per keystroke. The effect is
+        // cancelled and restarted on the next character, so this is a debounce, not a delay in
+        // front of the search.
+        kotlinx.coroutines.delay(400)
         loading = true
         // All three lookups run off the main thread and each one is independent: a catalogue being
         // down costs its own results and nothing else.

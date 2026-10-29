@@ -415,13 +415,33 @@ object OpenCatalogs {
 
     // ---------------------------------------------------------------- plumbing
 
-    private fun get(url: String): String? = try {
-        val req = Request.Builder().url(url).header("User-Agent", UA).build()
-        http.newCall(req).execute().use { res ->
-            if (!res.isSuccessful) null else res.body?.string()
-        }
-    } catch (t: Throwable) {
-        null
+    /**
+     * Responses, kept briefly.
+     *
+     * One search fans out to a dozen requests across four services, and the same URLs are asked
+     * again the moment the reader edits their query (the same author, the same Open Library
+     * record). A five-minute cache turns that back into one round of traffic, and keeps the app
+     * inside Gutendex's courtesy limit and Open Library's ~100-requests-per-5-minutes budget.
+     */
+    private val cache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, String>>()
+    private const val CACHE_MS = 5 * 60 * 1000L
+    private const val CACHE_MAX = 80
+
+    private fun get(url: String): String? {
+        val hit = cache[url]
+        val now = System.currentTimeMillis()
+        if (hit != null && now - hit.first < CACHE_MS) return hit.second
+        val body = try {
+            val req = Request.Builder().url(url).header("User-Agent", UA).build()
+            http.newCall(req).execute().use { res ->
+                if (!res.isSuccessful) null else res.body?.string()
+            }
+        } catch (t: Throwable) {
+            null
+        } ?: return null
+        if (cache.size > CACHE_MAX) cache.clear()
+        cache[url] = now to body
+        return body
     }
 
     /**

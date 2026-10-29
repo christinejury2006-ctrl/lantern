@@ -45,7 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lantern.library.data.DiscoveryBook
 import com.lantern.library.data.FreeEdition
-import com.lantern.library.data.GoogleBooks
+import com.lantern.library.data.OpenCatalogs
 import com.lantern.library.data.ReaderTheme
 import com.lantern.library.ui.components.CoverFace
 import com.lantern.library.ui.components.GlassCard
@@ -67,29 +67,35 @@ suspend fun fetchScrapedBooks(query: String): List<ScrapedBookItem> = withContex
     val bookList = mutableListOf<ScrapedBookItem>()
 
     try {
-        val doc = Jsoup.connect(searchUrl)
-            .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        val response = Jsoup.connect(searchUrl)
+            .userAgent("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")
+            .referrer("https://oceanofpdf.com/")
+            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+            .header("Accept-Language", "en-US,en;q=0.9")
             .timeout(15000)
-            .get()
+            .ignoreHttpErrors(true)
+            .execute()
 
-        // Select articles or post containers on search page
-        val articles = doc.select("article, .post, .search-result, .masonry-brick")
-        for (article in articles) {
-            val titleTag = article.selectFirst("h2.entry-title a, h3 a, .title a") ?: article.selectFirst("a[href*=/]") ?: continue
-            val imgTag = article.selectFirst("img")
+        if (response.statusCode() == 200) {
+            val doc = response.parse()
+            val articles = doc.select("article, .post, .search-result, .masonry-brick, .type-post")
+            for (article in articles) {
+                val titleTag = article.selectFirst("h2.entry-title a, h3 a, .title a, a[rel=bookmark]")
+                    ?: article.selectFirst("a[href*=/]") ?: continue
+                val imgTag = article.selectFirst("img")
 
-            val title = titleTag.text().trim()
-            val detailUrl = titleTag.attr("href")
-            val coverUrl = when {
-                imgTag?.hasAttr("data-src") == true -> imgTag.attr("data-src")
-                imgTag?.hasAttr("data-lazy-src") == true -> imgTag.attr("data-lazy-src")
-                else -> imgTag?.attr("src") ?: ""
-            }
+                val title = titleTag.text().trim()
+                val detailUrl = titleTag.attr("href")
+                val coverUrl = when {
+                    imgTag?.hasAttr("data-src") == true -> imgTag.attr("data-src")
+                    imgTag?.hasAttr("data-lazy-src") == true -> imgTag.attr("data-lazy-src")
+                    else -> imgTag?.attr("src") ?: ""
+                }
 
-            if (title.isNotEmpty() && detailUrl.isNotEmpty()) {
-                // Avoid duplicates
-                if (bookList.none { it.detailUrl == detailUrl }) {
-                    bookList.add(ScrapedBookItem(title, detailUrl, coverUrl))
+                if (title.isNotEmpty() && detailUrl.isNotEmpty()) {
+                    if (bookList.none { it.detailUrl == detailUrl }) {
+                        bookList.add(ScrapedBookItem(title, detailUrl, coverUrl))
+                    }
                 }
             }
         }
@@ -121,7 +127,6 @@ fun SearchScreen(
     var history by remember {
         mutableStateOf(prefs.getString("history", "").orEmpty().split("\n").filter { it.isNotBlank() }.take(8))
     }
-    // Suggestions, not a substitute for searching: these are the terms the shelves over-ask for.
     val trending = remember {
         listOf("Pride and Prejudice", "Dracula", "Sherlock Holmes", "Alice in Wonderland",
             "Frankenstein", "romance", "werewolf", "fantasy")
@@ -137,15 +142,26 @@ fun SearchScreen(
         } else {
             loading = true
             searched = true
-            val scrapedItems = fetchScrapedBooks(q)
-            results = scrapedItems.map { item ->
-                DiscoveryBook(
-                    title = item.title,
-                    coverUrl = item.coverUrl,
-                    volumeId = item.detailUrl
-                )
+            withContext(Dispatchers.IO) {
+                try {
+                    val fetchedEditions = OpenCatalogs.searchFreeEditions(q)
+                    editions = fetchedEditions
+
+                    val scrapedItems = fetchScrapedBooks(q)
+                    val scrapedBooks = scrapedItems.map { item ->
+                        DiscoveryBook(
+                            title = item.title,
+                            coverUrl = item.coverUrl,
+                            volumeId = item.detailUrl
+                        )
+                    }
+                    results = scrapedBooks
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                } finally {
+                    loading = false
+                }
             }
-            loading = false
         }
     }
 
@@ -232,8 +248,7 @@ fun SearchScreen(
                         }
                         Spacer(Modifier.height(18.dp))
                         Text(
-                            "Free files come from Project Gutenberg and the Internet Archive. " +
-                                "Everything else links to the shop that sells it.",
+                            "Free files come from Project Gutenberg, Internet Archive, and Ocean of PDF.",
                             color = mute,
                             fontSize = 11.sp
                         )
@@ -242,7 +257,7 @@ fun SearchScreen(
                     if (loading) {
                         Text("Searching libraries…", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
                     }
-                    if (searched && results.isEmpty() && !loading) {
+                    if (searched && editions.isEmpty() && results.isEmpty() && !loading) {
                         Text(
                             "Nothing found. Try fewer words, or the author's surname.",
                             color = mute,
@@ -270,9 +285,9 @@ fun SearchScreen(
             if (results.isNotEmpty()) {
                 item(span = { GridItemSpan(2) }) {
                     Column(Modifier.padding(top = 10.dp)) {
-                        Text("MORE BOOKS", color = mute, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("WEB RESULTS", color = mute, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         Text(
-                            "Details, covers and shop links. Tap one to save it or find a copy.",
+                            "Results found via Ocean of PDF. Tap one to inspect details.",
                             color = mute,
                             fontSize = 11.sp
                         )

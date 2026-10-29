@@ -393,10 +393,6 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         markLocalChanged()
     }
     fun addBookmark(bookId: String, page: Int) {
-        if (bookId == STUDIO_PREVIEW_ID) {
-            toast("Bookmark saved · page ${page + 1}")
-            return
-        }
         val at = System.currentTimeMillis()
         synchronized(bookmarksLock) {
             if (bookmarkRecords.none { it.bookId == bookId && it.pageIndex == page }) {

@@ -173,14 +173,20 @@ internal fun LanternRoot(store: LanternStore) {
             putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/epub+zip", "application/pdf", "application/octet-stream"))
         })
     }
+    /**
+     * The page a discovered book can be opened at, if it has one.
+     *
+     * An Explore result's `volumeId` *is* its detail page — the site it was found on. A Google
+     * Books result carries the same thing in `infoLink`. Both are just a link to the book's page,
+     * so both go through the same door, and the same gesture does the same thing whichever screen
+     * the book came from.
+     */
+    fun discoveryLink(book: DiscoveryBook): String? =
+        (book.infoLink ?: book.buyLink ?: book.previewLink ?: book.canonicalLink
+            ?: book.volumeId.takeIf { it.startsWith("http") })?.takeIf { it.isNotBlank() }
+
     fun openDiscoveryLink(book: DiscoveryBook): Boolean {
-        // An Explore result's `volumeId` *is* its detail page — the site it was found on. A Google
-        // Books result carries the same thing in `infoLink`. Both are just a link to the book's
-        // page, so both go through the same door, and the same gesture does the same thing
-        // whichever screen the book came from.
-        val url = book.infoLink ?: book.buyLink ?: book.previewLink ?: book.canonicalLink
-            ?: book.volumeId.takeIf { it.startsWith("http") }
-        if (url.isNullOrBlank()) return false
+        val url = discoveryLink(book) ?: return false
         return runCatching {
             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
             true
@@ -210,7 +216,9 @@ internal fun LanternRoot(store: LanternStore) {
             }
             return
         }
-        if (!openDiscoveryLink(book)) store.toast("This book has no page to open")
+        // No free edition and no owned copy: the details sheet, exactly as a Google Books pick
+        // behaves. Opening the page is one tap from there.
+        details = book
     }
     val needsOnboarding = !store.interestsChosen
     LanternTheme(theme) {
@@ -313,7 +321,13 @@ internal fun LanternRoot(store: LanternStore) {
                     saved = store.isWantToRead(detail),
                     onDismiss = { details = null },
                     onWant = { store.addWantToRead(detail); details = null },
-                    onNotInterested = { store.markNotInterested(detail); details = null }
+                    onNotInterested = { store.markNotInterested(detail); details = null },
+                    onOpenPage = if (discoveryLink(detail) != null) {
+                        {
+                            openDiscoveryLink(detail)
+                            details = null
+                        }
+                    } else null
                 )
             }
             if (!needsOnboarding && tab !is Route.Reader && details == null) {

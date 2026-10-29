@@ -31,7 +31,9 @@ fun BookDetailsOverlay(
     saved: Boolean,
     onDismiss: () -> Unit,
     onWant: () -> Unit,
-    onNotInterested: () -> Unit
+    onNotInterested: () -> Unit,
+    /** Null when the book has no page to open; the button is then not drawn at all. */
+    onOpenPage: (() -> Unit)? = null
 ) {
     val palette = nookPalette(theme)
     BackHandler(onBack = onDismiss)
@@ -94,6 +96,14 @@ fun BookDetailsOverlay(
             Spacer(Modifier.height(16.dp))
             GlassSurface(palette, Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), fill = palette.accent, onClick = onWant) {
                 Text(if (saved) "Saved to Want to Read" else "Want to Read", color = palette.accentInk, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp))
+            }
+            if (onOpenPage != null) {
+                Spacer(Modifier.height(8.dp))
+                // Same door for every book that has a page somewhere: a Google Books title and an
+                // Explore result behave identically when tapped.
+                GlassSurface(palette, Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), onClick = onOpenPage) {
+                    Text("Open Book Page", color = palette.ink, fontSize = 14.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(vertical = 13.dp))
+                }
             }
             Spacer(Modifier.height(8.dp))
             GlassSurface(palette, Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), onClick = onNotInterested) {

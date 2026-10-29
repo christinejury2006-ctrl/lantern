@@ -446,6 +446,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         }
         b.filePath?.let { runCatching { File(it).delete() } }
         clearTransfer(id)
+        // The card is gone; a live or failed transfer entry for it must not outlive it.
+        TransferBus.clear(id)
+        journalDone(id)
         toast("Removed from library")
         markLocalChanged()
         // 3. The account's copy waits for the snapshot to carry the deletion first.
@@ -1258,7 +1261,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             SyncDiag.mark("Retry queue", "retrying ${books.size} book(s) from the queue")
-            val batch = uploadBatch(books)
+            // Same lock as a sync pass: two writers to one library is how a fresh confirmation got
+            // overwritten by a stale one in the 18:12 trace.
+            val batch = syncMutex.withLock { uploadBatch(books) }
             batch.failed.forEach { (book, failure) ->
                 SyncDiag.fail(
                     "Retry failed — ${book.title.ifBlank { "Untitled" }} (${book.id.take(8)})",

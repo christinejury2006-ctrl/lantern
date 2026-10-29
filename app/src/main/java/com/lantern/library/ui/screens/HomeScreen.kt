@@ -1,5 +1,11 @@
 package com.lantern.library.ui.screens
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -26,21 +32,32 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.lantern.library.data.BookBackupState
+import androidx.compose.ui.window.Dialog
+import com.lantern.library.data.BackupAudit
+import com.lantern.library.data.BackupBadge
 import com.lantern.library.data.CloudAccount
 import com.lantern.library.data.DiscoveryBook
 import com.lantern.library.data.LibraryBook
+import com.lantern.library.data.TransferPhase
+import com.lantern.library.data.TransferProgress
+import com.lantern.library.data.Transfers
 import com.lantern.library.ui.components.AuroraOrb
 import com.lantern.library.ui.components.CoverFace
 import com.lantern.library.ui.components.GlassSurface
@@ -73,9 +90,18 @@ fun ReadingNookScreen(
     onSearch: () -> Unit,
     onLibrary: () -> Unit,
     onRefreshPicks: () -> Unit,
-    onNotifications: () -> Unit
+    onNotifications: () -> Unit,
+    /** Live upload progress, keyed by book. Read-only: the shelf never writes sync state. */
+    transfers: Map<String, TransferProgress> = emptyMap(),
+    /** Why a book is not backed up, when the retry queue knows — shown in the detail sheet. */
+    queueReasons: Map<String, String> = emptyMap(),
+    online: Boolean = true,
+    /** Sends one book again, from the detail sheet. */
+    onRetryBackup: (String) -> Unit = {}
 ) {
     val palette = nookPalette(theme)
+    // Which book's backup detail is open. Local to Home: opening it must not touch the shelf.
+    var detailFor by remember { mutableStateOf<String?>(null) }
 
     NookBackdrop(palette) {
         Column(Modifier.fillMaxSize()) {
@@ -110,11 +136,31 @@ fun ReadingNookScreen(
                     // One shelf, in the order the reader added the books. Whether a book is in the
                     // account is shown on the cover itself (the little cloud), not by splitting
                     // the shelf into groups that read like two different libraries.
-                    items(books.chunked(3).size) { index ->
-                        BookRow(books.chunked(3)[index], palette, onOpenBook)
+                    val ordered = books.chunked(3)
+                    items(ordered.size) { index ->
+                        BookRow(
+                            row = ordered[index],
+                            palette = palette,
+                            transfers = transfers,
+                            onOpenBook = onOpenBook,
+                            onOpenBadge = { book -> detailFor = book.id }
+                        )
                     }
                 }
             }
+        }
+        // Drawn above the shelf, not inside it: a detail sheet must not re-flow the cards.
+        val detailBook = detailFor?.let { id -> books.firstOrNull { it.id == id } }
+        if (detailBook != null) {
+            BackupDetailSheet(
+                book = detailBook,
+                transfer = transfers[detailBook.id],
+                queuedReason = queueReasons[detailBook.id],
+                online = online,
+                palette = palette,
+                onRetry = { onRetryBackup(detailBook.id) },
+                onDismiss = { detailFor = null }
+            )
         }
     }
 }
@@ -124,14 +170,23 @@ fun ReadingNookScreen(
 private fun BookRow(
     row: List<LibraryBook>,
     palette: NookPalette,
-    onOpenBook: (LibraryBook) -> Unit
+    transfers: Map<String, TransferProgress>,
+    onOpenBook: (LibraryBook) -> Unit,
+    onOpenBadge: (LibraryBook) -> Unit
 ) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         row.forEach { book ->
-            ShelfTile(book, palette, Modifier.weight(1f)) { onOpenBook(book) }
+            ShelfTile(
+                book = book,
+                palette = palette,
+                transfer = transfers[book.id],
+                modifier = Modifier.weight(1f),
+                onBadge = { onOpenBadge(book) },
+                onClick = { onOpenBook(book) }
+            )
         }
         repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
     }
@@ -297,7 +352,9 @@ private fun ShelfGlyph(palette: NookPalette, modifier: Modifier = Modifier) {
 private fun ShelfTile(
     book: LibraryBook,
     palette: NookPalette,
+    transfer: TransferProgress?,
     modifier: Modifier = Modifier,
+    onBadge: () -> Unit,
     onClick: () -> Unit
 ) {
     Column(modifier) {
@@ -316,41 +373,270 @@ private fun ShelfTile(
                 Modifier.fillMaxSize(),
                 palette.dark
             )
-            if (book.backupState == BookBackupState.BACKED_UP) {
-                // Backed up, and only once the upload was actually confirmed. This is the whole of
-                // "synced or not" now: a mark on the cover rather than a group of its own.
-                Text(
-                    "☁",
-                    color = Color.White,
-                    fontSize = 11.sp,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(5.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0x55000000))
-                        .padding(horizontal = 5.dp, vertical = 1.dp)
-                )
-            } else if (!book.localFileAvailable) {
-                // Not a defect: the book lives in the account and is fetched when opened. Say so
-                // quietly on the cover rather than pretending the file is on the phone.
-                Text(
-                    "☁",
-                    color = Color.White,
-                    fontSize = 11.sp,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(5.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0x66000000))
-                        .padding(horizontal = 5.dp, vertical = 1.dp)
-                )
-            }
+            // The badge is the only thing on the cover that changes, and it is drawn in the same
+            // spot for every state, so a transfer never nudges the layout underneath it.
+            BackupBadgeChip(
+                book = book,
+                transfer = transfer,
+                palette = palette,
+                onTap = onBadge,
+                modifier = Modifier.align(Alignment.TopEnd).padding(5.dp)
+            )
         }
         Spacer(Modifier.height(7.dp))
         NookProgress(book.progress, palette)
-
     }
 }
+
+/**
+ * The corner badge: how far this book's *file* has got to the account.
+ *
+ * Restrained on purpose — a 9 sp label in a dark pill, the same one every state uses, sitting where
+ * the old cloud used to be. It answers one question and never dresses it up:
+ *
+ * - **a percentage** while bytes are moving, with a hairline arc that fills as they go;
+ * - **✓ cloud** only after the account has proved it holds these exact bytes;
+ * - **⌛** waiting for a connection, **❙❙** paused, **!** failed, **↓** restore required;
+ * - **nothing** when there is no file to back up (built-in and text books).
+ */
+@Composable
+private fun BackupBadgeChip(
+    book: LibraryBook,
+    transfer: TransferProgress?,
+    palette: NookPalette,
+    onTap: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val state = BackupAudit.badge(book, transfer, online = true, queued = false)
+    // A bundled or plain-text book has no file in the account, so it gets no badge at all.
+    if (state == BackupBadge.NOT_APPLICABLE) return
+    val percent = transfer?.percent
+    val label = when (state) {
+        // Every byte is out but the account has not proved it yet: an ellipsis, not a tick.
+        BackupBadge.UPLOADING -> when {
+            transfer?.phase == TransferPhase.VERIFYING -> "…"
+            percent != null -> "$percent%"
+            else -> "…"
+        }
+        BackupBadge.PAUSED -> "❙❙"
+        BackupBadge.WAITING -> "⌛"
+        BackupBadge.FAILED -> "!"
+        BackupBadge.VERIFIED -> "☁"
+        BackupBadge.RESTORE_REQUIRED -> "↓"
+        BackupBadge.LOCAL_ONLY -> "·"
+        BackupBadge.NOT_APPLICABLE -> ""
+    }
+    val tint = when (state) {
+        BackupBadge.VERIFIED -> Color(0xFFEFF6FF)
+        BackupBadge.FAILED -> Color(0xFFFFD9D2)
+        BackupBadge.UPLOADING -> Color(0xFFFFF6E6)
+        else -> Color(0xFFEDEFF6)
+    }
+    Row(
+        modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0x66000000))
+            .clickable(onClick = onTap)
+            .padding(horizontal = 5.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (state == BackupBadge.UPLOADING) {
+            // A hairline arc: the transfer's own progress, drawn as a fraction of a circle. For a
+            // file of unknown size it spins instead of pretending to be at 100%.
+            MiniProgressRing(
+                fraction = (percent ?: 0) / 100f,
+                indeterminate = percent == null || transfer?.phase == TransferPhase.VERIFYING,
+                color = tint,
+                modifier = Modifier.size(9.dp)
+            )
+            Spacer(Modifier.width(3.dp))
+        }
+        Text(
+            label,
+            color = tint,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1
+        )
+    }
+}
+
+/** A 9 dp ring that fills clockwise, or turns slowly when the size is unknown. */
+@Composable
+private fun MiniProgressRing(
+    fraction: Float,
+    indeterminate: Boolean,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    val track = color.copy(alpha = 0.28f)
+    // Indeterminate: a quarter ring that rotates on its own clock, driven by the animation clock
+    // rather than by a progress value, because there is no value to show.
+    val spin = if (indeterminate) {
+        val transition = rememberInfiniteTransition(label = "upload-spin")
+        transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(tween(1_100, easing = LinearEasing)),
+            label = "upload-angle"
+        ).value
+    } else 0f
+    Canvas(modifier) {
+        val stroke = size.minDimension * 0.16f
+        drawArc(
+            color = track,
+            startAngle = 0f,
+            sweepAngle = 360f,
+            useCenter = false,
+            style = Stroke(width = stroke)
+        )
+        if (indeterminate) {
+            drawArc(
+                color = color,
+                startAngle = spin,
+                sweepAngle = 90f,
+                useCenter = false,
+                style = Stroke(width = stroke, cap = StrokeCap.Round)
+            )
+        } else if (fraction > 0f) {
+            drawArc(
+                color = color,
+                startAngle = -90f,
+                sweepAngle = (fraction.coerceIn(0f, 1f)) * 360f,
+                useCenter = false,
+                style = Stroke(width = stroke, cap = StrokeCap.Round)
+            )
+        }
+    }
+}
+
+/**
+ * The detail sheet behind a badge tap.
+ *
+ * What it must never do is flatter the reader: "Backed up and verified" only appears with a byte
+ * count and the time of the verification, and every other state says plainly what is missing and
+ * whether it will be retried. Nothing here writes to the account — the retry button calls the same
+ * single-book path the sync uses.
+ */
+@Composable
+private fun BackupDetailSheet(
+    book: LibraryBook,
+    transfer: TransferProgress?,
+    queuedReason: String?,
+    online: Boolean,
+    palette: NookPalette,
+    onRetry: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val state = BackupAudit.badge(book, transfer, online = online, queued = queuedReason != null)
+    val fileBytes = book.filePath?.let { java.io.File(it) }?.takeIf { it.exists() }?.length() ?: 0L
+    Dialog(onDismissRequest = onDismiss) {
+        GlassSurface(
+            palette,
+            Modifier.fillMaxWidth().padding(horizontal = 18.dp),
+            shape = RoundedCornerShape(24.dp)
+        ) {
+            Column(Modifier.padding(20.dp)) {
+                Text(
+                    "CLOUD COPY",
+                    color = palette.mute,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.4.sp
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    book.title.ifBlank { "Untitled" },
+                    color = palette.ink,
+                    fontFamily = Playfair,
+                    fontSize = 19.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(12.dp))
+                SheetRow("Status", BackupAudit.label(state), palette)
+                SheetRow(
+                    "Transfer",
+                    when {
+                        transfer == null -> if (fileBytes > 0L) "${Transfers.size(fileBytes)} on this phone" else "nothing to send"
+                        else -> Transfers.transferred(transfer.sentBytes, transfer.totalBytes)
+                    },
+                    palette
+                )
+                if (transfer != null && transfer.percent != null) {
+                    SheetRow("Progress", "${transfer.percent}%", palette)
+                }
+                SheetRow("File size", if (fileBytes > 0L) Transfers.size(fileBytes) else "not on this phone", palette)
+                SheetRow(
+                    "Verification",
+                    when {
+                        state == BackupBadge.VERIFIED ->
+                            "${Transfers.size(book.backupBytes)} confirmed"
+                        state == BackupBadge.RESTORE_REQUIRED -> "in the account, not on this phone"
+                        state == BackupBadge.UPLOADING && transfer?.phase == TransferPhase.VERIFYING ->
+                            "checking the bytes now"
+                        state == BackupBadge.UPLOADING -> "waiting for the transfer to finish"
+                        else -> "not verified"
+                    },
+                    palette
+                )
+                if (book.backupAt > 0L) {
+                    SheetRow("Last verified", shortTime(book.backupAt), palette)
+                }
+                if (book.driveFileId != null) {
+                    SheetRow("Account file", book.driveFileId.take(10) + "…", palette)
+                }
+                val reason = transfer?.reason?.takeIf { it.isNotBlank() }
+                    ?: queuedReason?.takeIf { it.isNotBlank() }
+                if (reason != null) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(reason, color = palette.accent, fontSize = 11.sp)
+                }
+                if (state == BackupBadge.FAILED || state == BackupBadge.PAUSED || state == BackupBadge.LOCAL_ONLY) {
+                    Spacer(Modifier.height(14.dp))
+                    SheetButton("Try again now", palette.accent, palette.accentInk, onRetry)
+                    Spacer(Modifier.height(8.dp))
+                }
+                SheetButton("Close", palette.glass, palette.ink, onDismiss)
+                if (state != BackupBadge.VERIFIED) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "Nothing is removed from this phone by backing up or retrying.",
+                        color = palette.faint,
+                        fontSize = 10.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** One button in the sheet, in the same glass language as the rest of the app. */
+@Composable
+private fun SheetButton(label: String, fill: Color, ink: Color, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(fill)
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(label, color = ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun SheetRow(label: String, value: String, palette: NookPalette) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+        Text(label, color = palette.mute, fontSize = 12.sp, modifier = Modifier.width(96.dp))
+        Text(value, color = palette.ink, fontSize = 12.sp, modifier = Modifier.weight(1f))
+    }
+}
+
+private fun shortTime(at: Long): String =
+    android.text.format.DateFormat.format("d MMM, HH:mm", at).toString()
 
 @Composable
 private fun PickCard(book: DiscoveryBook, palette: NookPalette, onClick: () -> Unit) {

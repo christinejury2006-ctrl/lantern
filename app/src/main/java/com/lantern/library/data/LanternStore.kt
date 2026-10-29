@@ -47,6 +47,15 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
      * being killed and the reader can be shown something true about it after a restart.
      */
     private val uploadQueueFile = File(app.filesDir, "upload_queue.json")
+    /**
+     * Uploads that were in flight when the process died.
+     *
+     * One small entry per book (id, bytes sent, bytes total, when). It is what lets the shelf say
+     * "Paused" after a restart instead of "Failed" — or, worse, nothing at all.
+     */
+    private val uploadJournalFile = File(app.filesDir, "upload_journal.json")
+    private val journalLock = Any()
+    @Volatile private var journalFlushedAt = 0L
     private val deletionsLock = Any()
     private val queueLock = Any()
     private val libraryAppearFile = File(app.filesDir, "library_appearance.json")
@@ -85,6 +94,16 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
 
     /** The last computed per-book backup audit, for the summary line and the diagnostics panel. */
     var backupCounts by mutableStateOf(BackupAudit.Counts(0, 0, 0, 0, 0))
+        private set
+
+    /**
+     * Book id -> why its upload is still queued.
+     *
+     * Compose state rather than a file read at composition time: the shelf shows the reason in the
+     * detail sheet, and a JSON parse per recomposition is exactly the kind of thing that makes a
+     * scroll stutter.
+     */
+    var uploadQueueReasons by mutableStateOf<Map<String, String>>(emptyMap())
         private set
 
     /** The edition Explore is currently downloading, so its card can show progress honestly. */
@@ -197,6 +216,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             StartupTrace.mark("LanternStore hydrated")
             // The shelf and the You screen show a per-book backup state from the first frame, not
             // after the first sync.
+            reconcileVerifications()
+            reconcileInterruptedUploads()
             refreshBackupAudit()
             if (interestsChosen) ensureRecommendations()
             if (account.signedIn && account.provider == "google" && GoogleAuth.accountId(acc) != null) {
@@ -1304,16 +1325,56 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                                 confirmed[book.id] = existing to file.length()
                                 continue
                             }
-                            when (val result = DriveLibrary.upload(token, folder.value, book, file)) {
+                            // Live bytes, straight from the request body. The bus is what the
+                            // card draws; the journal is what survives the process dying.
+                            val total = file.length()
+                            TransferBus.start(book.id, total)
+                            journalProgress(book.id, 0L, total, force = true)
+                            val result = DriveLibrary.upload(
+                                token,
+                                folder.value,
+                                book,
+                                file,
+                                onAttempt = { attempt, reason ->
+                                    SyncDiag.mark(
+                                        "Retrying — ${book.title.ifBlank { "Untitled" }}",
+                                        "attempt ${attempt + 1}: $reason"
+                                    )
+                                },
+                                onProgress = { sent, size ->
+                                    TransferBus.sent(book.id, sent, size)
+                                    journalProgress(book.id, sent, size)
+                                },
+                                onVerifying = {
+                                    TransferBus.verifying(book.id, total)
+                                    journalProgress(book.id, total, total, force = true)
+                                }
+                            )
+                            when (result) {
                                 is DriveOutcome.Ok -> {
                                     confirmed[book.id] = result.value to file.length()
+                                    TransferBus.clear(book.id)
+                                    journalDone(book.id)
                                 }
-                                DriveOutcome.Unauthorized -> return@withDriveOutcome DriveOutcome.Unauthorized
+                                DriveOutcome.Unauthorized -> {
+                                    TransferBus.failed(book.id, 0L, total, "sign in again")
+                                    journalDone(book.id)
+                                    return@withDriveOutcome DriveOutcome.Unauthorized
+                                }
                                 DriveOutcome.Failed -> {
                                     val failure = DriveLibrary.lastFailure ?: DriveLibrary.TransferFailure(
                                         book.id, book.title, "upload",
                                         DriveLibrary.lastError ?: "no response from Google Drive", true
                                     )
+                                    // Keep what the transfer reached, so the sheet can say how far
+                                    // it got before it stopped.
+                                    TransferBus.failed(
+                                        book.id,
+                                        TransferBus.progressFor(book.id)?.sentBytes ?: 0L,
+                                        total,
+                                        failure.reason
+                                    )
+                                    journalDone(book.id)
                                     failed += book to failure
                                     // A refused token stops the whole batch: every later book would
                                     // fail the same way, and each attempt costs a request.
@@ -1797,6 +1858,180 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     }
 
     // ---------------------------------------------------------------------------------------
+    // Upload journal (restart recovery)
+    // ---------------------------------------------------------------------------------------
+
+    /** What was in flight when the app last stopped. */
+    fun uploadJournal(): List<TransferProgress> = synchronized(journalLock) { loadJournalUnlocked() }
+
+    private fun loadJournalUnlocked(): List<TransferProgress> {
+        if (!uploadJournalFile.exists()) return emptyList()
+        return runCatching {
+            val arr = JSONArray(uploadJournalFile.readText())
+            val out = ArrayList<TransferProgress>(arr.length())
+            for (i in 0 until arr.length()) {
+                val row = arr.optJSONObject(i) ?: continue
+                val id = row.optString("id")
+                if (id.isBlank()) continue
+                out += TransferProgress.paused(
+                    bookId = id,
+                    sentBytes = row.optLong("sent", 0L),
+                    totalBytes = row.optLong("total", 0L),
+                    reason = row.optString("reason")
+                )
+            }
+            out
+        }.getOrDefault(emptyList())
+    }
+
+    /**
+     * Records how far an upload has got.
+     *
+     * Throttled to one write every two seconds: the callback fires per socket chunk, and a phone's
+     * flash storage should not be rewritten two thousand times for one book. The phase changes
+     * (start, verify, fail) always write immediately — those are the states a restart must not
+     * lose.
+     */
+    private fun journalProgress(bookId: String, sent: Long, total: Long, force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && now - journalFlushedAt < 2_000L) return
+        journalFlushedAt = now
+        synchronized(journalLock) {
+            val list = loadJournalUnlocked().toMutableList()
+            list.removeAll { it.bookId == bookId }
+            list += TransferProgress.paused(bookId, sent, total)
+            saveJournalUnlocked(list)
+        }
+    }
+
+    private fun journalDone(bookId: String) {
+        synchronized(journalLock) {
+            val list = loadJournalUnlocked()
+            if (list.none { it.bookId == bookId }) return
+            saveJournalUnlocked(list.filterNot { it.bookId == bookId })
+        }
+    }
+
+    private fun saveJournalUnlocked(list: List<TransferProgress>) {
+        if (list.isEmpty()) {
+            runCatching { uploadJournalFile.delete() }
+            return
+        }
+        val arr = JSONArray()
+        list.take(200).forEach { p ->
+            arr.put(
+                JSONObject()
+                    .put("id", p.bookId)
+                    .put("sent", p.sentBytes)
+                    .put("total", p.totalBytes)
+            )
+        }
+        runCatching { atomicWrite(uploadJournalFile, arr.toString()) }
+    }
+
+    /**
+     * Settles what a previous run left behind, once the library is loaded.
+     *
+     * Three outcomes, decided by [Resumable] with no network: the book was already verified (drop
+     * the entry), the file changed while the app was closed (send the current one), or the upload
+     * was simply interrupted (show Paused and put it back in the queue).
+     */
+    private fun reconcileInterruptedUploads() {
+        val journal = uploadJournal()
+        if (journal.isEmpty()) return
+        journal.forEach { entry ->
+            val book = book(entry.bookId)
+            val fileBytes = book?.filePath?.let { File(it) }?.takeIf { it.exists() }?.length() ?: 0L
+            when (Resumable.decide(entry, book, fileBytes)) {
+                ResumeDecision.NONE -> Unit
+                ResumeDecision.ALREADY_DONE -> {
+                    journalDone(entry.bookId)
+                    TransferBus.clear(entry.bookId)
+                }
+                ResumeDecision.RESEND, ResumeDecision.RETRY -> {
+                    // Truthful state: interrupted, not failed, and still owed.
+                    TransferBus.paused(entry.bookId, entry.sentBytes, entry.totalBytes, "interrupted")
+                    if (book != null) {
+                        upsert(book.copy(pendingUpload = true))
+                        noteTransferFailed(book, "upload was interrupted last time", retryable = true)
+                    }
+                }
+            }
+        }
+        SyncDiag.mark(
+            "Interrupted uploads",
+            "${journal.size} from the previous run — restored as paused"
+        )
+    }
+
+    /**
+     * Invalidates confirmations whose file no longer matches.
+     *
+     * A stamp says "these exact bytes are in the account". If the file on the phone changed — a
+     * re-export, a repaired EPUB — the stamp is no longer evidence about the current file, so the
+     * book goes back to pending and the next sync re-uploads it. Nothing is deleted, and the
+     * account's copy is never touched until the new bytes are verified.
+     */
+    private fun reconcileVerifications() {
+        val stale = synchronized(libraryLock) {
+            books.filter { b ->
+                b.backupAt > 0L && b.backupBytes > 0L && b.localFileAvailable &&
+                    BackupRules.changedSinceBackup(b, localFileExists = true)
+            }
+        }
+        if (stale.isEmpty()) return
+        stale.forEach { b ->
+            upsert(b.copy(pendingUpload = true))
+            noteTransferFailed(b, "the file changed since it was backed up", retryable = true)
+        }
+        SyncDiag.mark(
+            "Backup check",
+            "${stale.size} book(s) changed since their last verified upload — queued again"
+        )
+    }
+
+    /**
+     * Retries one book, on the reader's word.
+     *
+     * Used by the card's detail sheet. It goes through the same batch path as a sync, so the retry
+     * behaves exactly like a scheduled one: same lookup by `loreId` (so no duplicate Drive file),
+     * same checksum verification, same queue.
+     */
+    fun retryBook(bookId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val book = book(bookId) ?: return@launch
+            val file = book.filePath?.let(::File)
+            if (file == null || !file.exists() || file.length() <= 0L) {
+                withContext(Dispatchers.Main) {
+                    toast("This book has no file on this phone to upload. Open it to restore the copy.")
+                }
+                return@launch
+            }
+            if (!networkReady()) {
+                withContext(Dispatchers.Main) { toast("No connection — the book stays queued.") }
+                return@launch
+            }
+            if (!account.signedIn || account.provider != "google") {
+                withContext(Dispatchers.Main) { toast("Sign in to back this book up.") }
+                return@launch
+            }
+            TransferBus.paused(bookId, 0L, file.length(), "retrying")
+            SyncDiag.mark("Retry", "one book by request: ${book.title}")
+            val batch = uploadBatch(listOf(book.copy(pendingUpload = true)))
+            batch.failed.forEach { (failed, failure) ->
+                SyncDiag.fail(
+                    "Retry failed — ${failed.title.ifBlank { "Untitled" }} (${failed.id.take(8)})",
+                    failure.reason + if (failure.retryable) " · still queued" else " · will not retry by itself"
+                )
+            }
+            recordBatch(batch)
+            if (batch.confirmed.isNotEmpty()) {
+                withContext(Dispatchers.Main) { toast("“${book.title}” is backed up and verified") }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------
     // Transfer queue
     // ---------------------------------------------------------------------------------------
 
@@ -1811,6 +2046,11 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     )
 
     fun pendingTransfers(): List<PendingTransfer> = synchronized(queueLock) { loadQueueUnlocked() }
+
+    /** Recomputes [uploadQueueReasons] from the persisted queue. */
+    private fun refreshQueueReasons() {
+        uploadQueueReasons = pendingTransfers().associate { it.bookId to it.reason }
+    }
 
     private fun noteTransferFailed(book: LibraryBook, reason: String, retryable: Boolean) {
         synchronized(queueLock) {
@@ -1827,6 +2067,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             )
             saveQueueUnlocked(list)
         }
+        refreshQueueReasons()
         refreshBackupAudit()
     }
 
@@ -1836,6 +2077,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             if (list.none { it.bookId == bookId }) return
             saveQueueUnlocked(list.filterNot { it.bookId == bookId })
         }
+        refreshQueueReasons()
     }
 
     private fun loadQueueUnlocked(): List<PendingTransfer> {
@@ -1886,17 +2128,23 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
 
     /** Recomputes the counts the summary line and the diagnostics panel show. */
     fun refreshBackupAudit() {
+        if (uploadQueueReasons.isEmpty() && pendingTransfers().isNotEmpty()) refreshQueueReasons()
         val books = synchronized(libraryLock) { books.toList() }
             .filter { it.origin != BookOrigin.BUNDLED && it.format != BookFormat.TEXT }
-        backupCounts = BackupAudit.counts(books, uploadingIds)
+        // Live transfers (including paused ones) come from the bus; the batch flag is only a hint.
+        backupCounts = BackupAudit.counts(books, uploadingIds + TransferBus.activeIds())
     }
 
     /** "2 verified, 1 pending, 1 failed" — counted from files, never from metadata. */
     fun backupSummary(): String = backupCounts.summary()
 
     /** What to tell the reader about one book, right now. */
-    fun backupBadge(book: LibraryBook): BackupBadge =
-        BackupAudit.badge(book, book.id in uploadingIds, online = networkReady())
+    fun backupBadge(book: LibraryBook): BackupBadge = BackupAudit.badge(
+        book,
+        TransferBus.progressFor(book.id),
+        online = networkReady(),
+        queued = pendingTransfers().any { it.bookId == book.id }
+    )
 
     /**
      * The per-book backup table for the diagnosis, one line per book that is not verified.
@@ -1914,7 +2162,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         val books = synchronized(libraryLock) { books.toList() }
             .filter { it.origin != BookOrigin.BUNDLED && it.format != BookFormat.TEXT }
         return books.mapNotNull { book ->
-            val badge = BackupAudit.badge(book, book.id in uploadingIds, online = networkReady())
+            val transfer = TransferBus.progressFor(book.id)
+            val badge = BackupAudit.badge(
+                book, transfer, online = networkReady(), queued = queued.containsKey(book.id)
+            )
             if (onlyProblems && badge == BackupBadge.VERIFIED) return@mapNotNull null
             val queue = queued[book.id]
             buildString {
@@ -1924,6 +2175,11 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 append(" · id=").append(book.id.take(12))
                 if (book.driveFileId != null) append(" · drive=").append(book.driveFileId.take(8))
                 if (book.backupBytes > 0L) append(" · ").append(book.backupBytes / 1024).append(" KB verified")
+                if (transfer != null) {
+                    append(" · ").append(transfer.phase.name.lowercase())
+                    append(" ").append(Transfers.transferred(transfer.sentBytes, transfer.totalBytes))
+                    transfer.percent?.let { append(" (").append(it).append("%)") }
+                }
                 if (queue != null) {
                     append(" · ").append(queue.attempts).append(" attempt(s), last tried ")
                     append(android.text.format.DateFormat.format("HH:mm:ss", queue.lastTryAt))

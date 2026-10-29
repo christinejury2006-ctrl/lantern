@@ -1,11 +1,14 @@
 package com.lantern.library.data
 
+import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -194,7 +197,11 @@ object DriveLibrary {
         folderId: String,
         book: LibraryBook,
         file: File,
-        onAttempt: (attempt: Int, reason: String) -> Unit = { _, _ -> }
+        onAttempt: (attempt: Int, reason: String) -> Unit = { _, _ -> },
+        /** Bytes of the file actually written to the socket, in order, for this attempt. */
+        onProgress: (sent: Long, total: Long) -> Unit = { _, _ -> },
+        /** Called once the bytes are out and the account is being asked to prove it has them. */
+        onVerifying: () -> Unit = {}
     ): DriveOutcome<String> {
         if (!file.exists() || file.length() <= 0L) {
             noteError("upload", 0, "the local file is missing or empty")
@@ -203,7 +210,7 @@ object DriveLibrary {
         }
         var attempt = 1
         while (true) {
-            when (val once = uploadOnce(token, book, file)) {
+            when (val once = uploadOnce(token, book, file, onProgress, onVerifying)) {
                 is Attempt.Ok -> return DriveOutcome.Ok(once.id)
                 Attempt.Unauthorized -> return DriveOutcome.Unauthorized
                 is Attempt.Failed -> {
@@ -219,7 +226,15 @@ object DriveLibrary {
     }
 
     /** One attempt, with no sleeping: the retry decision belongs to [upload]. */
-    private fun uploadOnce(token: String, book: LibraryBook, file: File): Attempt {
+    private fun uploadOnce(
+        token: String,
+        book: LibraryBook,
+        file: File,
+        onProgress: (Long, Long) -> Unit,
+        onVerifying: () -> Unit
+    ): Attempt {
+        val total = file.length()
+        val report: (Long) -> Unit = { sent -> onProgress(sent, total) }
         // Idempotency first: an interrupted earlier attempt may already have created this file.
         val existing = when (val lookup = findByLoreId(token, book.id)) {
             LoreLookup.Error -> return Attempt.Failed(lastCode, lastError.orEmpty(), true)
@@ -227,24 +242,26 @@ object DriveLibrary {
             is LoreLookup.Found -> lookup.id
         }
         val id = if (existing != null) {
-            when (val replaced = replaceMedia(token, existing, book, file)) {
+            when (val replaced = replaceMedia(token, existing, book, file, report)) {
                 is DriveOutcome.Ok -> replaced.value
                 DriveOutcome.Unauthorized -> return Attempt.Unauthorized
                 DriveOutcome.Failed -> return Attempt.Failed(lastCode, lastError.orEmpty(), true)
             }
         } else {
-            when (val created = createFile(token, book, file)) {
+            when (val created = createFile(token, book, file, report)) {
                 is DriveOutcome.Ok -> created.value
                 DriveOutcome.Unauthorized -> return Attempt.Unauthorized
                 DriveOutcome.Failed -> return Attempt.Failed(lastCode, lastError.orEmpty(), true)
             }
         }
+        // Every byte is out. That is not a backup yet, and nothing above this line may say it is.
+        onVerifying()
         return when (val check = verify(token, id, file)) {
             VerifyOutcome.Verified -> Attempt.Ok(id)
             VerifyOutcome.Unauthorized -> Attempt.Unauthorized
             VerifyOutcome.Mismatch -> {
                 // One re-send, because the usual cause is a transfer the service truncated.
-                when (replaceMedia(token, id, book, file)) {
+                when (replaceMedia(token, id, book, file, report)) {
                     is DriveOutcome.Ok -> Unit
                     DriveOutcome.Unauthorized -> return Attempt.Unauthorized
                     DriveOutcome.Failed -> return Attempt.Failed(lastCode, lastError.orEmpty(), true)
@@ -332,6 +349,40 @@ object DriveLibrary {
     internal fun fileBody(file: File, mime: String): okhttp3.RequestBody =
         file.asRequestBody(mime.toMediaType())
 
+    /**
+     * A request body that reports how many of its bytes have actually been written.
+     *
+     * This is where "progress" comes from: not a guess from the book's size, not a count of books
+     * in the batch, but the number of bytes OkHttp has handed to the socket. It is wrapped around
+     * *only the file part* of an upload, so the percentage is about the book and not about the
+     * few hundred bytes of metadata in front of it.
+     */
+    internal class CountingBody(
+        private val delegate: RequestBody,
+        private val onProgress: (sent: Long) -> Unit
+    ) : RequestBody() {
+        override fun contentType(): MediaType? = delegate.contentType()
+        override fun contentLength(): Long = delegate.contentLength()
+        override fun isOneShot(): Boolean = delegate.isOneShot()
+
+        override fun writeTo(sink: BufferedSink) {
+            val total = delegate.contentLength()
+            var written = 0L
+            val counting = object : okio.ForwardingSink(sink) {
+                override fun write(source: okio.Buffer, byteCount: Long) {
+                    super.write(source, byteCount)
+                    written += byteCount
+                    onProgress(if (total > 0L) written.coerceAtMost(total) else written)
+                }
+            }
+            val forwarding = okio.Okio.buffer(counting)
+            delegate.writeTo(forwarding)
+            // Flush before returning: OkHttp closes the sink itself, and an unflushed 8 KB tail
+            // would otherwise be counted after the caller believes the body is finished.
+            forwarding.flush()
+        }
+    }
+
     /** A `multipart/related` body from parts that already carry their own media types. */
     private fun related(vararg parts: okhttp3.RequestBody): MultipartBody =
         MultipartBody.Builder()
@@ -339,14 +390,21 @@ object DriveLibrary {
             .apply { parts.forEach { addPart(it) } }
             .build()
 
-    private fun createFile(token: String, book: LibraryBook, file: File): DriveOutcome<String> {
+    private fun createFile(
+        token: String,
+        book: LibraryBook,
+        file: File,
+        onProgress: (Long) -> Unit = {}
+    ): DriveOutcome<String> {
         val meta = JSONObject()
             .put("name", driveName(book))
             .put("parents", JSONArray().put(APP_DATA_FOLDER))
             .put("appProperties", JSONObject().put("loreId", book.id))
+        // The file part is the counted one; the metadata part is a few hundred bytes and would
+        // make the percentage jump before any book data had moved.
         val multipart = related(
             jsonBody(meta.toString()),
-            fileBody(file, mimeFor(book))
+            CountingBody(fileBody(file, mimeFor(book)), onProgress)
         )
         val req = Request.Builder()
             .url("$UPLOAD?uploadType=multipart")
@@ -368,11 +426,17 @@ object DriveLibrary {
     }
 
     /** Overwrites an existing file's bytes, keeping its id, name and app properties. */
-    private fun replaceMedia(token: String, fileId: String, book: LibraryBook, file: File): DriveOutcome<String> {
+    private fun replaceMedia(
+        token: String,
+        fileId: String,
+        book: LibraryBook,
+        file: File,
+        onProgress: (Long) -> Unit = {}
+    ): DriveOutcome<String> {
         val req = Request.Builder()
             .url("$UPLOAD/${enc(fileId)}?uploadType=media")
             .header("Authorization", "Bearer $token")
-            .patch(file.asRequestBody(mimeFor(book).toMediaType()))
+            .patch(CountingBody(fileBody(file, mimeFor(book)), onProgress))
             .build()
         val raw = executeRaw(req, retries = false)
             ?: return DriveOutcome.Failed.also { noteError("replace", 0, "no response") }

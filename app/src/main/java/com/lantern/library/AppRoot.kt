@@ -250,7 +250,13 @@ internal fun LanternRoot(store: LanternStore) {
                     onSearch = { tab = Route.Search },
                     onLibrary = { tab = Route.Library },
                     onRefreshPicks = { store.refreshForYou() },
-                    onNotifications = { tab = Route.Profile }
+                    onNotifications = { tab = Route.Profile },
+                    // Live per-book byte progress. Reading the bus here (not the library) is what
+                    // keeps a transfer from recomposing or re-flowing the shelf.
+                    transfers = com.lantern.library.data.TransferBus.states,
+                    queueReasons = store.uploadQueueReasons,
+                    online = store.account.driveConnected,
+                    onRetryBackup = { id -> store.retryBook(id) }
                 )
                 Route.Library -> LibraryScreen(
                     books = store.books,

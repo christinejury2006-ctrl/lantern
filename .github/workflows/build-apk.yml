@@ -81,11 +81,15 @@ jobs:
               summary=$(grep -ho 'tests="[0-9]*" skipped="[0-9]*" failures="[0-9]*" errors="[0-9]*"' "$results"/*.xml \
                 | awk -F'"' '{t+=$2; s+=$4; f+=$6; e+=$8} END {printf "tests=%d skipped=%d failures=%d errors=%d", t, s, f, e}')
               echo "::notice title=Unit tests::$summary"
+              classes=""
               for f in "$results"/*.xml; do
                 name=$(grep -o 'name="[^"]*"' "$f" | head -1 | cut -d'"' -f2)
                 counts=$(grep -o 'tests="[0-9]*"' "$f" | head -1 | cut -d'"' -f2)
-                echo "  $name: $counts"
+                classes="$classes$name=$counts "
               done
+              # Also an annotation: run logs are not always readable from here, and "did my new
+              # test class actually run?" should be answerable from the run page alone.
+              echo "::notice title=Unit test classes::${classes% }"
             fi
           fi
           if [ "$status" -ne 0 ]; then

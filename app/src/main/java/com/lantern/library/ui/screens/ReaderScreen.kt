@@ -1082,7 +1082,8 @@ private fun PageLeaf(page: ReaderPage?, family: FontFamily, size: Float, ink: Co
             var first = true
             page.paragraphs.forEach { para ->
                 val picture = EpubMedia.parse(para)
-                if (!first) Spacer(Modifier.height((size * 1.55f).sp))
+                // The same one-line gap pagination reserved between blocks.
+                if (!first) Spacer(Modifier.height((size * 1.55f).dp))
                 first = false
                 if (picture != null) {
                     BookPicture(picture, modifier = Modifier.fillMaxWidth())

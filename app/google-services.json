@@ -30,6 +30,14 @@
           }
         },
         {
+          "client_id": "722804811654-k6tbqeqa14ghdl1i6gbgdm12j7346ish.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.lantern.library",
+            "certificate_hash": "6fdf2aded560460dc2ededd1a25ba8f5c76abe3c"
+          }
+        },
+        {
           "client_id": "722804811654-vs892rhnq4dqdks90rrrmokoddd1gq2e.apps.googleusercontent.com",
           "client_type": 3
         }

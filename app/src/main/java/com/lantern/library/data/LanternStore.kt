@@ -648,6 +648,65 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Runs the backup connection test and puts every step into the diagnosis.
+     *
+     * This is the only way to answer "will sync work now?" without a second phone and a second
+     * account: it exercises the same three calls a real backup makes, reports Google's own status
+     * for each one, and names the console setting when a step is refused.
+     */
+    fun testBackupConnection() {
+        viewModelScope.launch(Dispatchers.IO) {
+            SyncDiag.clear()
+            SyncDiag.mark("Connection test", "started")
+            if (!account.signedIn) {
+                SyncDiag.fail("Google sign-in", "not signed in — sign in from this screen first")
+                withContext(Dispatchers.Main) { toast("Sign in first") }
+                return@launch
+            }
+            val ctx = getApplication<Application>()
+            val token = when (val result = GoogleAuth.driveToken(ctx)) {
+                is DriveTokenResult.Ok -> {
+                    SyncDiag.mark("Drive token", "granted")
+                    result.token
+                }
+                is DriveTokenResult.Recoverable -> {
+                    SyncDiag.fail("Drive token", "the reader must approve Drive access")
+                    withContext(Dispatchers.Main) { offerDriveConsent(result.intent) }
+                    null
+                }
+                DriveTokenResult.Unavailable -> {
+                    SyncDiag.fail(
+                        "Drive token",
+                        "unavailable — no Google account on this device, or the app is not " +
+                            "configured with the Drive scope"
+                    )
+                    null
+                }
+            }
+            if (token != null) {
+                DriveLibrary.clearError()
+                val checks = runCatching { DriveLibrary.selfTest(token) }.getOrElse { error ->
+                    listOf(DriveLibrary.Check("Connection test", false, error.message ?: "failed"))
+                }
+                checks.forEach { check ->
+                    if (check.ok) SyncDiag.mark(check.stage, check.detail)
+                    else SyncDiag.fail(check.stage, check.detail)
+                }
+                val allOk = checks.isNotEmpty() && checks.all { it.ok }
+                SyncDiag.mark(
+                    "Result",
+                    if (allOk) "backup works on this device" else "see the failing step above"
+                )
+                withContext(Dispatchers.Main) {
+                    toast(if (allOk) "Backup works on this device" else "Backup is blocked — see Sync diagnosis")
+                }
+            }
+            // Firebase is the second half of the same question.
+            syncFirebaseAccount(null, announce = false)
+        }
+    }
+
     fun requestDriveConnect() {
         driveConsentPrompted = false
         viewModelScope.launch(Dispatchers.IO) { connectDrive(quiet = false, pullAccount = true) }

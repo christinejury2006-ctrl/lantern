@@ -275,6 +275,13 @@ internal fun LanternRoot(store: LanternStore) {
                     theme = theme,
                     fetchingId = store.fetchingEditionId,
                     onOpen = { remote -> getDiscovery(remote) },
+                    // Borrow and "open the record" links leave for the browser: the point of them
+                    // is that the book is read where it is legally lent, not copied here.
+                    onOpenLink = { url ->
+                        runCatching {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                        }.onFailure { store.toast("No app can open that link") }
+                    },
                     onDownload = { edition ->
                         // Straight from the catalogue into the library, then straight into the
                         // reader: the reader asked for a book, not for a file manager.
@@ -297,7 +304,8 @@ internal fun LanternRoot(store: LanternStore) {
                         clipboard.setText(AnnotatedString(report))
                         store.toast("Sync diagnosis copied")
                     },
-                    onClearSyncTrace = { com.lantern.library.data.SyncDiag.clear() }
+                    onClearSyncTrace = { com.lantern.library.data.SyncDiag.clear() },
+                    onTestConnection = { store.testBackupConnection() }
                 )
                 is Route.Reader -> {
                     val book = store.book(r.id)

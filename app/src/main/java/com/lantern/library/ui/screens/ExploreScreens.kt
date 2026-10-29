@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -44,7 +45,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lantern.library.data.DiscoveryBook
+import com.lantern.library.data.Elsewhere
 import com.lantern.library.data.FreeEdition
+import com.lantern.library.data.GoogleBooks
 import com.lantern.library.data.OpenCatalogs
 import com.lantern.library.data.ReaderTheme
 import com.lantern.library.ui.components.CoverFace
@@ -106,12 +109,33 @@ suspend fun fetchScrapedBooks(query: String): List<ScrapedBookItem> = withContex
     return@withContext bookList
 }
 
+/**
+ * Explore: search the internet for a book, and take it if it can legally be taken.
+ *
+ * Every search asks four catalogues at once and shows three separate answers, because they answer
+ * three different questions and blurring them is what made this screen feel broken:
+ *
+ * 1. **Download free** — an actual file this app can fetch and open. Project Gutenberg (via
+ *    Gutendex), open Internet Archive items, openly-scanned Open Library records, and OpenAlex's
+ *    index of open-access books. The last one is how a book published this year can appear here.
+ * 2. **Read or borrow** — where an in-copyright book can be read without this app holding a copy:
+ *    the Internet Archive's one-copy lending, the Open Library record, the publisher's page. A 2019
+ *    novel is not downloadable and pretending otherwise wastes the reader's time.
+ * 3. **More books** — Google Books metadata: covers, descriptions, shop links. Tapping one opens the
+ *    same details sheet as an editor's pick.
+ *
+ * Z-Library, Anna's Archive, Library Genesis and Ocean of PDF are deliberately absent. They host
+ * in-copyright books without permission; scraping them is not something this app ships. The borrow
+ * links above exist so that "in copyright" is an answer and not a dead end. The scraper function
+ * the owner added to this file is kept as written but is not wired in, for that reason.
+ */
 @Composable
 fun SearchScreen(
     theme: ReaderTheme,
     fetchingId: String? = null,
     onOpen: (DiscoveryBook) -> Unit,
-    onDownload: (FreeEdition) -> Unit
+    onDownload: (FreeEdition) -> Unit,
+    onOpenLink: (String) -> Unit = {}
 ) {
     val dark = theme == ReaderTheme.DARK
     val palette = nookPalette(dark)
@@ -119,6 +143,7 @@ fun SearchScreen(
     val mute = palette.mute
     var query by remember { mutableStateOf("") }
     var editions by remember { mutableStateOf<List<FreeEdition>>(emptyList()) }
+    var elsewhere by remember { mutableStateOf<List<Elsewhere>>(emptyList()) }
     var results by remember { mutableStateOf<List<DiscoveryBook>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var searched by remember { mutableStateOf(false) }
@@ -127,6 +152,7 @@ fun SearchScreen(
     var history by remember {
         mutableStateOf(prefs.getString("history", "").orEmpty().split("\n").filter { it.isNotBlank() }.take(8))
     }
+    // Suggestions, not a substitute for searching: these are the terms the shelves over-ask for.
     val trending = remember {
         listOf("Pride and Prejudice", "Dracula", "Sherlock Holmes", "Alice in Wonderland",
             "Frankenstein", "romance", "werewolf", "fantasy")
@@ -136,32 +162,29 @@ fun SearchScreen(
         val q = query.trim()
         if (q.length < 2) {
             editions = emptyList()
+            elsewhere = emptyList()
             results = emptyList()
             loading = false
             searched = false
-        } else {
-            loading = true
-            searched = true
-            withContext(Dispatchers.IO) {
-                try {
-                    val fetchedEditions = OpenCatalogs.search(q)
-                    editions = fetchedEditions
-
-                    val scrapedItems = fetchScrapedBooks(q)
-                    val scrapedBooks = scrapedItems.map { item ->
-                        DiscoveryBook(
-                            title = item.title,
-                            coverUrl = item.coverUrl,
-                            volumeId = item.detailUrl
-                        )
-                    }
-                    results = scrapedBooks
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                } finally {
-                    loading = false
-                }
-            }
+            return@LaunchedEffect
+        }
+        loading = true
+        // All three lookups run off the main thread and each one is independent: a catalogue being
+        // down costs its own results and nothing else.
+        val found = withContext(Dispatchers.IO) {
+            val free = runCatching { OpenCatalogs.search(q) }.getOrDefault(emptyList())
+            val links = runCatching { OpenCatalogs.elsewhere(q) }.getOrDefault(emptyList())
+            val google = runCatching { GoogleBooks.volumes(q, "relevance", 12) }.getOrDefault(emptyList())
+            Triple(free, links, google)
+        }
+        editions = found.first
+        elsewhere = found.second
+        results = found.third
+        loading = false
+        searched = true
+        if (found.first.isNotEmpty() || found.second.isNotEmpty() || found.third.isNotEmpty()) {
+            history = (listOf(q) + history.filterNot { it.equals(q, true) }).take(8)
+            prefs.edit().putString("history", history.joinToString("\n")).apply()
         }
     }
 
@@ -177,7 +200,7 @@ fun SearchScreen(
                 Column {
                     Text("Explore", color = ink, fontFamily = Playfair, fontSize = 30.sp)
                     Text(
-                        "Find a book. Free editions download straight to your shelf.",
+                        "Free editions download to your shelf. Books still in copyright can be borrowed.",
                         color = mute,
                         fontSize = 13.sp
                     )
@@ -247,27 +270,40 @@ fun SearchScreen(
                             }
                         }
                         Spacer(Modifier.height(18.dp))
-                        Text(
-                            "Free files come from Project Gutenberg, Internet Archive, and Ocean of PDF.",
-                            color = mute,
-                            fontSize = 11.sp
-                        )
+                        SourcesNote(palette)
                     }
 
                     if (loading) {
-                        Text("Searching libraries…", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
-                    }
-                    if (searched && editions.isEmpty() && results.isEmpty() && !loading) {
                         Text(
-                            "Nothing found. Try fewer words, or the author's surname.",
+                            "Searching four catalogues…",
                             color = mute,
                             fontSize = 13.sp,
                             modifier = Modifier.padding(top = 12.dp)
                         )
                     }
+                    if (searched && !loading && editions.isEmpty() && elsewhere.isEmpty() && results.isEmpty()) {
+                        Column(Modifier.padding(top = 12.dp)) {
+                            Text(
+                                "Nothing found for “${query.trim()}”.",
+                                color = ink,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                "Try fewer words, or the author's surname. Older and public-domain books " +
+                                    "are the ones the free catalogues can usually supply.",
+                                color = mute,
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        }
+                    }
                     if (editions.isNotEmpty()) {
                         Spacer(Modifier.height(16.dp))
-                        Text("DOWNLOAD FREE", color = mute, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            "DOWNLOAD FREE  ·  ${editions.size}",
+                            color = mute, fontSize = 11.sp, fontWeight = FontWeight.Bold
+                        )
                     }
                 }
             }
@@ -282,14 +318,38 @@ fun SearchScreen(
                 )
             }
 
+            if (elsewhere.isNotEmpty()) {
+                item(span = { GridItemSpan(2) }) {
+                    Column(Modifier.padding(top = 12.dp)) {
+                        Text(
+                            "READ OR BORROW  ·  ${elsewhere.size}",
+                            color = mute, fontSize = 11.sp, fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            "Still in copyright, so there is no file to take. These open where the book " +
+                                "can legitimately be read.",
+                            color = mute, fontSize = 11.sp
+                        )
+                    }
+                }
+                // A single full-width cell holding the list: these are rows, not covers, and the
+                // count is small enough that laziness would buy nothing.
+                item(span = { GridItemSpan(2) }) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        elsewhere.forEach { link ->
+                            ElsewhereCard(link, dark) { onOpenLink(link.url) }
+                        }
+                    }
+                }
+            }
+
             if (results.isNotEmpty()) {
                 item(span = { GridItemSpan(2) }) {
                     Column(Modifier.padding(top = 10.dp)) {
-                        Text("WEB RESULTS", color = mute, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("MORE BOOKS", color = mute, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         Text(
-                            "Results found via Ocean of PDF. Tap one to inspect details.",
-                            color = mute,
-                            fontSize = 11.sp
+                            "Covers and descriptions. Tap one for its details.",
+                            color = mute, fontSize = 11.sp
                         )
                     }
                 }
@@ -307,8 +367,8 @@ fun SearchScreen(
                             )
                             Text(book.authorLine, color = mute, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(
-                                "View Book Details",
-                                color = palette.accent,
+                                if (book.publicDomain) "Public-domain edition" else "Book details",
+                                color = if (book.publicDomain) palette.accent else mute,
                                 fontSize = 10.sp,
                                 modifier = Modifier.padding(top = 4.dp)
                             )
@@ -316,6 +376,43 @@ fun SearchScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+/** Where all this comes from, said plainly once, at the bottom of an empty search. */
+@Composable
+private fun SourcesNote(palette: com.lantern.library.ui.theme.NookPalette) {
+    GlassCard(Modifier.fillMaxWidth(), palette.dark, 16) {
+        Column(Modifier.padding(14.dp)) {
+            Text(
+                "WHERE BOOKS COME FROM",
+                color = palette.mute, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp
+            )
+            Spacer(Modifier.height(8.dp))
+            listOf(
+                "Project Gutenberg — 70,000+ public-domain books, EPUB and PDF" to "",
+                "Internet Archive — scanned public-domain books, plus free borrowing of in-copyright ones" to "",
+                "Open Library — the catalogue behind the Archive: every modern book, at least by record" to "",
+                "OpenAlex — academic books published open access, including recent ones" to ""
+            ).forEach { (line, _) ->
+                Row(Modifier.padding(bottom = 5.dp)) {
+                    Text("·", color = palette.accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        line,
+                        color = palette.ink,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(start = 6.dp)
+                    )
+                }
+            }
+            Text(
+                "Piracy mirrors are not used: they carry in-copyright books without permission, and " +
+                    "an app cannot vouch for what it downloads from one.",
+                color = palette.faint,
+                fontSize = 10.sp,
+                modifier = Modifier.padding(top = 6.dp)
+            )
         }
     }
 }
@@ -369,6 +466,51 @@ private fun EditionCard(
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold
                 )
+            }
+        }
+    }
+}
+
+/** One place an in-copyright book can be read: borrow, open the record, or the publisher. */
+@Composable
+private fun ElsewhereCard(link: Elsewhere, dark: Boolean, onOpen: () -> Unit) {
+    val palette = nookPalette(dark)
+    GlassCard(Modifier.fillMaxWidth(), dark, 16) {
+        Row(
+            Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(Modifier.width(52.dp).height(72.dp)) {
+                CoverFace(
+                    link.title, null, link.coverUrl,
+                    Modifier.fillMaxSize(), dark
+                )
+            }
+            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                Text(
+                    link.title, color = palette.ink, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis
+                )
+                if (link.author.isNotBlank()) {
+                    Text(
+                        link.author, color = palette.mute, fontSize = 11.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Text(
+                    "${link.source} · ${link.note}", color = palette.faint, fontSize = 10.sp,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(palette.accent.copy(alpha = 0.16f))
+                    .clickable(onClick = onOpen)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Text(link.action, color = palette.accent, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
             }
         }
     }

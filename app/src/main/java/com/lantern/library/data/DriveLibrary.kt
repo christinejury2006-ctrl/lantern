@@ -396,6 +396,143 @@ object DriveLibrary {
         return DriveOutcome.Failed
     }
 
+    /**
+     * Proves, step by step, whether backup can work on this device right now.
+     *
+     * "I enabled the Drive API" is not something the app can take on trust, and the failure modes
+     * below look identical from the outside: a token that arrives but lacks the app-data scope, a
+     * Drive API that is disabled for the project, a scope that was never granted on the consent
+     * screen. So the check does exactly what a real backup does — three small calls and one full
+     * round trip — and reports each step with Google's own status code. The round trip matters:
+     * uploading a probe, reading it back, comparing the bytes and deleting it exercises the same
+     * code path a book takes, without touching a single book.
+     */
+    fun selfTest(token: String): List<Check> {
+        val out = ArrayList<Check>(4)
+
+        // 1. Is Drive reachable at all, and whose account is it?
+        val aboutReq = Request.Builder()
+            .url("https://www.googleapis.com/drive/v3/about?fields=user(emailAddress),storageQuota(limit,usage)")
+            .header("Authorization", "Bearer $token")
+            .get()
+            .build()
+        when (val about = executeRaw(aboutReq)) {
+            null -> out += Check("Drive API", false, "no response — the phone could not reach googleapis.com")
+            else -> if (!about.ok) {
+                out += Check("Drive API", false, describe(about, "about.get"))
+            } else {
+                val json = runCatching { JSONObject(about.body.orEmpty()) }.getOrNull()
+                val email = json?.optJSONObject("user")?.optString("emailAddress").orEmpty()
+                val quota = json?.optJSONObject("storageQuota")
+                val limit = quota?.optString("limit").orEmpty()
+                val usage = quota?.optString("usage").orEmpty()
+                val used = if (limit.isNotBlank() && usage.isNotBlank()) {
+                    " — ${usage.toLongOrNull()?.div(1_048_576) ?: 0} MB of " +
+                        (limit.toLongOrNull()?.div(1_048_576)?.toString() ?: "unlimited") + " MB used"
+                } else ""
+                out += Check("Drive API", true, (email.ifBlank { "signed in" }) + used)
+            }
+        }
+
+        // 2. Can the app see its own hidden app-data space? This is the scope question, separated
+        //    from the "is the API enabled" question above.
+        val listReq = Request.Builder()
+            .url("$FILES?spaces=appDataFolder&fields=files(id,name)&pageSize=5")
+            .header("Authorization", "Bearer $token")
+            .get()
+            .build()
+        when (val list = executeRaw(listReq)) {
+            null -> out += Check("App-data folder", false, "no response")
+            else -> if (!list.ok) {
+                out += Check("App-data folder", false, describe(list, "files.list"))
+            } else {
+                val count = runCatching {
+                    JSONObject(list.body.orEmpty()).optJSONArray("files")?.length() ?: 0
+                }.getOrDefault(0)
+                out += Check("App-data folder", true, "$count file${if (count == 1) "" else "s"} visible")
+            }
+        }
+
+        // 3. A real round trip with a throwaway file: create, read back, compare, delete.
+        val probe = "lore-probe-" + System.currentTimeMillis() + ".txt"
+        val payload = "Lore backup probe ${System.currentTimeMillis()}".toByteArray()
+        val meta = JSONObject()
+            .put("name", probe)
+            .put("parents", JSONArray().put(APP_DATA_FOLDER))
+            .put("appProperties", JSONObject().put("loreProbe", "1"))
+        val multipart = MultipartBody.Builder()
+            .setType(relatedType)
+            .addPart(
+                Headers.headersOf("Content-Type", "application/json; charset=UTF-8"),
+                meta.toString().toRequestBody(jsonType)
+            )
+            .addPart(
+                Headers.headersOf("Content-Type", "text/plain"),
+                payload.toRequestBody("text/plain".toMediaType())
+            )
+            .build()
+        val upReq = Request.Builder()
+            .url("$UPLOAD?uploadType=multipart")
+            .header("Authorization", "Bearer $token")
+            .post(multipart)
+            .build()
+        val up = executeRaw(upReq)
+        val probeId = up?.let {
+            if (it.ok) runCatching { JSONObject(it.body.orEmpty()).optString("id") }.getOrNull() else null
+        }?.takeIf { it.isNotBlank() }
+        if (probeId == null) {
+            out += Check(
+                "Upload round trip",
+                false,
+                if (up == null) "no response" else describe(up, "files.create")
+            )
+            return out
+        }
+        val downReq = Request.Builder()
+            .url("$FILES/${enc(probeId)}?alt=media")
+            .header("Authorization", "Bearer $token")
+            .get()
+            .build()
+        val down = executeRaw(downReq)
+        val body = down?.body
+        val same = down != null && down.ok && body == String(payload)
+        runCatching { delete(token, probeId) }
+        out += Check(
+            "Upload round trip",
+            same,
+            when {
+                down == null -> "upload worked, the read-back did not answer"
+                !down.ok -> describe(down, "files.get")
+                !same -> "uploaded ${payload.size} bytes, read back ${body?.length ?: 0} — the bytes differ"
+                else -> "wrote, read back and deleted a ${payload.size}-byte test file"
+            }
+        )
+        return out
+    }
+
+    /** One line of the connection test. */
+    data class Check(val stage: String, val ok: Boolean, val detail: String)
+
+    /** Google's status code plus its own words, in one line the reader can act on. */
+    private fun describe(raw: RawHttp, what: String): String {
+        val body = raw.body.orEmpty().replace(Regex("\\s+"), " ").take(220)
+        val hint = when (raw.code) {
+            401 -> " — the access token was rejected. Sign out and sign in again."
+            403 -> if (body.contains("has not been used", true) || body.contains("disabled", true)) {
+                " — the Google Drive API is not enabled for this project. " +
+                    "Enable it in Google Cloud Console → APIs & Services → Library → Google Drive API."
+            } else if (body.contains("insufficient", true) || body.contains("scope", true)) {
+                " — the app was not granted the Drive app-data scope. Sign out, then sign in and " +
+                    "allow Drive access when the consent screen appears."
+            } else {
+                " — Google refused the request."
+            }
+            404 -> " — not found."
+            else -> ""
+        }
+        return "$what returned HTTP ${raw.code}$hint" + if (body.isBlank()) "" else " [$body]"
+    }
+
     private fun query(token: String, q: String): QueryOutcome {
         val url = "$FILES?q=${URLEncoder.encode(q, "UTF-8")}&spaces=appDataFolder&fields=files(id)&pageSize=100"
         val req = Request.Builder()

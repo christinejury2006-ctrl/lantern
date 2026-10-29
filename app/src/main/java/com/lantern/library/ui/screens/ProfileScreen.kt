@@ -64,7 +64,9 @@ fun ProfileScreen(
     /** Every stage the last syncs went through. Shown as a list, never uploaded. */
     syncTrace: List<SyncDiag.Line> = emptyList(),
     onCopySyncTrace: (String) -> Unit = {},
-    onClearSyncTrace: () -> Unit = {}
+    onClearSyncTrace: () -> Unit = {},
+    /** Runs the three real Drive calls and one round trip, reporting each stage. */
+    onTestConnection: () -> Unit = {}
 ) {
     val palette = nookPalette(prefs.theme)
     val fileBooks = books.filter { it.origin != BookOrigin.BUNDLED && it.format != BookFormat.TEXT }
@@ -206,7 +208,8 @@ fun ProfileScreen(
                     Spacer(Modifier.height(10.dp))
                     if (syncTrace.isEmpty()) {
                         Text(
-                            "No sync has run on this install yet.",
+                            "No sync has run on this install yet. Run the connection test below to " +
+                                "check backup end to end.",
                             color = palette.faint,
                             fontSize = 11.sp
                         )
@@ -237,15 +240,19 @@ fun ProfileScreen(
                                 }
                             }
                         }
-                        Spacer(Modifier.height(12.dp))
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    // The decisive button: it performs the same calls a backup does and says which
+                    // one Google refused, if any.
+                    NookButton(palette, "Test backup connection", onTestConnection, filled = true)
+                    if (syncTrace.isNotEmpty()) {
+                        Spacer(Modifier.height(6.dp))
                         NookButton(
                             palette,
                             "Copy diagnosis",
                             { onCopySyncTrace(SyncDiag.report()) },
                             filled = false
                         )
-                    }
-                    if (syncTrace.isNotEmpty()) {
                         Spacer(Modifier.height(6.dp))
                         NookButton(palette, "Clear", onClearSyncTrace, filled = false)
                     }

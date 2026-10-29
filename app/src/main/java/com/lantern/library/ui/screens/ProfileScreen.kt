@@ -57,7 +57,6 @@ fun ProfileScreen(
     onSignOut: () -> Unit,
     onConnectDrive: () -> Unit = {},
     onEditInterests: () -> Unit = {},
-    onLibraryAppearance: () -> Unit = {},
     onSyncNow: () -> Unit = {}
 ) {
     val palette = nookPalette(prefs.theme)
@@ -188,7 +187,6 @@ fun ProfileScreen(
                         }
                     }
                     Spacer(Modifier.height(12.dp))
-                    NookButton(palette, "Library appearance", onLibraryAppearance, filled = false)
                 }
             }
 

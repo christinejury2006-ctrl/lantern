@@ -37,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -218,6 +219,7 @@ internal fun LanternRoot(store: LanternStore) {
     val needsOnboarding = !store.interestsChosen
     LanternTheme(theme) {
         Box(Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxSize().blur(if (details != null) 12.dp else 0.dp)) {
             if (needsOnboarding) {
                 InterestOnboardingScreen(
                     theme = theme,
@@ -318,8 +320,9 @@ internal fun LanternRoot(store: LanternStore) {
                     )
                 }
             }
+            }
             val detail = details
-            if (detail != null && tab is Route.Library) {
+            if (detail != null && tab !is Route.Reader) {
                 BookDetailsOverlay(
                     book = detail,
                     theme = theme,

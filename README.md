@@ -58,45 +58,43 @@ just like a store update. That needs two things, both handled by this repo:
 Tagging releases gives a permanent download: `git tag v3.5.1 && git push origin v3.5.1`
 publishes `lore-v3.5.1.apk` on the Releases page, already signed for in-place updates.
 
-### The key that is waiting to be installed
+### Make the signing key once
 
-A keystore has been generated and left in `keys/` in the working copy (ignored by git — this
-repository is public, and a committed signing key would let anyone sign an update your phone
-would accept). Its certificate SHA-1 is
-`A4:D3:9F:7C:64:37:85:C1:4F:5D:DF:59:9A:10:7D:E2:FB:C5:8F:8F`.
+The build **refuses to run without a persistent key** (`.github/workflows/build-apk.yml`,
+step *Require persistent update signing key*). That is deliberate: an ephemeral key changes the
+APK fingerprint on every run, so Android refuses the update *and* no SHA-1 is worth registering
+with Google.
 
-Installing it is four commands, run once from the repository root:
+On your own machine, once, from the repository root:
 
 ```sh
-gh secret set LORE_KEYSTORE_BASE64 -b "$(base64 -w0 keys/lore-update.p12)"
-gh secret set LORE_KEYSTORE_PASSWORD -b "$(cat keys/lore-update.pass)"
-gh secret set LORE_KEY_PASSWORD     -b "$(cat keys/lore-update.pass)"
-gh secret set LORE_KEY_ALIAS        -b "lore-update"
+./tools/make-update-key.sh
 ```
 
-After that every build carries the same signature and installs over the last one. Keep `keys/`
-somewhere private: if it is lost, an installed Lore can only be replaced after an uninstall.
+It generates a PKCS#12 keystore, stores the four secrets (`LORE_KEYSTORE_BASE64`,
+`LORE_KEYSTORE_PASSWORD`, `LORE_KEY_ALIAS`, `LORE_KEY_PASSWORD`) with `gh`, and prints the
+certificate's SHA-1. Keep the keystore and password private — they are gitignored, and losing
+them means the installed app can only be replaced after an uninstall.
 
-Register the same SHA-1 in Firebase (Project settings → Your apps → `com.lantern.library` →
-Add fingerprint) and Google Sign-In stops failing with error 10. It has to be the *stable* key:
-while builds are signed with a throwaway key that is regenerated on every CI run, there is no
-fingerprint worth registering, because it changes every build. The build prints the signer's
-SHA-1 in the **APK signer** annotation, so the value to paste is always in the run summary.
+Then paste that SHA-1 into Firebase (Project settings → Your apps → `com.lantern.library` →
+Add fingerprint) so Google Sign-In accepts the build, and download `google-services.json`
+again. Every later APK carries the same signature and installs straight over the last one.
 
 ### Why Google Sign-In says "error 10"
 
-Google Sign-In needs two OAuth clients in the Firebase/Cloud project, and this repository's
-`app/google-services.json` currently has **neither**:
+Google Sign-In needs two OAuth clients in the Firebase/Cloud project. `app/google-services.json`
+in this branch carries both — two Android clients (`client_type: 1`, one per registered
+fingerprint) and a Web client (`client_type: 3`):
 
 | Client | Type | What creates it | What it is used for |
 | --- | --- | --- | --- |
 | Android | `client_type: 1` | Firebase → Project settings → Your apps → Add fingerprint | Lets Google trust this APK's package + signing certificate. **Missing it is error 10.** |
 | Web | `client_type: 3` | Enabling Google in Firebase Authentication | Mints the ID token that `signInWithCredential` trades for a Firebase session |
 
-Both are console actions; neither can be created from code or from CI. Once they exist, download
-`google-services.json` again and commit it — the build reads the Web client ID straight out of
-that file (an explicit `FIREBASE_WEB_CLIENT_ID` secret or `local.properties` entry still wins),
-so no extra configuration has to be kept in step.
+Both are console actions; neither can be created from code or from CI. After adding a fingerprint,
+download `google-services.json` again and commit it — the build reads the Web client ID straight
+out of that file (an explicit `FIREBASE_WEB_CLIENT_ID` secret or `local.properties` entry still
+wins), so no extra configuration has to be kept in step.
 
 Until then the app does two things instead of failing silently: sign-in opens a dialog naming the
 exact setting that is missing with a Copy button for the package and SHA-1, and the build prints

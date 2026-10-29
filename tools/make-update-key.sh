@@ -54,6 +54,14 @@ gh secret set LORE_KEYSTORE_PASSWORD --repo "$REPO" --body "$STORE_PASS"
 gh secret set LORE_KEY_ALIAS --repo "$REPO" --body "$ALIAS"
 gh secret set LORE_KEY_PASSWORD --repo "$REPO" --body "$STORE_PASS"
 
+echo
+echo "Certificate fingerprint:"
+SHA1="$(keytool -list -v -keystore "$KEYSTORE" -alias "$ALIAS" -storepass "$STORE_PASS" \
+  | sed -n 's/.*SHA1: //p' | head -1)"
+echo "  SHA-1   $SHA1"
+keytool -list -v -keystore "$KEYSTORE" -alias "$ALIAS" -storepass "$STORE_PASS" \
+  | sed -n 's/.*SHA256: /  SHA-256 /p' | head -1
+
 cat <<INFO
 
 Done. Back these up now, both are required for every future update:
@@ -61,8 +69,14 @@ Done. Back these up now, both are required for every future update:
   keystore : $KEYSTORE   (keep it private; it is gitignored)
   password : $STORE_PASS
 
-Next:
-  1. Install one more APK the old way (uninstall the current app first — the signature
-     is changing one last time).
-  2. From then on, every newer APK installs straight over the top and keeps your library.
+Next, and both matter:
+  1. Google Sign-In only accepts a build whose signing certificate the Firebase project
+     knows. Paste this in Firebase → Project settings → Your apps → com.lantern.library
+     → Add fingerprint, then download google-services.json again and commit it:
+
+         $SHA1
+
+  2. Install one more APK the old way (uninstall the current app first — the signature
+     is changing one last time). From then on every newer APK installs straight over the
+     top and keeps your library.
 INFO

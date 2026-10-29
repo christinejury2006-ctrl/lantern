@@ -42,7 +42,7 @@ fun BookDetailsOverlay(
     ) {
         Column(
             Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 22.dp)
-                .clip(RoundedCornerShape(28.dp)).background(palette.background)
+                .clip(RoundedCornerShape(28.dp)).background(palette.glass)
                 .clickable(enabled = false) {}.padding(20.dp)
                 .heightIn(max = 690.dp),
             horizontalAlignment = Alignment.CenterHorizontally

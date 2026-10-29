@@ -73,6 +73,21 @@ jobs:
           set +e
           ./gradlew testDebugUnitTest --no-daemon --stacktrace > unit.log 2>&1
           status=$?
+          if [ "$status" -eq 0 ]; then
+            # A green tick is not evidence that the new tests ran; this is. GitHub's artifact
+            # storage is not always reachable, so the count is printed on the run itself.
+            results=app/build/test-results/testDebugUnitTest
+            if [ -d "$results" ]; then
+              summary=$(grep -ho 'tests="[0-9]*" skipped="[0-9]*" failures="[0-9]*" errors="[0-9]*"' "$results"/*.xml \
+                | awk -F'"' '{t+=$2; s+=$4; f+=$6; e+=$8} END {printf "tests=%d skipped=%d failures=%d errors=%d", t, s, f, e}')
+              echo "::notice title=Unit tests::$summary"
+              for f in "$results"/*.xml; do
+                name=$(grep -o 'name="[^"]*"' "$f" | head -1 | cut -d'"' -f2)
+                counts=$(grep -o 'tests="[0-9]*"' "$f" | head -1 | cut -d'"' -f2)
+                echo "  $name: $counts"
+              done
+            fi
+          fi
           if [ "$status" -ne 0 ]; then
             echo "----- compiler errors -----"
             grep -E '^e: ' unit.log | head -15

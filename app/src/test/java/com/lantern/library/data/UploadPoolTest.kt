@@ -395,7 +395,7 @@ class UploadPoolTest {
         )
         assertTrue("A must have reached VERIFYING", "a" in listener.verifying)
         assertNull("A must not be waiting on B", resultHolder[0])
-        assertTrue("B must still be blocked", "b" !in listener.verified)
+        assertTrue("B must still be blocked", !listener.verified.containsKey("b"))
 
         bHold.countDown()
         runner.join(30_000)
@@ -426,7 +426,7 @@ class UploadPoolTest {
         assertTrue("A's verification must start", verifyEntered.await(20, TimeUnit.SECONDS))
         assertTrue("B's transfer must be in progress at the same time", bEntered.await(20, TimeUnit.SECONDS))
         assertTrue("A must be in VERIFYING, not done", "a" in listener.verifying)
-        assertTrue("B must not be verified yet", "b" !in listener.verified)
+        assertTrue("B must not be verified yet", !listener.verified.containsKey("b"))
 
         verifyHold.countDown()
         bHold.countDown()

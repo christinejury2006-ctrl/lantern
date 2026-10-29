@@ -657,54 +657,70 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
      */
     fun testBackupConnection() {
         viewModelScope.launch(Dispatchers.IO) {
-            SyncDiag.clear()
-            SyncDiag.mark("Connection test", "started")
-            if (!account.signedIn) {
-                SyncDiag.fail("Google sign-in", "not signed in — sign in from this screen first")
-                withContext(Dispatchers.Main) { toast("Sign in first") }
-                return@launch
-            }
-            val ctx = getApplication<Application>()
-            val token = when (val result = GoogleAuth.driveToken(ctx)) {
-                is DriveTokenResult.Ok -> {
-                    SyncDiag.mark("Drive token", "granted")
-                    result.token
-                }
-                is DriveTokenResult.Recoverable -> {
-                    SyncDiag.fail("Drive token", "the reader must approve Drive access")
-                    withContext(Dispatchers.Main) { offerDriveConsent(result.intent) }
-                    null
-                }
-                DriveTokenResult.Unavailable -> {
-                    SyncDiag.fail(
-                        "Drive token",
-                        "unavailable — no Google account on this device, or the app is not " +
-                            "configured with the Drive scope"
-                    )
-                    null
-                }
-            }
-            if (token != null) {
-                DriveLibrary.clearError()
-                val checks = runCatching { DriveLibrary.selfTest(token) }.getOrElse { error ->
-                    listOf(DriveLibrary.Check("Connection test", false, error.message ?: "failed"))
-                }
-                checks.forEach { check ->
-                    if (check.ok) SyncDiag.mark(check.stage, check.detail)
-                    else SyncDiag.fail(check.stage, check.detail)
-                }
-                val allOk = checks.isNotEmpty() && checks.all { it.ok }
-                SyncDiag.mark(
-                    "Result",
-                    if (allOk) "backup works on this device" else "see the failing step above"
+            try {
+                runConnectionTest()
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (t: Throwable) {
+                SyncDiag.fail(
+                    "Connection test",
+                    "stopped by a ${t.javaClass.simpleName}: " +
+                        t.message.orEmpty().take(160).ifBlank { "no message" }
                 )
-                withContext(Dispatchers.Main) {
-                    toast(if (allOk) "Backup works on this device" else "Backup is blocked — see Sync diagnosis")
-                }
+                withContext(Dispatchers.Main) { toast("Test stopped: ${t.javaClass.simpleName}") }
             }
-            // Firebase is the second half of the same question.
-            syncFirebaseAccount(null, announce = false)
         }
+    }
+
+    /** The body of [testBackupConnection], kept separate so the net above stays readable. */
+    private suspend fun runConnectionTest() {
+        SyncDiag.clear()
+        SyncDiag.mark("Connection test", "started")
+        if (!account.signedIn) {
+            SyncDiag.fail("Google sign-in", "not signed in — sign in from this screen first")
+            withContext(Dispatchers.Main) { toast("Sign in first") }
+            return
+        }
+        val ctx = getApplication<Application>()
+        val token = when (val result = GoogleAuth.driveToken(ctx)) {
+            is DriveTokenResult.Ok -> {
+                SyncDiag.mark("Drive token", "granted")
+                result.token
+            }
+            is DriveTokenResult.Recoverable -> {
+                SyncDiag.fail("Drive token", "the reader must approve Drive access")
+                withContext(Dispatchers.Main) { offerDriveConsent(result.intent) }
+                null
+            }
+            DriveTokenResult.Unavailable -> {
+                SyncDiag.fail(
+                    "Drive token",
+                    "unavailable — no Google account on this device, or the app is not " +
+                        "configured with the Drive scope"
+                )
+                null
+            }
+        }
+        if (token != null) {
+            DriveLibrary.clearError()
+            val checks = runCatching { DriveLibrary.selfTest(token) }.getOrElse { error ->
+                listOf(DriveLibrary.Check("Connection test", false, error.message ?: "failed"))
+            }
+            checks.forEach { check ->
+                if (check.ok) SyncDiag.mark(check.stage, check.detail)
+                else SyncDiag.fail(check.stage, check.detail)
+            }
+            val allOk = checks.isNotEmpty() && checks.all { it.ok }
+            SyncDiag.mark(
+                "Result",
+                if (allOk) "backup works on this device" else "see the failing step above"
+            )
+            withContext(Dispatchers.Main) {
+                toast(if (allOk) "Backup works on this device" else "Backup is blocked — see Sync diagnosis")
+            }
+        }
+        // Firebase is the second half of the same question.
+        syncFirebaseAccount(null, announce = false)
     }
 
     fun requestDriveConnect() {
@@ -1140,7 +1156,31 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         val complete: Boolean get() = failed.isEmpty()
     }
 
+    /**
+     * Sync, with a net under it.
+     *
+     * Sync is the one part of the app that talks to two networks and three encodings at once, and
+     * it runs in a coroutine nobody is watching: an exception in here used to reach
+     * `viewModelScope` and take the whole app down (an OkHttp multipart rule did exactly that, on
+     * every sync, for several rounds). A bug in sync must cost the reader a sync, not their book.
+     */
     private suspend fun runAccountSync(announce: Boolean) {
+        try {
+            runAccountSyncInner(announce)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (t: Throwable) {
+            SyncDiag.fail(
+                "Account sync",
+                "stopped by a ${t.javaClass.simpleName}: " + t.message.orEmpty().take(160).ifBlank { "no message" }
+            )
+            if (announce) {
+                withContext(Dispatchers.Main) { toast("Sync stopped: ${t.javaClass.simpleName}") }
+            }
+        }
+    }
+
+    private suspend fun runAccountSyncInner(announce: Boolean) {
         if (!account.signedIn || account.provider != "google") {
             SyncDiag.fail("Account sync", "skipped: not signed in with Google")
             return

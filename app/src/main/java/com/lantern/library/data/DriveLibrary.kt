@@ -1,6 +1,5 @@
 package com.lantern.library.data
 
-import okhttp3.Headers
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -133,22 +132,39 @@ object DriveLibrary {
         }
     }
 
+    /**
+     * The parts of a `multipart/related` upload.
+     *
+     * OkHttp 4 refuses a `Content-Type` in a part's header list — `MultipartBody.Part.create`
+     * throws `IllegalArgumentException: Unexpected header: Content-Type` — because a part's media
+     * type is its *body's* content type. Passing headers here is exactly what killed every account
+     * sync the moment it tried to write the library snapshot, so the type now lives on the body and
+     * the header list is left alone.
+     */
+    internal fun jsonBody(text: String): okhttp3.RequestBody = text.toRequestBody(jsonType)
+
+    internal fun mediaBody(bytes: ByteArray, mime: String): okhttp3.RequestBody =
+        bytes.toRequestBody(mime.toMediaType())
+
+    internal fun fileBody(file: File, mime: String): okhttp3.RequestBody =
+        file.asRequestBody(mime.toMediaType())
+
+    /** A `multipart/related` body from parts that already carry their own media types. */
+    private fun related(vararg parts: okhttp3.RequestBody): MultipartBody =
+        MultipartBody.Builder()
+            .setType(relatedType)
+            .apply { parts.forEach { addPart(it) } }
+            .build()
+
     private fun createFile(token: String, book: LibraryBook, file: File): DriveOutcome<String> {
         val meta = JSONObject()
             .put("name", driveName(book))
             .put("parents", JSONArray().put(APP_DATA_FOLDER))
             .put("appProperties", JSONObject().put("loreId", book.id))
-        val multipart = MultipartBody.Builder()
-            .setType(relatedType)
-            .addPart(
-                Headers.headersOf("Content-Type", "application/json; charset=UTF-8"),
-                meta.toString().toRequestBody(jsonType)
-            )
-            .addPart(
-                Headers.headersOf("Content-Type", mimeFor(book)),
-                file.asRequestBody(mimeFor(book).toMediaType())
-            )
-            .build()
+        val multipart = related(
+            jsonBody(meta.toString()),
+            fileBody(file, mimeFor(book))
+        )
         val req = Request.Builder()
             .url("$UPLOAD?uploadType=multipart")
             .header("Authorization", "Bearer $token")
@@ -335,17 +351,10 @@ object DriveLibrary {
             .put("parents", JSONArray().put(folderId))
             .put("appProperties", JSONObject().put("loreId", loreId))
             .put("mimeType", "application/json")
-        val multipart = MultipartBody.Builder()
-            .setType(relatedType)
-            .addPart(
-                Headers.headersOf("Content-Type", "application/json; charset=UTF-8"),
-                meta.toString().toRequestBody(jsonType)
-            )
-            .addPart(
-                Headers.headersOf("Content-Type", "application/json; charset=UTF-8"),
-                json.toRequestBody(jsonType)
-            )
-            .build()
+        val multipart = related(
+            jsonBody(meta.toString()),
+            jsonBody(json)
+        )
         val req = Request.Builder()
             .url("$UPLOAD?uploadType=multipart")
             .header("Authorization", "Bearer $token")
@@ -460,17 +469,10 @@ object DriveLibrary {
             .put("name", probe)
             .put("parents", JSONArray().put(APP_DATA_FOLDER))
             .put("appProperties", JSONObject().put("loreProbe", "1"))
-        val multipart = MultipartBody.Builder()
-            .setType(relatedType)
-            .addPart(
-                Headers.headersOf("Content-Type", "application/json; charset=UTF-8"),
-                meta.toString().toRequestBody(jsonType)
-            )
-            .addPart(
-                Headers.headersOf("Content-Type", "text/plain"),
-                payload.toRequestBody("text/plain".toMediaType())
-            )
-            .build()
+        val multipart = related(
+            jsonBody(meta.toString()),
+            mediaBody(payload, "text/plain")
+        )
         val upReq = Request.Builder()
             .url("$UPLOAD?uploadType=multipart")
             .header("Authorization", "Bearer $token")

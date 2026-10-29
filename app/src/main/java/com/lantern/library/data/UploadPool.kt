@@ -2,6 +2,8 @@ package com.lantern.library.data
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
@@ -120,13 +122,21 @@ class UploadPool(
         val unauthorized = AtomicBoolean(false)
 
         // distinctBy: the same book twice in one list is a caller bug, not two transfers.
+        //
+        // The jobs are collected and joined explicitly. `launch` is not `await`, and the scope only
+        // waits for its children once this block has returned — so building the result here
+        // without joining would return an empty answer for a pass that is still running. That is
+        // not theoretical: it made a batch report zero confirmations while the listener had
+        // already verified every book, which is exactly the "0 confirmed, 2 failed" kind of lie
+        // this whole path exists to stop.
+        val jobs = ArrayList<Job>(books.size)
         books.distinctBy { it.id }.forEach { book ->
             if (!inFlight.add(book.id)) {
                 skipped += book
                 listener.onSkipped(book, "already uploading")
                 return@forEach
             }
-            launch(Dispatchers.IO) {
+            jobs += launch(Dispatchers.IO) {
                 try {
                     uploadOne(token, book, listener, confirmed, failed, unauthorized)
                 } catch (cancelled: CancellationException) {
@@ -156,7 +166,8 @@ class UploadPool(
                 }
             }
         }
-        // supervisorScope joins its children before returning, so the result below is complete.
+        // Wait for every book. Only then does the result describe the pass that actually happened.
+        jobs.joinAll()
 
         Result(
             confirmed = confirmed.toMap(),

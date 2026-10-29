@@ -407,10 +407,10 @@ class UploadPoolTest {
             assertTrue("B must still be blocked", !listener.verified.containsKey("b"))
         }
         runner.join(30_000)
-        assertNotNull("RUNNER DID NOT RETURN for test 3", resultHolder[0])
-        assertTrue("A BOOK FAILED in test 3", resultHolder[0]!!.failed.isEmpty())
-        assertTrue("A BOOK WAS SKIPPED in test 3", resultHolder[0]!!.skipped.isEmpty())
-        assertEquals("WRONG CONFIRMED SET in test 3", setOf("a", "b"), resultHolder[0]!!.confirmed.keys)
+        val outcome = resultHolder[0]
+        assertNotNull("the pass must have returned", outcome)
+        assertEquals("every book must be confirmed", setOf("a", "b"), outcome!!.confirmed.keys)
+        assertTrue("nothing may fail: ${outcome.failed}", outcome.failed.isEmpty())
     }
 
     // 4 -------------------------------------------------------------------------------------
@@ -441,16 +441,10 @@ class UploadPoolTest {
             assertTrue("B must not be verified yet", !listener.verified.containsKey("b"))
         }
         runner.join(30_000)
-        assertNotNull("RUNNER DID NOT RETURN for test 4", holder[0])
-        assertTrue("A BOOK FAILED in test 4", holder[0]!!.failed.isEmpty())
-        assertTrue("A BOOK WAS SKIPPED in test 4", holder[0]!!.skipped.isEmpty())
-        assertTrue("A BOOK WAS CANCELLED in test 4", listener.paused.isEmpty())
-        assertTrue("A WAS NEVER VERIFIED in test 4", listener.verified.containsKey("a"))
-        assertTrue("B WAS NEVER VERIFIED in test 4", listener.verified.containsKey("b"))
-        assertTrue("CONFIRMED EMPTY in test 4", holder[0]!!.confirmed.isNotEmpty())
-        assertTrue("NO A IN CONFIRMED in test 4", holder[0]!!.confirmed.containsKey("a"))
-        assertTrue("NO B IN CONFIRMED in test 4", holder[0]!!.confirmed.containsKey("b"))
-        assertTrue("EXTRA IN CONFIRMED in test 4", holder[0]!!.confirmed.size == 2)
+        val outcome = holder[0]
+        assertNotNull("the pass must have returned", outcome)
+        assertEquals("every book must be confirmed", setOf("a", "b"), outcome!!.confirmed.keys)
+        assertTrue("nothing may fail: ${outcome.failed}", outcome.failed.isEmpty())
     }
 
     // 5 -------------------------------------------------------------------------------------
@@ -567,15 +561,10 @@ class UploadPoolTest {
         }
         runner.join(30_000)
         // The transfer itself still completes: refusing to move bytes would not undo the deletion.
-        assertNotNull("RUNNER DID NOT RETURN for test 8", holder[0])
-        assertTrue("A BOOK FAILED in test 8", holder[0]!!.failed.isEmpty())
-        assertTrue("A BOOK WAS SKIPPED in test 8", holder[0]!!.skipped.isEmpty())
-        assertTrue("A BOOK WAS CANCELLED in test 8", listener.paused.isEmpty())
-        assertTrue("A WAS NEVER VERIFIED in test 8", listener.verified.containsKey("a"))
-        assertTrue("B WAS NEVER VERIFIED in test 8", listener.verified.containsKey("b"))
-        assertTrue("C WAS NEVER VERIFIED in test 8", listener.verified.containsKey("c"))
-        assertTrue("CONFIRMED EMPTY in test 8", holder[0]!!.confirmed.isNotEmpty())
-        assertTrue("EXTRA IN CONFIRMED in test 8", holder[0]!!.confirmed.size == 3)
+        val outcome = holder[0]
+        assertNotNull("the pass must have returned", outcome)
+        assertEquals("every book must be confirmed", setOf("a", "b", "c"), outcome!!.confirmed.keys)
+        assertTrue("nothing may fail: ${outcome.failed}", outcome.failed.isEmpty())
         assertEquals(1, drive.countFor("b"))
     }
 
@@ -620,9 +609,10 @@ class UploadPoolTest {
         runner.join(30_000)
         // The pass still reports what the account now holds — the file was uploaded before the
         // deletion — but nothing in the written snapshot may bring the book back.
-        assertNotNull("RUNNER DID NOT RETURN for test 9", holder[0])
-        assertTrue("A BOOK FAILED in test 9", holder[0]!!.failed.isEmpty())
-        assertEquals("WRONG CONFIRMED SET in test 9", setOf("a", "b"), holder[0]!!.confirmed.keys)
+        val outcome = holder[0]
+        assertNotNull("the pass must have returned", outcome)
+        assertEquals("every book must be confirmed", setOf("a", "b"), outcome!!.confirmed.keys)
+        assertTrue("nothing may fail: ${outcome.failed}", outcome.failed.isEmpty())
         assertTrue(written!!.books.none { it.id == "a" })
     }
 
@@ -719,16 +709,13 @@ class UploadPoolTest {
             assertEquals(0, drive.creates.get())
         }
         runner.join(30_000)
-        assertNotNull("RUNNER DID NOT RETURN for test 12", holder[0])
-        assertTrue("A BOOK FAILED in test 12", holder[0]!!.failed.isEmpty())
-        assertTrue("A BOOK WAS SKIPPED in test 12", holder[0]!!.skipped.isEmpty())
-        assertTrue("A BOOK WAS CANCELLED in test 12", first.paused.isEmpty())
-        assertTrue("A WAS NEVER VERIFIED in test 12", first.verified.containsKey("a"))
-        assertTrue("CONFIRMED EMPTY in test 12", holder[0]!!.confirmed.isNotEmpty())
-        assertTrue("EXTRA IN CONFIRMED in test 12", holder[0]!!.confirmed.size == 1)
+        val outcome = holder[0]
+        assertNotNull("the pass must have returned", outcome)
+        assertEquals("the first caller's book must be confirmed", setOf("a"), outcome!!.confirmed.keys)
+        assertTrue("nothing may fail: ${outcome.failed}", outcome.failed.isEmpty())
+        assertFalse("it must not be left in flight", pool.isInFlight("a"))
         assertEquals(1, drive.countFor("a"))
         assertEquals(1, drive.creates.get())
-        assertFalse("the book must not stay in flight after it finishes", pool.isInFlight("a"))
     }
 
     /**

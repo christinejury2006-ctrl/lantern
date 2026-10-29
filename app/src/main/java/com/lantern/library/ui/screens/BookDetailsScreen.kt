@@ -3,27 +3,10 @@ package com.lantern.library.ui.screens
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -37,9 +20,7 @@ import androidx.compose.ui.unit.sp
 import com.lantern.library.data.DiscoveryBook
 import com.lantern.library.data.ReaderTheme
 import com.lantern.library.ui.components.CoverFace
-import com.lantern.library.ui.components.AuroraOrb
 import com.lantern.library.ui.components.GlassSurface
-import com.lantern.library.ui.components.NookBackdrop
 import com.lantern.library.ui.theme.Playfair
 import com.lantern.library.ui.theme.nookPalette
 
@@ -50,140 +31,64 @@ fun BookDetailsOverlay(
     saved: Boolean,
     onDismiss: () -> Unit,
     onWant: () -> Unit,
-    onGet: () -> Unit
+    onNotInterested: () -> Unit
 ) {
     val palette = nookPalette(theme)
-    val ink = palette.ink
-    val mute = palette.mute
     BackHandler(onBack = onDismiss)
-    NookBackdrop(palette) {
+    Box(
+        Modifier.fillMaxSize().background(Color.Black.copy(alpha = if (palette.dark) 0.66f else 0.48f))
+            .clickable(onClick = onDismiss),
+        contentAlignment = Alignment.Center
+    ) {
         Column(
-            Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-                .navigationBarsPadding()
-                .padding(horizontal = 20.dp, vertical = 8.dp)
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 22.dp)
+                .clip(RoundedCornerShape(28.dp)).background(palette.background)
+                .clickable(enabled = false) {}.padding(20.dp)
+                .heightIn(max = 690.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Filled.ArrowBack, "Back", tint = ink,
-                    modifier = Modifier.size(36.dp).clickable(onClick = onDismiss).padding(4.dp)
-                )
-                Text(
-                    "Lore", Modifier.padding(start = 4.dp),
-                    color = ink, fontFamily = Playfair, fontSize = 20.sp
-                )
-            }
             Column(
-                Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(top = 8.dp),
+                Modifier.fillMaxWidth().weight(1f, fill = false).verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // The cover stands in coloured light, as it does on the nook's pick cards.
-                Box(Modifier.width(190.dp).height(262.dp), contentAlignment = Alignment.Center) {
-                    AuroraOrb(palette, 150.dp, Modifier.align(Alignment.Center), blur = 34.dp)
-                    AuroraOrb(
-                        palette, 118.dp,
-                        Modifier.align(Alignment.Center).padding(start = 30.dp, top = 30.dp),
-                        blur = 28.dp
+                Box(Modifier.width(174.dp).height(240.dp), contentAlignment = Alignment.Center) {
+                    CoverFace(
+                        book.title, null, book.coverUrl,
+                        Modifier.width(150.dp).aspectRatio(0.68f).clip(RoundedCornerShape(10.dp)),
+                        palette.dark, book.coverUrls
                     )
-                    GlassSurface(palette, Modifier, shape = RoundedCornerShape(18.dp)) {
-                        Box(Modifier.padding(6.dp)) {
-                            CoverFace(
-                                book.title, null, book.coverUrl,
-                                Modifier.width(158.dp).aspectRatio(0.68f)
-                                    .clip(RoundedCornerShape(12.dp)),
-                                palette.dark,
-                                book.coverUrls
-                            )
-                        }
-                    }
                 }
-                Spacer(Modifier.height(16.dp))
-                Text(book.title, color = ink, fontFamily = Playfair, fontSize = 24.sp, textAlign = TextAlign.Center)
-                Text(
-                    book.authorLine, color = mute, fontSize = 15.sp,
-                    modifier = Modifier.padding(top = 6.dp), textAlign = TextAlign.Center
-                )
+                Spacer(Modifier.height(14.dp))
+                Text(book.title, color = palette.ink, fontFamily = Playfair, fontSize = 23.sp, textAlign = TextAlign.Center)
+                Text(book.authorLine, color = palette.mute, fontSize = 14.sp, modifier = Modifier.padding(top = 5.dp), textAlign = TextAlign.Center)
                 val meta = buildList {
                     if (book.publishedDate.isNotBlank()) add(book.publishedDate)
-                    if (book.ratingsCount > 0) add("★ ${"%.1f".format(book.averageRating)}  ·  ${book.ratingsCount}")
-                    if (book.publicDomain) add("Public domain")
+                    if (book.ratingsCount > 0) add("★ ${"%.1f".format(book.averageRating)} · ${book.ratingsCount} ratings")
                 }
-                if (meta.isNotEmpty()) {
-                    Text(
-                        meta.joinToString("   "),
-                        color = mute, fontSize = 12.sp,
-                        modifier = Modifier.padding(top = 8.dp), textAlign = TextAlign.Center
-                    )
-                }
+                if (meta.isNotEmpty()) Text(meta.joinToString("  •  "), color = palette.mute, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
                 if (book.categories.isNotEmpty()) {
-                    Row(
-                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 14.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
-                    ) {
-                        book.categories.take(8).forEach { cat ->
-                            Text(
-                                cat,
-                                Modifier.clip(RoundedCornerShape(14.dp)).background(palette.glass)
-                                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                                color = ink, fontSize = 11.sp, maxLines = 1
-                            )
-                        }
-                    }
+                    Text(book.categories.take(5).joinToString("  ·  "), color = palette.accent, fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
                 }
-                if (book.description.isNotBlank()) {
-                    Text(
-                        book.description,
-                        color = ink, fontSize = 15.sp, lineHeight = 22.sp,
-                        modifier = Modifier.fillMaxWidth().padding(top = 16.dp)
-                    )
-                } else {
-                    Text(
-                        "No synopsis available.",
-                        color = mute, fontSize = 14.sp,
-                        modifier = Modifier.padding(top = 16.dp)
-                    )
-                }
-                val source = when {
-                    book.publicDomain -> "Free edition when available in the public-domain catalog."
-                    book.infoLink != null || book.buyLink != null || book.previewLink != null ->
-                        "Preview and purchase via Google Books. Lore does not download this title."
-                    else -> "Metadata from Google Books."
-                }
-                Text(source, color = mute, fontSize = 11.sp, modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 12.dp))
+                Text("SYNOPSIS", color = palette.mute, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.6.sp, modifier = Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 6.dp))
+                Text(
+                    book.description.takeIf { it.isNotBlank() } ?: "A verified synopsis is not available for this title yet.",
+                    color = palette.ink, fontSize = 14.sp, lineHeight = 21.sp,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text("EXCERPT", color = palette.mute, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.6.sp, modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 6.dp))
+                Text(
+                    "A genuine reading sample is not available in the current book record. Lore won’t invent an excerpt or present generated text as the author’s writing.",
+                    color = palette.mute, fontSize = 13.sp, lineHeight = 19.sp,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
-            Row(Modifier.fillMaxWidth().padding(bottom = 8.dp, top = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                GlassSurface(
-                    palette,
-                    Modifier.weight(1f),
-                    shape = RoundedCornerShape(18.dp),
-                    fill = if (saved) palette.glass else palette.accent,
-                    onClick = onWant
-                ) {
-                    Text(
-                        if (saved) "Saved" else "Want to Read",
-                        color = if (saved) ink else palette.accentInk,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp)
-                    )
-                }
-                GlassSurface(
-                    palette,
-                    Modifier.weight(1f),
-                    shape = RoundedCornerShape(18.dp),
-                    onClick = onGet
-                ) {
-                    Text(
-                        if (book.publicDomain) "Read / Get Book" else "Get Book",
-                        color = ink,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp)
-                    )
-                }
+            Spacer(Modifier.height(16.dp))
+            GlassSurface(palette, Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), fill = palette.accent, onClick = onWant) {
+                Text(if (saved) "Saved to Want to Read" else "Want to Read", color = palette.accentInk, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp))
+            }
+            Spacer(Modifier.height(8.dp))
+            GlassSurface(palette, Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), onClick = onNotInterested) {
+                Text("Not Interested", color = palette.ink, fontSize = 14.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(vertical = 13.dp))
             }
         }
     }

@@ -402,7 +402,9 @@ class DriveUploadTest {
      */
     @Test
     fun `progress is reported for every byte of the file, and never overshoots`() {
-        val bytes = epubBytes("progress")
+        // Big enough to leave Okio's 8 KB buffer more than once, so "more than one report" is a real
+        // assertion rather than a property of the buffer size.
+        val bytes = epubBytes("progress") + ByteArray(64_000) { 'x'.code.toByte() }
         val file = write("progress.epub", bytes)
         val b = book(BookFormat.EPUB, file)
         val seen = ArrayList<Long>()

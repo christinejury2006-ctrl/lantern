@@ -204,20 +204,68 @@ object DriveLibrary {
         /** Called once the bytes are out and the account is being asked to prove it has them. */
         onVerifying: () -> Unit = {}
     ): DriveOutcome<String> {
+        val sent = transfer(token, book, file, onAttempt, onProgress)
+        if (sent !is Sent.Ok) {
+            if (sent is Sent.Unauthorized) return DriveOutcome.Unauthorized
+            return DriveOutcome.Failed
+        }
+        // Every byte is out. That is not a backup yet, and nothing above this line may say it is.
+        onVerifying()
+        return when (val verified = verifyUploaded(token, book, sent.fileId, file, onProgress)) {
+            is Verified.Ok -> DriveOutcome.Ok(verified.fileId)
+            Verified.Unauthorized -> DriveOutcome.Unauthorized
+            is Verified.Failed -> {
+                noteBookFailure(book, "upload", 0, verified.reason, verified.retryable)
+                DriveOutcome.Failed
+            }
+        }
+    }
+
+    /** The outcome of moving bytes, before anything has been proved about them. */
+    sealed class Sent {
+        data class Ok(val fileId: String) : Sent()
+        object Unauthorized : Sent()
+        data class Failed(val code: Int, val detail: String, val retryable: Boolean) : Sent()
+    }
+
+    /** The outcome of asking Drive to prove it holds the bytes. */
+    sealed class Verified {
+        data class Ok(val fileId: String) : Verified()
+        object Unauthorized : Verified()
+        data class Failed(val reason: String, val retryable: Boolean) : Verified()
+    }
+
+    /**
+     * Sends the file. **No verification happens here.**
+     *
+     * Split out from [upload] so a caller that is uploading several books can start proving one
+     * book's bytes while the next book is still transferring. The two halves are independent
+     * network steps with independent retry behaviour, and keeping them in one function was what
+     * made a finished book wait behind an unrelated transfer.
+     *
+     * Idempotent: the book's `loreId` is looked up first on **every** attempt, so a retry replaces
+     * the media of the file it already made instead of creating a second one.
+     */
+    fun transfer(
+        token: String,
+        book: LibraryBook,
+        file: File,
+        onAttempt: (attempt: Int, reason: String) -> Unit = { _, _ -> },
+        onProgress: (sent: Long, total: Long) -> Unit = { _, _ -> }
+    ): Sent {
         if (!file.exists() || file.length() <= 0L) {
             noteError("upload", 0, "the local file is missing or empty")
-            noteBookFailure(book, "upload", 0, "the local file is missing or empty", retryable = false)
-            return DriveOutcome.Failed
+            return Sent.Failed(0, "the local file is missing or empty", retryable = false)
         }
         var attempt = 1
         while (true) {
-            when (val once = uploadOnce(token, book, file, onProgress, onVerifying)) {
-                is Attempt.Ok -> return DriveOutcome.Ok(once.id)
-                Attempt.Unauthorized -> return DriveOutcome.Unauthorized
+            when (val once = transferOnce(token, book, file, onProgress)) {
+                is Attempt.Ok -> return Sent.Ok(once.id)
+                Attempt.Unauthorized -> return Sent.Unauthorized
                 is Attempt.Failed -> {
                     val retry = once.retryable && RetryPolicy.shouldRetry(attempt, RetryPolicy.classify(once.code))
                     noteBookFailure(book, "upload", once.code, once.detail, retry)
-                    if (!retry) return DriveOutcome.Failed
+                    if (!retry) return Sent.Failed(once.code, once.detail, retryable = false)
                     onAttempt(attempt, RetryPolicy.explain(RetryPolicy.classify(once.code), once.code, once.detail))
                     sleeper(RetryPolicy.delayMs(attempt))
                     attempt++
@@ -226,13 +274,65 @@ object DriveLibrary {
         }
     }
 
-    /** One attempt, with no sleeping: the retry decision belongs to [upload]. */
-    private fun uploadOnce(
+    /**
+     * Proves the account holds these exact bytes, and repairs a truncated transfer once.
+     *
+     * A 200 from the upload endpoint is not evidence; Drive's checksum is, and when Drive reports
+     * no checksum the file is downloaded and compared byte for byte. A failure here leaves the
+     * book unverified with a reason the reader can read.
+     */
+    fun verifyUploaded(
+        token: String,
+        book: LibraryBook,
+        fileId: String,
+        file: File,
+        onProgress: (sent: Long, total: Long) -> Unit = { _, _ -> }
+    ): Verified {
+        val total = file.length()
+        return when (val check = verify(token, fileId, file)) {
+            VerifyOutcome.Verified -> Verified.Ok(fileId)
+            VerifyOutcome.Unauthorized -> Verified.Unauthorized
+            VerifyOutcome.Mismatch -> {
+                // One re-send, because the usual cause is a transfer the service truncated.
+                when (replaceMedia(token, fileId, book, file, { sent -> onProgress(sent, total) })) {
+                    is DriveOutcome.Ok -> Unit
+                    DriveOutcome.Unauthorized -> return Verified.Unauthorized
+                    DriveOutcome.Failed -> return Verified.Failed(
+                        lastError ?: "the account refused the replacement copy",
+                        retryable = true
+                    )
+                }
+                when (val again = verify(token, fileId, file)) {
+                    VerifyOutcome.Verified -> Verified.Ok(fileId)
+                    VerifyOutcome.Unauthorized -> Verified.Unauthorized
+                    VerifyOutcome.Mismatch -> Verified.Failed(
+                        "the account's copy still differs from the file after two uploads",
+                        retryable = true
+                    )
+                    // Still no checksum from Drive: settle it by downloading the bytes.
+                    VerifyOutcome.Unknown -> deepVerifyResult(token, fileId, file)
+                }
+            }
+            // The upload said 200 but Drive gave nothing to compare. Do not call that verified;
+            // fetch the file back and compare the bytes themselves.
+            VerifyOutcome.Unknown -> deepVerifyResult(token, fileId, file)
+        }
+    }
+
+    /** [deepVerify] in the shape callers outside this file use. */
+    private fun deepVerifyResult(token: String, fileId: String, file: File): Verified =
+        when (val attempt = deepVerify(token, fileId, file)) {
+            is Attempt.Ok -> Verified.Ok(attempt.id)
+            Attempt.Unauthorized -> Verified.Unauthorized
+            is Attempt.Failed -> Verified.Failed(attempt.detail.ifBlank { "could not verify the uploaded file" }, attempt.retryable)
+        }
+
+    /** One transport attempt: look the book up, then create or replace. */
+    private fun transferOnce(
         token: String,
         book: LibraryBook,
         file: File,
-        onProgress: (Long, Long) -> Unit,
-        onVerifying: () -> Unit
+        onProgress: (Long, Long) -> Unit
     ): Attempt {
         val total = file.length()
         val report: (Long) -> Unit = { sent -> onProgress(sent, total) }
@@ -242,50 +342,22 @@ object DriveLibrary {
             LoreLookup.NotFound -> null
             is LoreLookup.Found -> lookup.id
         }
-        val id = if (existing != null) {
+        return if (existing != null) {
             when (val replaced = replaceMedia(token, existing, book, file, report)) {
-                is DriveOutcome.Ok -> replaced.value
-                DriveOutcome.Unauthorized -> return Attempt.Unauthorized
-                DriveOutcome.Failed -> return Attempt.Failed(lastCode, lastError.orEmpty(), true)
+                is DriveOutcome.Ok -> Attempt.Ok(replaced.value)
+                DriveOutcome.Unauthorized -> Attempt.Unauthorized
+                DriveOutcome.Failed -> Attempt.Failed(lastCode, lastError.orEmpty(), true)
             }
         } else {
             when (val created = createFile(token, book, file, report)) {
-                is DriveOutcome.Ok -> created.value
-                DriveOutcome.Unauthorized -> return Attempt.Unauthorized
-                DriveOutcome.Failed -> return Attempt.Failed(lastCode, lastError.orEmpty(), true)
+                is DriveOutcome.Ok -> Attempt.Ok(created.value)
+                DriveOutcome.Unauthorized -> Attempt.Unauthorized
+                DriveOutcome.Failed -> Attempt.Failed(lastCode, lastError.orEmpty(), true)
             }
-        }
-        // Every byte is out. That is not a backup yet, and nothing above this line may say it is.
-        onVerifying()
-        return when (val check = verify(token, id, file)) {
-            VerifyOutcome.Verified -> Attempt.Ok(id)
-            VerifyOutcome.Unauthorized -> Attempt.Unauthorized
-            VerifyOutcome.Mismatch -> {
-                // One re-send, because the usual cause is a transfer the service truncated.
-                when (replaceMedia(token, id, book, file, report)) {
-                    is DriveOutcome.Ok -> Unit
-                    DriveOutcome.Unauthorized -> return Attempt.Unauthorized
-                    DriveOutcome.Failed -> return Attempt.Failed(lastCode, lastError.orEmpty(), true)
-                }
-                when (val again = verify(token, id, file)) {
-                    VerifyOutcome.Verified -> Attempt.Ok(id)
-                    VerifyOutcome.Unauthorized -> Attempt.Unauthorized
-                    VerifyOutcome.Mismatch -> Attempt.Failed(
-                        0,
-                        "the account's copy still differs from the file after two uploads",
-                        true
-                    )
-                    // Still no checksum from Drive: settle it by downloading the bytes.
-                    VerifyOutcome.Unknown -> deepVerify(token, id, file)
-                }
-            }
-            // The upload said 200 but Drive gave nothing to compare. Do not call that verified;
-            // fetch the file back and compare the bytes themselves.
-            VerifyOutcome.Unknown -> deepVerify(token, id, file)
         }
     }
 
-    /** Whether a verify attempt succeeded, in the shape [uploadOnce] needs. */
+    /** Whether a single transport attempt succeeded, before verification says anything. */
     private sealed class Attempt {
         data class Ok(val id: String) : Attempt()
         object Unauthorized : Attempt()

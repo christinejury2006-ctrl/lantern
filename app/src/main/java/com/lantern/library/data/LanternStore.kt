@@ -55,7 +55,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
      */
     private val uploadJournalFile = File(app.filesDir, "upload_journal.json")
     private val journalLock = Any()
-    @Volatile private var journalFlushedAt = 0L
+    /** Per-book throttle, so one book's journal write cannot suppress another's. */
+    private val journalFlushedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val deletionsLock = Any()
     private val queueLock = Any()
     private val libraryAppearFile = File(app.filesDir, "library_appearance.json")
@@ -129,17 +130,37 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     private var applyingRemote = false
 
     /**
-     * One sync pass at a time.
+     * The locks, and what each one is actually for.
      *
-     * Both mirrors merge into the same library and both write snapshots of it. Two of them running
-     * at once — which is what a local edit plus a scheduled pass produces — read the same "before"
-     * state, and whichever finishes last writes its stale view over the other's. The device log
-     * showed exactly that: the same book uploaded twice, and a `Library applied` line built from a
-     * library that predated the upload it had just confirmed.
+     * Uploads used to run inside [passGate], which meant a manual retry waited behind a whole sync
+     * pass and a Firestore mirror waited behind a Drive transfer. Neither of those is a reason to
+     * block: moving bytes needs no library lock at all. The locks are now split by what they
+     * protect, and none of them spans a file transfer:
+     *
+     * - **[passGate]** — one Drive sync *pass* at a time. It guards the sequence "read the account
+     *   snapshot → merge → write the account snapshot", which must not interleave with an
+     *   identical sequence from another pass. It is taken with [Mutex.tryLock]: a second pass is
+     *   *skipped*, never queued, so nothing waits on it.
+     * - **[stateMutex]** — the library itself, for the short local phase of a merge: read the
+     *   books, merge both sides, apply, write. No network happens while it is held, so a slow
+     *   upload cannot make another writer wait.
+     * - **[firebaseGate]** — one Firestore mirror at a time, on the same tryLock terms as
+     *   [passGate], so a mirror no longer blocks behind a Drive pass.
+     * - **[libraryLock]** and friends — the small state files, unchanged.
+     *
+     * Duplicate uploads are not prevented by a lock any more: [UploadPool] holds a process-wide
+     * single-flight set keyed by book id, and every attempt re-looks-up the book's `loreId`, so two
+     * callers that want the same book cannot produce two transfers or two Drive files.
      */
-    private val syncMutex = Mutex()
+    private val passGate = Mutex()
 
-    /** True while a pass holds [syncMutex]; writes made inside it must not schedule another pass. */
+    /** Local merge + apply only. Never held across a network call. */
+    private val stateMutex = Mutex()
+
+    /** One Firestore mirror at a time. */
+    private val firebaseGate = Mutex()
+
+    /** True while a pass holds [passGate]; writes made inside it must not schedule another pass. */
     @Volatile private var syncInFlight = false
 
     /** A real local change arrived while a pass was running, so one more pass is owed. */
@@ -1094,9 +1115,13 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     private var firebaseBlocked = false
 
     private suspend fun syncFirebaseAccount(account: GoogleSignInAccount?, announce: Boolean) {
-        // Same lock as the Drive pass: both merge into this library and both write it back, so they
-        // must not overlap.
-        syncMutex.withLock {
+        // Its own gate, not the Drive pass's: a mirror must not wait for a book upload to finish,
+        // and the shared state it touches is protected by [stateMutex] for the merge itself.
+        if (!firebaseGate.tryLock()) {
+            SyncDiag.mark("Firebase", "skipped: a mirror is already running")
+            return
+        }
+        try {
             syncInFlight = true
             try {
                 mirrorToFirebase(account, announce)
@@ -1106,6 +1131,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 changedDuringSync = false
                 if (owed) scheduleFirebaseSync()
             }
+        } finally {
+            firebaseGate.unlock()
         }
     }
 
@@ -1120,10 +1147,15 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 SyncDiag.mark("Firebase", "skipped: not signed in to Firebase")
                 return
             }
-            val local = withContext(Dispatchers.Main) { currentSnapshot() }
+            // Read the account copy outside any lock; merge and apply inside it, which is local
+            // work only and is the part that must not interleave with a Drive pass.
             val cloud = AccountSync.fromJson(FirestoreAccountRepository.readSnapshot())
-            val merged = AccountSync.merge(local, cloud)
-            withContext(Dispatchers.Main) { applySnapshot(merged) }
+            val merged = stateMutex.withLock {
+                val local = withContext(Dispatchers.Main) { currentSnapshot() }
+                AccountSync.merge(local, cloud).also { result ->
+                    withContext(Dispatchers.Main) { applySnapshot(result) }
+                }
+            }
             val json = AccountSync.toJson(merged)
             if (json == lastFirebaseSnapshot) {
                 SyncDiag.mark("Firebase", "already up to date")
@@ -1261,9 +1293,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             SyncDiag.mark("Retry queue", "retrying ${books.size} book(s) from the queue")
-            // Same lock as a sync pass: two writers to one library is how a fresh confirmation got
-            // overwritten by a stale one in the 18:12 trace.
-            val batch = syncMutex.withLock { uploadBatch(books) }
+            // No pass lock: this is only transfers, and UploadPool's single-flight set already
+            // stops it from racing a pass for the same book.
+            val batch = uploadBatch(books)
             batch.failed.forEach { (book, failure) ->
                 SyncDiag.fail(
                     "Retry failed — ${book.title.ifBlank { "Untitled" }} (${book.id.take(8)})",
@@ -1298,117 +1330,71 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
      * the book's own title). Nothing is marked backed up on the strength of a request having been
      * sent.
      */
+    /**
+     * Sends [todo] through [UploadPool]: several books at once, each verified the moment its own
+     * last byte is out.
+     *
+     * This function is the bridge between the pool (transport, concurrency, per-book verification)
+     * and the app (records, live badges, the journal, the diagnosis). It keeps the same
+     * [BatchResult] contract the sync pass already used, so the merge and snapshot logic around it
+     * is unchanged.
+     */
     private suspend fun uploadBatch(todo: List<LibraryBook>): BatchResult {
-        val confirmed = LinkedHashMap<String, Pair<String, Long>>() // book id -> (drive id, verified bytes)
+        if (todo.isEmpty()) return BatchResult(emptyMap(), emptyList())
+        val confirmed = LinkedHashMap<String, Pair<String, Long>>()
         val failed = ArrayList<Pair<LibraryBook, DriveLibrary.TransferFailure>>()
-        if (todo.isEmpty()) return BatchResult(confirmed, failed)
 
-        // Say "Uploading" only while it is true.
+        // Say "Uploading" only while it is true, and for the books that are actually going.
         withContext(Dispatchers.Main) { uploadingIds = uploadingIds + todo.map { it.id } }
         try {
-            val outcome = withDriveOutcome { token, owner ->
-                when (val folder = DriveLibrary.ensureFolder(token, owner)) {
-                    is DriveOutcome.Ok -> {
-                        for (book in todo) {
-                            val file = book.filePath?.let { File(it) }
-                            if (file == null || !file.exists() || file.length() <= 0L) {
-                                // A book with no readable local file cannot be uploaded. It is a
-                                // restore or a re-import, not a retry.
-                                failed += book to DriveLibrary.TransferFailure(
-                                    book.id, book.title, "upload",
-                                    "no readable local file to send", false
-                                )
-                                continue
-                            }
-                            // A book that already has an id is checked before it is re-sent: if the
-                            // account holds these exact bytes, the only thing missing is the
-                            // confirmation, and moving the file again would be pointless traffic.
-                            val existing = book.driveFileId
-                            if (!existing.isNullOrBlank() && !BackupRules.changedSinceBackup(book, true) &&
-                                DriveLibrary.remoteMatches(token, existing, file) == true
-                            ) {
-                                confirmed[book.id] = existing to file.length()
-                                continue
-                            }
-                            // Live bytes, straight from the request body. The bus is what the
-                            // card draws; the journal is what survives the process dying.
-                            val total = file.length()
-                            TransferBus.start(book.id, total)
-                            journalProgress(book.id, 0L, total, force = true)
-                            val result = DriveLibrary.upload(
-                                token,
-                                folder.value,
-                                book,
-                                file,
-                                onAttempt = { attempt, reason ->
-                                    SyncDiag.mark(
-                                        "Retrying — ${book.title.ifBlank { "Untitled" }}",
-                                        "attempt ${attempt + 1}: $reason"
-                                    )
-                                },
-                                onProgress = { sent, size ->
-                                    TransferBus.sent(book.id, sent, size)
-                                    journalProgress(book.id, sent, size)
-                                },
-                                onVerifying = {
-                                    TransferBus.verifying(book.id, total)
-                                    journalProgress(book.id, total, total, force = true)
-                                }
-                            )
-                            when (result) {
-                                is DriveOutcome.Ok -> {
-                                    confirmed[book.id] = result.value to file.length()
-                                    TransferBus.clear(book.id)
-                                    journalDone(book.id)
-                                }
-                                DriveOutcome.Unauthorized -> {
-                                    TransferBus.failed(
-                                        book.id,
-                                        TransferBus.progressFor(book.id)?.sentBytes ?: 0L,
-                                        total,
-                                        "Google rejected the sign-in — sign in again"
-                                    )
-                                    journalDone(book.id)
-                                    return@withDriveOutcome DriveOutcome.Unauthorized
-                                }
-                                DriveOutcome.Failed -> {
-                                    val failure = DriveLibrary.lastFailure ?: DriveLibrary.TransferFailure(
-                                        book.id, book.title, "upload",
-                                        DriveLibrary.lastError ?: "no response from Google Drive", true
-                                    )
-                                    // Keep what the transfer reached, so the sheet can say how far
-                                    // it got before it stopped.
-                                    TransferBus.failed(
-                                        book.id,
-                                        TransferBus.progressFor(book.id)?.sentBytes ?: 0L,
-                                        total,
-                                        failure.reason
-                                    )
-                                    journalDone(book.id)
-                                    failed += book to failure
-                                    // A refused token stops the whole batch: every later book would
-                                    // fail the same way, and each attempt costs a request.
-                                    if (RetryPolicy.classify(DriveLibrary.lastCode) == TransferClass.UNAUTHORIZED) {
-                                        return@withDriveOutcome DriveOutcome.Unauthorized
-                                    }
-                                }
-                            }
-                        }
-                        DriveOutcome.Ok(Unit)
-                    }
-                    DriveOutcome.Unauthorized -> DriveOutcome.Unauthorized
-                    DriveOutcome.Failed -> DriveOutcome.Failed
+            val ctx = getApplication<Application>()
+            // Books with no readable local file are settled here: they need a restore or a
+            // re-import, and no amount of retrying will produce bytes that are not on the phone.
+            var remaining = todo.filter { book ->
+                val file = book.filePath?.let(::File)
+                if (file != null && file.exists() && file.length() > 0L) {
+                    true
+                } else {
+                    failed += book to DriveLibrary.TransferFailure(
+                        book.id, book.title, "upload", "no readable local file to send", retryable = false
+                    )
+                    false
                 }
             }
-            if (outcome == null || outcome is DriveOutcome.Failed) {
-                // No token, no answer: everything not confirmed is still owed, and none of it may
-                // be marked done.
-                todo.filter { it.id !in confirmed }.forEach { book ->
-                    if (failed.none { it.first.id == book.id }) {
+
+            // Two rounds at most: the second exists only to recover from a token that was refused
+            // part-way through (the reader may have signed in again in between).
+            for (round in 0 until 2) {
+                if (remaining.isEmpty()) break
+                val token = driveToken()
+                if (token == null) {
+                    // No token: nothing can be sent, and none of these books may be marked done.
+                    remaining.forEach { book ->
                         failed += book to DriveLibrary.TransferFailure(
                             book.id, book.title, "upload",
-                            DriveLibrary.lastError ?: "Google Drive did not answer", true
+                            DriveLibrary.lastError ?: "Drive access is not available on this device",
+                            retryable = true
                         )
+                    }
+                    remaining = emptyList()
+                    break
+                }
+                val result = UploadPool.shared.run(token, remaining, uploadListener)
+                confirmed.putAll(result.confirmed)
+                failed += result.failed
+                if (!result.unauthorized) break
+                // A refused token is worth exactly one more attempt with a fresh one.
+                GoogleAuth.clearToken(ctx, token)
+                remaining = remaining.filter { it.id !in confirmed }
+                if (round == 1) {
+                    remaining.forEach { book ->
+                        if (failed.none { it.first.id == book.id }) {
+                            failed += book to DriveLibrary.TransferFailure(
+                                book.id, book.title, "upload",
+                                "Google kept refusing the sign-in — sign out and in again",
+                                retryable = false
+                            )
+                        }
                     }
                 }
             }
@@ -1416,6 +1402,102 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             withContext(Dispatchers.Main) { uploadingIds = uploadingIds - todo.map { it.id }.toSet() }
         }
         return BatchResult(confirmed, failed)
+    }
+
+    /** A Drive token, or null if this device cannot get one right now. */
+    private suspend fun driveToken(): String? {
+        val ctx = getApplication<Application>()
+        return when (val result = GoogleAuth.driveToken(ctx)) {
+            is DriveTokenResult.Ok -> {
+                withContext(Dispatchers.Main) { setDriveConnected(true) }
+                result.token
+            }
+            is DriveTokenResult.Recoverable -> {
+                withContext(Dispatchers.Main) {
+                    setDriveConnected(false)
+                    offerDriveConsent(result.intent)
+                }
+                null
+            }
+            DriveTokenResult.Unavailable -> {
+                withContext(Dispatchers.Main) { setDriveConnected(false) }
+                null
+            }
+        }
+    }
+
+    /**
+     * Turns pool events into what the app shows.
+     *
+     * The important one is [UploadListener.onVerified]: it writes the confirmation and clears the
+     * live progress **for that book**, on its own, the moment its own verification passes. Book A
+     * therefore turns into a cloud while B and C are still counting bytes — no batch-level step
+     * waits for the slowest upload.
+     */
+    private val uploadListener = object : UploadListener {
+        override fun onStarted(book: LibraryBook, totalBytes: Long) {
+            TransferBus.start(book.id, totalBytes)
+            journalProgress(book.id, 0L, totalBytes, force = true)
+        }
+
+        override fun onProgress(book: LibraryBook, sent: Long, total: Long) {
+            TransferBus.sent(book.id, sent, total)
+            journalProgress(book.id, sent, total)
+        }
+
+        override fun onVerifying(book: LibraryBook, totalBytes: Long) {
+            TransferBus.verifying(book.id, totalBytes)
+            journalProgress(book.id, totalBytes, totalBytes, force = true)
+        }
+
+        override fun onVerified(book: LibraryBook, driveFileId: String, bytes: Long) {
+            TransferBus.clear(book.id)
+            journalDone(book.id)
+            // Independent of the rest of the batch: this book is safe as soon as it is proved.
+            viewModelScope.launch(Dispatchers.Main) {
+                recordVerified(book.id, driveFileId, bytes)
+            }
+        }
+
+        override fun onFailed(book: LibraryBook, failure: DriveLibrary.TransferFailure, reachedBytes: Long) {
+            TransferBus.failed(book.id, reachedBytes, TransferBus.progressFor(book.id)?.totalBytes ?: 0L, failure.reason)
+            journalDone(book.id)
+        }
+
+        override fun onPaused(book: LibraryBook, sent: Long, total: Long, reason: String) {
+            // Interrupted, not failed: the bytes already sent and the size are kept so the card can
+            // say how far it got and the journal can resume it.
+            TransferBus.paused(book.id, sent, total, reason)
+            journalProgress(book.id, sent, total, force = true)
+        }
+
+        override fun onSkipped(book: LibraryBook, reason: String) {
+            // Another caller owns this book right now; this pass must not touch its badge.
+            SyncDiag.mark("Upload skipped — ${book.title.ifBlank { "Untitled" }}", reason)
+        }
+
+        override fun onRetry(book: LibraryBook, attempt: Int, reason: String) {
+            SyncDiag.mark(
+                "Retrying — ${book.title.ifBlank { "Untitled" }}",
+                "attempt ${attempt + 1}: $reason"
+            )
+        }
+    }
+
+    /** Writes one book's verified outcome to its record. Idempotent, and never invents a stamp. */
+    private fun recordVerified(bookId: String, driveFileId: String, bytes: Long) {
+        val latest = book(bookId) ?: return
+        upsert(
+            latest.copy(
+                driveFileId = driveFileId,
+                pendingUpload = false,
+                backupFailed = false,
+                backupAt = System.currentTimeMillis(),
+                backupBytes = bytes
+            )
+        )
+        clearTransfer(bookId)
+        refreshBackupAudit()
     }
 
     /** What one batch managed to confirm (id -> bytes) and what failed, with reasons. */
@@ -1493,9 +1575,16 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
      * every sync, for several rounds). A bug in sync must cost the reader a sync, not their book.
      */
     private suspend fun runAccountSync(announce: Boolean) {
-        // Serialized: a second pass waits for the first to finish and then re-reads both sides, so
-        // it can never apply a library that predates the upload the first pass just confirmed.
-        syncMutex.withLock {
+        // tryLock, not lock: a second pass is skipped rather than queued. It used to queue, which
+        // meant every scheduled pass, retry and sign-in waited behind whichever pass was running —
+        // including its network transfers. Skipping is safe because the pass that is running will
+        // schedule one more if the library changed underneath it, and because a skipped pass has
+        // nothing to merge that the running one will not also merge.
+        if (!passGate.tryLock()) {
+            SyncDiag.mark("Account sync", "skipped: a pass is already running")
+            return
+        }
+        try {
             syncInFlight = true
             changedDuringSync = false
             try {
@@ -1518,6 +1607,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 // cannot chain forever.
                 if (owed) scheduleSync()
             }
+        } finally {
+            passGate.unlock()
         }
     }
 
@@ -1570,7 +1661,12 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             }
             return
         }
-        var merged = AccountSync.merge(local, cloud)
+        var merged = stateMutex.withLock {
+            val fresh = withContext(Dispatchers.Main) { currentSnapshot() }
+            AccountSync.merge(fresh, cloud).also { result ->
+                withContext(Dispatchers.Main) { applySnapshot(result) }
+            }
+        }
         // Books that arrived from the cloud have no file here; books added locally since the pass
         // above still owe one. Deliberately excludes anything the phone cannot read, and caps the
         // batch so one sync cannot turn into an hour of uploads on a phone connection.
@@ -1613,12 +1709,19 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             }
             recordBatch(batch)
         }
-        // Apply the merged library locally, always. Uploading only happens when this phone holds
-        // files the account does not; on a fresh install nothing needs uploading, and that was the
-        // one case where the merged snapshot was never applied — so a new phone stayed empty even
-        // though the account held everything. Applying first also means the snapshot written below
-        // describes what is actually on this phone.
-        withContext(Dispatchers.Main) { applySnapshot(merged) }
+        // The merged library was applied above, inside the state lock, before any of the uploads
+        // below ran. Uploads take time, and the reader can delete a book while its file is in
+        // flight, so the snapshot is reconciled against the *current* tombstones immediately before
+        // it is written: a book deleted during this pass is never carried back into the account
+        // copy by a merge that was computed before the deletion happened.
+        val reconciled = AccountReconcile.snapshot(merged, deletions())
+        if (reconciled.books.size != merged.books.size) {
+            SyncDiag.mark(
+                "Account merge",
+                "${merged.books.size - reconciled.books.size} book(s) deleted during this pass were dropped"
+            )
+        }
+        merged = reconciled
         SyncDiag.mark(
             "Library applied",
             "local=${local.books.size} cloud=${cloud?.books?.size ?: 0} merged=${merged.books.size} books"
@@ -1876,22 +1979,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
 
     private fun loadJournalUnlocked(): List<TransferProgress> {
         if (!uploadJournalFile.exists()) return emptyList()
-        return runCatching {
-            val arr = JSONArray(uploadJournalFile.readText())
-            val out = ArrayList<TransferProgress>(arr.length())
-            for (i in 0 until arr.length()) {
-                val row = arr.optJSONObject(i) ?: continue
-                val id = row.optString("id")
-                if (id.isBlank()) continue
-                out += TransferProgress.paused(
-                    id,
-                    row.optLong("sent", 0L),
-                    row.optLong("total", 0L),
-                    row.optString("reason")
-                )
-            }
-            out
-        }.getOrDefault(emptyList())
+        return TransferJournal.decode(runCatching { uploadJournalFile.readText() }.getOrNull())
     }
 
     /**
@@ -1904,8 +1992,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
      */
     private fun journalProgress(bookId: String, sent: Long, total: Long, force: Boolean = false) {
         val now = System.currentTimeMillis()
-        if (!force && now - journalFlushedAt < 2_000L) return
-        journalFlushedAt = now
+        val last = journalFlushedAt[bookId] ?: 0L
+        if (!force && now - last < 2_000L) return
+        journalFlushedAt[bookId] = now
         synchronized(journalLock) {
             val list = loadJournalUnlocked().toMutableList()
             list.removeAll { it.bookId == bookId }
@@ -1915,6 +2004,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     }
 
     private fun journalDone(bookId: String) {
+        journalFlushedAt.remove(bookId)
         synchronized(journalLock) {
             val list = loadJournalUnlocked()
             if (list.none { it.bookId == bookId }) return
@@ -1927,16 +2017,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             runCatching { uploadJournalFile.delete() }
             return
         }
-        val arr = JSONArray()
-        list.take(200).forEach { p ->
-            arr.put(
-                JSONObject()
-                    .put("id", p.bookId)
-                    .put("sent", p.sentBytes)
-                    .put("total", p.totalBytes)
-            )
-        }
-        runCatching { atomicWrite(uploadJournalFile, arr.toString()) }
+        runCatching { atomicWrite(uploadJournalFile, TransferJournal.encode(list.take(200))) }
     }
 
     /**
@@ -2027,11 +2108,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             }
             TransferBus.paused(bookId, 0L, file.length(), "retrying")
             SyncDiag.mark("Retry", "one book by request: ${book.title}")
-            // Same lock as a sync: a manual retry and a scheduled pass must not write the library
-            // at the same time, and the second one must see the first one's confirmation.
-            val batch = syncMutex.withLock {
-                uploadBatch(listOf(book.copy(pendingUpload = true)))
-            }
+            // No pass lock: UploadPool refuses to start a second transfer for a book that is
+            // already uploading, which is the only conflict a manual retry can have.
+            val batch = uploadBatch(listOf(book.copy(pendingUpload = true)))
             batch.failed.forEach { (failed, failure) ->
                 SyncDiag.fail(
                     "Retry failed — ${failed.title.ifBlank { "Untitled" }} (${failed.id.take(8)})",

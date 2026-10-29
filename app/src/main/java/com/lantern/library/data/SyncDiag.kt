@@ -1,6 +1,7 @@
 package com.lantern.library.data
 
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.snapshots.Snapshot
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -47,12 +48,26 @@ object SyncDiag {
 
     fun fail(stage: String, detail: String = "") = add(stage, detail, ok = false)
 
+    /**
+     * Adds a line.
+     *
+     * Synchronized and written inside an explicit snapshot because uploads now add lines from
+     * several coroutines at once (one per book), and a snapshot-state list is not safe to mutate
+     * from two threads without one. Progress events are throttled upstream, so this is a handful of
+     * writes per upload, not one per chunk.
+     */
     private fun add(stage: String, detail: String, ok: Boolean) {
-        entries.add(Line(System.currentTimeMillis(), stage, detail, ok))
-        while (entries.size > MAX) entries.removeAt(0)
+        synchronized(entries) {
+            Snapshot.withMutableSnapshot {
+                entries.add(Line(System.currentTimeMillis(), stage, detail, ok))
+                while (entries.size > MAX) entries.removeAt(0)
+            }
+        }
     }
 
-    fun clear() = entries.clear()
+    fun clear() {
+        synchronized(entries) { Snapshot.withMutableSnapshot { entries.clear() } }
+    }
 
     /** The whole record as plain text, for the Copy button. */
     fun report(): String = buildString {

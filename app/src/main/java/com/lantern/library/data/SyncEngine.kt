@@ -318,6 +318,81 @@ object Resumable {
     }
 }
 
+/**
+ * The last step before a snapshot is written to the account.
+ *
+ * A sync pass computes its merge, then uploads files, and uploading takes minutes. The reader can
+ * delete a book in that window. Writing the pre-computed merge would carry that book back into the
+ * account copy — one tap on another device and it is back on this phone: a resurrection. So the
+ * merge is reconciled against the tombstones as they are *now*, immediately before it is sent.
+ *
+ * Pure, so the race has a test instead of a story.
+ */
+object AccountReconcile {
+
+    fun snapshot(snapshot: AccountSnapshot, stonesNow: List<Tombstone>): AccountSnapshot {
+        val stones = Deletions.prune(stonesNow)
+        if (stones.isEmpty() && snapshot.deletions.isEmpty()) return snapshot
+        val alive = Deletions.alive(snapshot.books, stones)
+        return snapshot.copy(
+            books = alive,
+            deletions = Deletions.prune(Deletions.merge(snapshot.deletions, stones))
+        )
+    }
+}
+
+/**
+ * The upload journal, in one place.
+ *
+ * It exists so that a transfer interrupted by the process dying can be described truthfully on the
+ * next launch (see [Resumable]). Kept as plain JSON with pure functions so the round trip can be
+ * tested without a device, and so concurrent writes from several books cannot invent their own
+ * format.
+ */
+object TransferJournal {
+
+    fun encode(entries: List<TransferProgress>): String {
+        val arr = org.json.JSONArray()
+        entries.forEach { p ->
+            arr.put(
+                org.json.JSONObject()
+                    .put("id", p.bookId)
+                    .put("sent", p.sentBytes)
+                    .put("total", p.totalBytes)
+                    .put("reason", p.reason)
+            )
+        }
+        return arr.toString()
+    }
+
+    fun decode(raw: String?): List<TransferProgress> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return runCatching {
+            val arr = org.json.JSONArray(raw)
+            val out = ArrayList<TransferProgress>(arr.length())
+            for (i in 0 until arr.length()) {
+                val row = arr.optJSONObject(i) ?: continue
+                val id = row.optString("id")
+                if (id.isBlank()) continue
+                out += TransferProgress.paused(
+                    id,
+                    row.optLong("sent", 0L),
+                    row.optLong("total", 0L),
+                    row.optString("reason")
+                )
+            }
+            out
+        }.getOrDefault(emptyList())
+    }
+
+    /** Adds or replaces one entry. Idempotent for the same book, so a retry cannot duplicate it. */
+    fun upsert(entries: List<TransferProgress>, entry: TransferProgress): List<TransferProgress> =
+        entries.filterNot { it.bookId == entry.bookId } + entry
+
+    fun remove(entries: List<TransferProgress>, bookId: String): List<TransferProgress> =
+        entries.filterNot { it.bookId == bookId }
+}
+
 object BackupAudit {
 
     /**

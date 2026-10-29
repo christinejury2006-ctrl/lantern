@@ -403,11 +403,23 @@ object DriveLibrary {
             .header("Authorization", "Bearer $token")
             .get()
             .build()
-        val exec = executeRaw(req) ?: return QueryOutcome.Error
-        if (exec.code == 401) return QueryOutcome.Unauthorized
-        if (!exec.ok || exec.body == null) return QueryOutcome.Error
+        val exec = executeRaw(req) ?: run {
+            noteError("file search", 0, "No response from Google Drive. Check network connectivity.")
+            return QueryOutcome.Error
+        }
+        if (exec.code == 401) {
+            noteError("file search", exec.code, exec.body ?: "Google rejected the access token; re-authorize Drive access.")
+            return QueryOutcome.Unauthorized
+        }
+        if (!exec.ok || exec.body == null) {
+            noteError("file search", exec.code, exec.body)
+            return QueryOutcome.Error
+        }
         val files = runCatching { JSONObject(exec.body).optJSONArray("files") }.getOrNull()
-            ?: return QueryOutcome.Error
+            ?: run {
+                noteError("file search", exec.code, "Google returned an unreadable response.")
+                return QueryOutcome.Error
+            }
         val ids = ArrayList<String>(files.length())
         for (i in 0 until files.length()) {
             val id = files.optJSONObject(i)?.optString("id").orEmpty()

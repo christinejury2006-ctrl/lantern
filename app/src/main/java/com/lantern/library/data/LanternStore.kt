@@ -1874,10 +1874,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 val id = row.optString("id")
                 if (id.isBlank()) continue
                 out += TransferProgress.paused(
-                    bookId = id,
-                    sentBytes = row.optLong("sent", 0L),
-                    totalBytes = row.optLong("total", 0L),
-                    reason = row.optString("reason")
+                    id,
+                    row.optLong("sent", 0L),
+                    row.optLong("total", 0L),
+                    row.optString("reason")
                 )
             }
             out

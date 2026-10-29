@@ -9,6 +9,7 @@ import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okio.BufferedSink
+import okio.buffer
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -375,7 +376,7 @@ object DriveLibrary {
                     onProgress(if (total > 0L) written.coerceAtMost(total) else written)
                 }
             }
-            val forwarding = okio.Okio.buffer(counting)
+            val forwarding = counting.buffer()
             delegate.writeTo(forwarding)
             // Flush before returning: OkHttp closes the sink itself, and an unflushed 8 KB tail
             // would otherwise be counted after the caller believes the body is finished.

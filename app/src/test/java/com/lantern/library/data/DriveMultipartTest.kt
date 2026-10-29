@@ -50,10 +50,10 @@ class DriveMultipartTest {
             .addPart(body)
             .build()
         assertEquals(1, multipart.parts.size)
-        // No explicit header list at all, so there is nothing for OkHttp to refuse. (OkHttp 4.12
-        // exposes `Part.headers` as nullable; it is null exactly when no headers were supplied.)
+        // No header list was supplied, so there is nothing for OkHttp to refuse; it writes the
+        // body's media type into the part itself when the request is encoded.
         assertEquals(0, multipart.parts[0].headers?.size ?: 0)
-        assertEquals("application/json", multipart.parts[0].body.contentType()?.subtype)
+        assertEquals("json", multipart.parts[0].body.contentType()?.subtype)
     }
 
     /** The real upload: metadata then payload, both typed, in that order. */

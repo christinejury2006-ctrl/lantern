@@ -77,10 +77,19 @@ fun BookDetailsOverlay(
                 )
                 Text("EXCERPT", color = palette.mute, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.6.sp, modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 6.dp))
                 Text(
-                    "A genuine reading sample is not available in the current book record. Lore won’t invent an excerpt or present generated text as the author’s writing.",
-                    color = palette.mute, fontSize = 13.sp, lineHeight = 19.sp,
+                    book.excerpt.takeIf { it.isNotBlank() }
+                        ?: "No provider-supplied text sample is available for this title yet. Lore won’t invent an excerpt or present generated text as the author’s writing.",
+                    color = if (book.excerpt.isNotBlank()) palette.ink else palette.mute,
+                    fontSize = 13.sp, lineHeight = 19.sp,
                     modifier = Modifier.fillMaxWidth()
                 )
+                if (book.excerpt.isNotBlank()) {
+                    Text(
+                        "Text snippet supplied by the book metadata provider",
+                        color = palette.mute, fontSize = 10.sp,
+                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+                    )
+                }
             }
             Spacer(Modifier.height(16.dp))
             GlassSurface(palette, Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), fill = palette.accent, onClick = onWant) {

@@ -1,7 +1,10 @@
 package com.lantern.library.ui.screens
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
@@ -12,10 +15,11 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.platform.LocalDensity
 import com.lantern.library.data.Chapter
 import com.lantern.library.data.Paginator
 import com.lantern.library.data.ReaderPage
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * The page's own margins, in one place.
@@ -32,19 +36,21 @@ internal val PagePadBottom = 80.dp
 internal val PageTitleGap = 20.dp
 
 /**
- * Splits a book into pages that are actually the height of the screen.
+ * Pages for a book, measured against the real page box — computed off the main thread.
  *
- * The previous paginator counted characters: 900 of them per page at 17 sp, whatever the phone,
- * whatever the font. That is a guess, and it is wrong in both directions — on a small screen the
- * page ran out of room and the text was clipped at the bottom, on a large one half the page was
- * empty. Since the reader's whole promise is that a page *is* a page, the breaks are now found by
- * measuring the text with the same style it will be drawn with.
+ * Two problems are solved here, and both of them were visible to the reader as "the EPUB is slow
+ * and then it janks":
  *
- * The cost is bounded deliberately: the usual case measures once per paragraph as the page fills
- * up, and a paragraph taller than a whole page is the only case that binary-searches for a break
- * point (about eleven measurements, once). Nothing here runs per frame — the result is remembered
- * against the chapter, the font and the page box, so it is recomputed only when one of those
- * changes.
+ * 1. **Cost.** The old paginator re-measured the whole growing page every time a paragraph was
+ *    added — quadratic in the number of paragraphs. This measures every paragraph exactly once,
+ *    adds up the heights, and starts a new page when the next one will not fit. Only a paragraph
+ *    taller than a whole page costs more, and that one paragraph is split by binary search.
+ * 2. **Where it runs.** It used to run inside composition, on the main thread, so opening a long
+ *    book froze the first frame of the reader. It now runs on [Dispatchers.Default] and the screen
+ *    shows "Preparing…" until it lands, while the previous page list keeps being drawn if there is
+ *    one. Measuring text off the main thread is safe: `TextMeasurer` has no UI state.
+ *
+ * The returned [State] is `null` while the first pass for the current inputs has not finished.
  */
 @Composable
 fun rememberMeasuredPages(
@@ -53,7 +59,7 @@ fun rememberMeasuredPages(
     family: FontFamily,
     fontSizeSp: Float,
     pageBox: IntSize
-): List<ReaderPage> {
+): State<List<ReaderPage>?> {
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
     val body = remember(family, fontSizeSp) {
@@ -71,17 +77,25 @@ fun rememberMeasuredPages(
             textAlign = TextAlign.Center
         )
     }
-    return remember(chapters, fallback, family, fontSizeSp, pageBox, body, heading, density) {
-        val textWidth = pageBox.width - with(density) {
-            (PagePadHorizontal * 2).roundToPx()
-        }
+
+    // The page box arrives from the pager's own layout. Until it does, the window size stands in,
+    // so the first pass is already close and the "Preparing…" flash is short.
+    return produceState<List<ReaderPage>?>(
+        initialValue = null,
+        chapters, fallback, body, heading, pageBox, density, measurer
+    ) {
+        val textWidth = pageBox.width - with(density) { (PagePadHorizontal * 2).roundToPx() }
         val textHeight = pageBox.height - with(density) { (PagePadTop + PagePadBottom).roundToPx() }
-        // Before the first layout pass there is no box to measure into. Rather than show a blank
-        // page, fall back to the old estimate for that one frame; the measured pass replaces it as
-        // soon as the pager reports its size.
         if (textWidth < 80 || textHeight < 80) {
-            Paginator.pages(chapters, fontSizeSp, fallback)
-        } else {
+            value = Paginator.pages(chapters, fontSizeSp, fallback)
+            return@produceState
+        }
+        val gap = with(density) { PageTitleGap.roundToPx() }
+        // The page draws its paragraphs inside one Text, separated by a blank line, so the space
+        // between two paragraphs is exactly one line height — not an arbitrary constant. Measuring
+        // it here is what keeps the last paragraph of a page from being cut off.
+        val lineGap = with(density) { (fontSizeSp * 1.55f).sp.roundToPx() }
+        value = withContext(Dispatchers.Default) {
             paginate(
                 measurer = measurer,
                 chapters = chapters,
@@ -90,7 +104,8 @@ fun rememberMeasuredPages(
                 heading = heading,
                 widthPx = textWidth,
                 heightPx = textHeight,
-                titleGapPx = with(density) { PageTitleGap.roundToPx() }
+                titleGapPx = gap,
+                lineGapPx = lineGap
             )
         }
     }
@@ -104,7 +119,8 @@ private fun paginate(
     heading: TextStyle,
     widthPx: Int,
     heightPx: Int,
-    titleGapPx: Int
+    titleGapPx: Int,
+    lineGapPx: Int
 ): List<ReaderPage> {
     val out = mutableListOf<ReaderPage>()
     val source = chapters.ifEmpty { listOf(Chapter("Book", fallback)) }
@@ -116,8 +132,6 @@ private fun paginate(
             .map { it.trim() }
             .filter { it.isNotEmpty() }
 
-        // A chapter with no body still gets its heading page, so the table of contents and the
-        // page indices stay in step.
         if (paragraphs.isEmpty()) {
             out += ReaderPage(title, chapterIndex, emptyList(), true)
             return@forEachIndexed
@@ -127,45 +141,44 @@ private fun paginate(
         val pending = ArrayDeque(paragraphs)
         while (pending.isNotEmpty()) {
             val isFirst = pageNumber == 0
-            // Only the first page of a chapter carries the heading, and the heading is drawn above
-            // the text, so it takes room out of that page's budget.
             val room = heightPx - if (isFirst) {
                 measureHeight(measurer, heading, title, widthPx) + titleGapPx
             } else {
                 0
             }
-            fun fits(candidate: List<String>): Boolean =
-                room > 0 && measureHeight(measurer, body, candidate.joinToString("\n\n"), widthPx) <= room
-
             val page = mutableListOf<String>()
-            while (pending.isNotEmpty() && fits(page + pending.first())) {
+            // One measurement per paragraph, accumulated — not one per candidate page.
+            var used = 0
+            while (pending.isNotEmpty()) {
+                val next = pending.first()
+                val gap = if (page.isEmpty()) 0 else lineGapPx
+                val height = measureHeight(measurer, body, next, widthPx)
+                if (page.isNotEmpty() && used + gap + height > room) break
+                if (page.isEmpty() && height > room) break
                 page += pending.removeFirst()
+                used += gap + height
             }
 
             if (page.isEmpty()) {
-                // Nothing fitted whole, so the paragraph is longer than the page. Find the longest
-                // prefix that does fit and carry the rest onto the next page — text is never
-                // dropped, only continued.
+                // A single paragraph taller than the page: take the longest prefix that fits and
+                // carry the rest over, so text is continued rather than dropped.
                 val paragraph = pending.removeFirst()
-                val best = longestFitting(paragraph, widthPx, room, measurer, body, ::fits)
+                val best = longestFitting(paragraph, widthPx, room, measurer, body)
                 if (best <= 0) {
-                    // Degenerate layout (a very large font on a very small window). Show the rest of
-                    // the chapter on this page rather than looping forever or losing it.
+                    // Degenerate layout (huge font, tiny window). Show the rest of the chapter
+                    // rather than looping forever or losing it.
                     page += paragraph
                     page += pending.toList()
                     pending.clear()
                 } else {
                     var cut = best
                     if (cut < paragraph.length) {
-                        // Prefer to break between words. Only fall back to a hard cut if the last
-                        // space is so far back that it would waste most of the page.
                         val space = paragraph.lastIndexOf(' ', cut)
                         if (space > cut / 2) cut = space
                     }
                     val head = paragraph.substring(0, cut).trim()
                     val rest = paragraph.substring(cut).trim()
                     if (head.isEmpty()) {
-                        // The cut landed entirely on whitespace; treat it as the degenerate case.
                         page += paragraph
                         page += pending.toList()
                         pending.clear()
@@ -176,13 +189,9 @@ private fun paginate(
                 }
             }
 
-            if (page.isNotEmpty()) {
-                out += ReaderPage(title, chapterIndex, page.toList(), isFirst)
-                pageNumber++
-            } else {
-                // Belt and braces: never spin without emitting a page.
-                break
-            }
+            if (page.isEmpty()) break
+            out += ReaderPage(title, chapterIndex, page.toList(), isFirst)
+            pageNumber++
         }
     }
 
@@ -190,7 +199,7 @@ private fun paginate(
     return out
 }
 
-/** Height the text will occupy when drawn at this width, measured by the same engine that draws it. */
+/** Height the text will occupy when drawn at this width, measured by the engine that draws it. */
 private fun measureHeight(
     measurer: TextMeasurer,
     style: TextStyle,
@@ -203,16 +212,15 @@ private fun measureHeight(
 ).size.height
 
 /**
- * The largest number of characters from the front of [paragraph] that still fits, found by binary
- * search: height only grows as the prefix grows, so the predicate is monotonic.
+ * The largest prefix of [paragraph] that still fits, found by binary search: height only grows as
+ * the prefix grows, so the predicate is monotonic.
  */
 private fun longestFitting(
     paragraph: String,
     widthPx: Int,
     room: Int,
     measurer: TextMeasurer,
-    body: TextStyle,
-    fits: (List<String>) -> Boolean
+    body: TextStyle
 ): Int {
     if (room <= 0) return 0
     var low = 1
@@ -221,7 +229,7 @@ private fun longestFitting(
     while (low <= high) {
         val mid = (low + high) / 2
         val height = measureHeight(measurer, body, paragraph.substring(0, mid), widthPx)
-        if (height <= room && fits(listOf(paragraph.substring(0, mid)))) {
+        if (height <= room) {
             best = mid
             low = mid + 1
         } else {

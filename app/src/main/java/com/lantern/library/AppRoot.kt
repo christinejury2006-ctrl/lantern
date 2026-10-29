@@ -64,7 +64,6 @@ import com.lantern.library.ui.screens.ProfileScreen
 import com.lantern.library.ui.screens.ReadingNookScreen
 import com.lantern.library.ui.screens.ReaderScreen
 import com.lantern.library.ui.screens.SearchScreen
-import com.lantern.library.ui.screens.StudioScreen
 import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.LanternTheme
 import com.lantern.library.ui.theme.Brass
@@ -85,10 +84,9 @@ internal fun strongGutendexMatch(book: DiscoveryBook, hits: List<CatalogBook>): 
 private sealed class Route {
     object Home : Route()
     object Library : Route()
-    object Studio : Route()
     object Search : Route()
     object Profile : Route()
-    data class Reader(val id: String, val fromStudio: Boolean = false) : Route()
+    data class Reader(val id: String) : Route()
 }
 
 @Composable
@@ -98,16 +96,13 @@ internal fun LanternRoot(store: LanternStore) {
     // the library tab, so the reader returns to wherever it was opened from.
     var readerBack by remember { mutableStateOf<Route>(Route.Home) }
     var details by remember { mutableStateOf<DiscoveryBook?>(null) }
-    var pickerForStudio by remember { mutableStateOf(true) }
     val theme = store.readingPrefs.theme
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val activity = context as Activity
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         val uri = res.data?.data
-        if (res.resultCode == Activity.RESULT_OK && uri != null) {
-            if (pickerForStudio) store.studioOpen(uri) else store.importUri(uri)
-        } else if (pickerForStudio) store.studioCancelPick()
+        if (res.resultCode == Activity.RESULT_OK && uri != null) store.importUri(uri)
     }
     // Every failure of Google sign-in that lives in the Firebase console — not in this code —
     // lands in this one dialog, with the package and SHA-1 of the running build, because the
@@ -171,17 +166,13 @@ internal fun LanternRoot(store: LanternStore) {
         val intent = store.takeDriveConsentIntent() ?: return@LaunchedEffect
         driveConsent.launch(intent)
     }
-    fun openBookFile(studio: Boolean) {
-        pickerForStudio = studio
-        if (studio) store.studioBeginPick()
+    fun importFile() {
         picker.launch(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "*/*"
             putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/epub+zip", "application/pdf", "application/octet-stream"))
         })
     }
-    fun addFile() { openBookFile(true) }
-    fun importFile() { openBookFile(false) }
     fun openDiscoveryLink(book: DiscoveryBook): Boolean {
         val url = book.infoLink ?: book.buyLink ?: book.previewLink ?: book.canonicalLink
         if (url.isNullOrBlank()) return false
@@ -244,11 +235,9 @@ internal fun LanternRoot(store: LanternStore) {
                     },
                     onOpenPick = { pick -> details = pick },
                     onSearch = { tab = Route.Search },
-                    onShelf = { tab = Route.Library },
-                    onStudio = { tab = Route.Studio },
+                    onLibrary = { tab = Route.Library },
                     onRefreshPicks = { store.refreshForYou() },
-                    onNotifications = { tab = Route.Profile },
-                    onSeeAll = { tab = Route.Library }
+                    onNotifications = { tab = Route.Profile }
                 )
                 Route.Library -> LibraryScreen(
                     books = store.books,
@@ -260,44 +249,28 @@ internal fun LanternRoot(store: LanternStore) {
                         }
                     },
                     onRemove = { store.remove(it) },
-                    onImport = { importFile() }
+                    onImport = { importFile() },
+                    // The books the reader saved from Explore stand on the same shelf as the ones
+                    // they own; "want to read" was a separate list nothing ever showed.
+                    savedForLater = store.wantToRead,
+                    onOpenSaved = { pick -> details = pick },
+                    onRemoveSaved = { pick -> store.removeWantToRead(pick) },
+                    onDidNotFinish = { store.markDidNotFinish(it) },
+                    onBackOnShelf = { store.clearDidNotFinish(it) }
                 )
-                Route.Studio -> StudioScreen(
+                Route.Search -> SearchScreen(
                     theme = theme,
-                    session = store.studio,
-                    web = store.web,
-                    studioBooks = store.books.filter { it.id.startsWith("web_") },
-                    onOpenBook = { made ->
-                        readerBack = Route.Studio
-                        store.openForReading(made) { ready ->
-                            if (ready != null) tab = Route.Reader(ready.id)
+                    fetchingId = store.fetchingEditionId,
+                    onOpen = { remote -> getDiscovery(remote) },
+                    onDownload = { edition ->
+                        // Straight from the catalogue into the library, then straight into the
+                        // reader: the reader asked for a book, not for a file manager.
+                        readerBack = Route.Search
+                        store.fetchEdition(edition) { ready ->
+                            tab = Route.Reader(ready.id)
                         }
-                    },
-                    onAddFile = { addFile() },
-                    onSend = { title, author -> store.studioSend(title, author) },
-                    onCancel = { store.studioCancel() },
-                    onAnalyze = { store.analyzeWeb(it) },
-                    onWebKeep = { store.webKeep(it) },
-                    onWebRemove = { store.webRemove(it) },
-                    onWebCancel = { store.webCancel() },
-                    onOpenChapter = { store.webOpenChapter(it) },
-                    onFollowPossible = { store.webFollowPossible(it) },
-                    onIgnorePossible = { store.webIgnorePossible(it) },
-                    onBeginMeta = { store.webBeginMeta() },
-                    onSaveMeta = { t, a, s, img -> store.webSaveMeta(t, a, s, img) },
-                    onSelectCover = { store.webSelectCover(it) },
-                    onCompile = { store.webCompile() },
-                    onPreview = {
-                        readerBack = Route.Studio
-                        store.webOpenPreview { ready -> if (ready != null) tab = Route.Reader(ready.id) }
-                    },
-                    onAddLibrary = { store.webAddToLibrary() },
-                    onToggleCollect = { store.webToggleCollect(it) },
-                    onSelectCollectAll = { store.webSelectCollectAll(it) },
-                    onMoveCollect = { id, d -> store.webMoveCollect(id, d) },
-                    onFetchCollection = { store.webFetchCollection() }
+                    }
                 )
-                Route.Search -> SearchScreen(theme) { remote -> getDiscovery(remote) }
                 Route.Profile -> ProfileScreen(
                     store.books, store.account, store.readingPrefs,
                     { store.setPrefs(it) },
@@ -305,11 +278,17 @@ internal fun LanternRoot(store: LanternStore) {
                     { store.signOut(activity) },
                     { store.requestDriveConnect() },
                     { store.openInterestEditor() },
-                    { store.syncNow() }
+                    { store.syncNow() },
+                    syncTrace = com.lantern.library.data.SyncDiag.lines,
+                    onCopySyncTrace = { report ->
+                        clipboard.setText(AnnotatedString(report))
+                        store.toast("Sync diagnosis copied")
+                    },
+                    onClearSyncTrace = { com.lantern.library.data.SyncDiag.clear() }
                 )
                 is Route.Reader -> {
                     val book = store.book(r.id)
-                    val back = { tab = if (r.fromStudio) Route.Studio else readerBack }
+                    val back = { tab = readerBack }
                     if (book == null) back()
                     else ReaderScreen(
                         book, store.readingPrefs, { store.setPrefs(it) }, back,
@@ -351,11 +330,11 @@ internal fun LanternRoot(store: LanternStore) {
 
 @Composable
 private fun BottomBar(theme: ReaderTheme, current: Route, onTab: (Route) -> Unit, modifier: Modifier = Modifier) {
-    // Four tabs, as the nook has: the room, discovery, the physical case, and the reader
-    // themselves. Studio is not a tab — it is a tool reached from the nook's header, so the bar
-    // stays a description of where you are rather than a menu of everything.
+    // Four tabs: the room, discovery, the shelf, and the reader themselves. Studio is gone —
+    // Explore fetches a book in one step, so a separate import workshop was a second door to the
+    // same room. A book opened from anywhere still belongs to the tab it was opened from.
     val selected = when (current) {
-        is Route.Home, is Route.Studio, is Route.Reader -> "home"
+        is Route.Home, is Route.Reader -> "home"
         is Route.Search -> "explore"
         is Route.Library -> "library"
         is Route.Profile -> "you"

@@ -203,7 +203,10 @@ object AccountSync {
             filePath = if (fileOk) local.filePath else null,
             pageCount = progress.pageCount,
             currentPage = progress.currentPage,
-            finished = progress.finished,
+            // Finished is a latch on both sides, so it survives a merge even when the other
+            // device has a later reading position. A book the reader finished does not quietly
+            // fall back into Reading because they skimmed back a few pages on their phone.
+            finished = local.finished || cloud.finished || progress.finished,
             addedAt = minOf(local.addedAt.takeIf { it > 0L } ?: cloud.addedAt, cloud.addedAt.takeIf { it > 0L } ?: local.addedAt),
             lastReadAt = progress.lastReadAt,
             category = local.category.ifBlank { cloud.category },
@@ -219,7 +222,8 @@ object AccountSync {
                 else -> cloud.backupAt
             },
             pendingUpload = false,
-            backupFailed = false
+            backupFailed = false,
+            dnf = local.dnf || cloud.dnf
         )
     }
 
@@ -269,6 +273,9 @@ object AccountSync {
             // behind that id were ever confirmed, which is a different question.
             .put("driveFileId", b.driveFileId.orEmpty())
             .put("backupAt", b.backupAt)
+            // The reader's own decisions about a book travel with it: a book they finished or
+            // gave up on should look the same on their next phone.
+            .put("dnf", b.dnf)
     }
 
     private fun bookFromCloud(o: JSONObject): LibraryBook? {
@@ -296,7 +303,8 @@ object AccountSync {
             synopsis = o.optString("synopsis"),
             driveFileId = o.optString("driveFileId").ifBlank { null },
             pendingUpload = false,
-            backupAt = o.optLong("backupAt", 0L)
+            backupAt = o.optLong("backupAt", 0L),
+            dnf = o.optBoolean("dnf", false)
         )
     }
 

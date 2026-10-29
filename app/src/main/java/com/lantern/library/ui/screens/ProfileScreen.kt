@@ -18,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lantern.library.data.BookBackupState
@@ -27,6 +28,7 @@ import com.lantern.library.data.CloudAccount
 import com.lantern.library.data.LibraryBook
 import com.lantern.library.data.ReaderTheme
 import com.lantern.library.data.ReadingPrefs
+import com.lantern.library.data.SyncDiag
 import com.lantern.library.ui.components.AuroraOrb
 import com.lantern.library.ui.components.GlassSurface
 import com.lantern.library.ui.components.NookBackdrop
@@ -58,7 +60,11 @@ fun ProfileScreen(
     onSignOut: () -> Unit,
     onConnectDrive: () -> Unit = {},
     onEditInterests: () -> Unit = {},
-    onSyncNow: () -> Unit = {}
+    onSyncNow: () -> Unit = {},
+    /** Every stage the last syncs went through. Shown as a list, never uploaded. */
+    syncTrace: List<SyncDiag.Line> = emptyList(),
+    onCopySyncTrace: (String) -> Unit = {},
+    onClearSyncTrace: () -> Unit = {}
 ) {
     val palette = nookPalette(prefs.theme)
     val fileBooks = books.filter { it.origin != BookOrigin.BUNDLED && it.format != BookFormat.TEXT }
@@ -177,6 +183,71 @@ fun ProfileScreen(
                             modifier = Modifier.padding(top = 4.dp, bottom = 14.dp)
                         )
                         NookButton(palette, "Sign in with Google", onGoogleSignIn, filled = true)
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(22.dp))
+            NookSectionTitle("Sync diagnosis", palette)
+            Spacer(Modifier.height(10.dp))
+            GlassSurface(
+                palette,
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                shape = RoundedCornerShape(22.dp)
+            ) {
+                Column(Modifier.padding(18.dp)) {
+                    Text(
+                        "Sync fails silently by nature: a token that never arrives and a snapshot " +
+                            "that is never applied both look like nothing happening. This is the " +
+                            "stage-by-stage record of the last attempts, newest first.",
+                        color = palette.mute,
+                        fontSize = 11.sp
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    if (syncTrace.isEmpty()) {
+                        Text(
+                            "No sync has run on this install yet.",
+                            color = palette.faint,
+                            fontSize = 11.sp
+                        )
+                    } else {
+                        syncTrace.take(14).forEach { line ->
+                            Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                                Text(
+                                    if (line.ok) "·" else "!",
+                                    color = if (line.ok) palette.mute else palette.accent,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(end = 6.dp)
+                                )
+                                Text(
+                                    line.stage,
+                                    color = palette.ink,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                if (line.detail.isNotBlank()) {
+                                    Text(
+                                        "  " + line.detail,
+                                        color = palette.mute,
+                                        fontSize = 11.sp,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        NookButton(
+                            palette,
+                            "Copy diagnosis",
+                            { onCopySyncTrace(SyncDiag.report()) },
+                            filled = false
+                        )
+                    }
+                    if (syncTrace.isNotEmpty()) {
+                        Spacer(Modifier.height(6.dp))
+                        NookButton(palette, "Clear", onClearSyncTrace, filled = false)
                     }
                 }
             }

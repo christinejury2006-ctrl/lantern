@@ -231,6 +231,68 @@ object BookIo {
         ).let { if (coverPath != null) it.copy(remoteCover = coverPath) else it }
     }
 
+    /**
+     * Downloads a [FreeEdition] from an open catalogue into the library.
+     *
+     * The bytes are written to a temporary file first and run through [BookFiles.validate]. A book
+     * only reaches the shelf if the file really is the container its URL claimed: a 404 page, an
+     * HTML error, a truncated download or a lending-wall redirect all fail here and return null,
+     * so Explore can say "that download failed" instead of quietly adding a broken book.
+     */
+    fun downloadEdition(context: Context, edition: FreeEdition): LibraryBook? {
+        val bytes = OpenCatalogs.fetchBytes(edition.url) ?: return null
+        val ext = if (edition.format == BookFormat.PDF) "pdf" else "epub"
+        // Stable id per edition, so re-downloading the same book updates a file instead of
+        // growing a second copy on the shelf.
+        val id = "free_" + edition.id.replace(Regex("[^A-Za-z0-9]+"), "_").trim('_').take(60)
+        val dest = File(booksDir(context), "$id.$ext")
+        val temp = File(dest.absolutePath + ".part")
+        return try {
+            temp.writeBytes(bytes)
+            when (val check = BookFiles.validate(temp, edition.format)) {
+                is BookFiles.Check.Invalid -> {
+                    temp.delete()
+                    null
+                }
+                BookFiles.Check.Ok -> {
+                    if (!temp.renameTo(dest)) {
+                        temp.delete()
+                        return null
+                    }
+                    var coverPath: String? = null
+                    edition.coverUrl?.let { url ->
+                        runCatching {
+                            val img = OpenCatalogs.fetchBytes(url)
+                            if (img != null && img.size < 4 * 1024 * 1024) {
+                                val cf = File(coversDir(context), "$id.jpg")
+                                cf.writeBytes(img)
+                                coverPath = cf.absolutePath
+                            }
+                        }
+                    }
+                    val pages = if (edition.format == BookFormat.PDF) pdfPageCount(dest) else estimateEpubPages(dest)
+                    val title = epubDcTitle(dest)?.takeIf { it.isNotBlank() } ?: edition.title.ifBlank { "Untitled" }
+                    val author = epubDcCreators(dest).joinToString(", ").ifBlank { edition.author }
+                    LibraryBook(
+                        id = id,
+                        title = title,
+                        author = author,
+                        remoteCover = coverPath ?: edition.coverUrl,
+                        format = edition.format,
+                        origin = BookOrigin.DOWNLOAD,
+                        filePath = dest.absolutePath,
+                        pageCount = pages.coerceAtLeast(1),
+                        category = "Downloaded",
+                        synopsis = "Downloaded from ${edition.source}. ${edition.rights}."
+                    )
+                }
+            }
+        } catch (t: Throwable) {
+            temp.delete()
+            null
+        }
+    }
+
     fun readEpubChapters(file: File): List<Chapter> = readEpubDocument(file).chapters
 
     fun readEpubDocument(file: File): EpubDocument {

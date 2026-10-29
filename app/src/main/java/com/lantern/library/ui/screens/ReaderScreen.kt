@@ -120,7 +120,6 @@ import com.lantern.library.data.ReaderAppearance
 import com.lantern.library.data.ReaderTheme
 import com.lantern.library.data.ReadingPrefs
 import com.lantern.library.ui.components.AppearanceLayer
-import com.lantern.library.ui.components.LeafPager
 import com.lantern.library.ui.components.readerChromeBar
 import com.lantern.library.ui.components.readerChromePanel
 import com.lantern.library.ui.theme.NookPalette
@@ -288,28 +287,27 @@ fun ReaderScreen(
             IntSize(config.screenWidthDp.dp.roundToPx(), config.screenHeightDp.dp.roundToPx())
         }
     }
-    val pages = rememberMeasuredPages(
+    val pagesState = rememberMeasuredPages(
         chapters = chapters,
         fallback = book.synopsis.ifBlank { "This book has no text yet." },
         family = family,
         fontSizeSp = prefs.fontSizeSp,
         pageBox = if (pageBox.width > 0 && pageBox.height > 0) pageBox else estimatedBox
     )
-    val pageCount = if (book.format == BookFormat.PDF) pdfCount else pages.size.coerceAtLeast(1)
+    // Pagination runs off the main thread now, so there is an honest "not ready" state instead of
+    // a frozen first frame. The page count is never zero: the pager needs a page to exist.
+    val pages = pagesState.value
+    val pagesReady = pages != null
+    val pageList = pages ?: emptyList()
+    val pageCount = if (book.format == BookFormat.PDF) pdfCount else (pages?.size ?: 1).coerceAtLeast(1)
     val pager = rememberPagerState(
         initialPage = book.currentPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0)),
         pageCount = { pageCount }
     )
-    // EPUB swipe mode keeps its own page index: the page is turned by a hinged leaf,
-    // not by a pager, so the reader owns the current page here.
-    var epubPage by remember(book.id) {
-        mutableStateOf(book.currentPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0)))
-    }
-    // A re-pagination (font size change, rotation, a different screen) can leave the remembered
-    // page index past the end of the book. Clamp it rather than showing a blank leaf.
-    LaunchedEffect(pageCount) {
-        if (epubPage > pageCount - 1) epubPage = (pageCount - 1).coerceAtLeast(0)
-    }
+    // There is one pager, and it drives both formats. EPUB used to keep its own page index for a
+    // separate leaf-turn surface; that second source of truth is what made font-size changes and
+    // chapter jumps able to disagree with what was on screen. A single pager cannot disagree with
+    // itself, and it is the same mechanism the PDF reader already used.
     val scrollState = rememberScrollState()
     val pdfList = rememberLazyListState(
         initialFirstVisibleItemIndex = book.currentPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
@@ -318,10 +316,6 @@ fun ReaderScreen(
     val scope = rememberCoroutineScope()
     val epubUsesPager = prefs.swipeMode && book.format != BookFormat.PDF
     val pdfUsesPager = book.format == BookFormat.PDF && prefs.swipeMode
-    var epubRestored by remember(book.id) { mutableStateOf(book.format == BookFormat.PDF) }
-    LaunchedEffect(book.id, prefs.swipeMode) {
-        if (book.format != BookFormat.PDF) epubRestored = false
-    }
     val pdfSession = remember(book.id, book.filePath, pdfUsesPager) {
         if (book.format == BookFormat.PDF && !pdfUsesPager)
             book.filePath?.let { PdfDocSession(File(it)) }
@@ -330,17 +324,17 @@ fun ReaderScreen(
     DisposableEffect(pdfSession) {
         onDispose { pdfSession?.close() }
     }
-    LaunchedEffect(pager, pageCount, prefs.swipeMode, book.format, ready, epubRestored) {
-        if (!prefs.swipeMode) return@LaunchedEffect
-        if (book.format != BookFormat.PDF) return@LaunchedEffect
-        snapshotFlow { pager.currentPage }.collect { onProgress(it, pageCount) }
+    // Progress is read from the pager whenever the pager is what is turning the page.
+    LaunchedEffect(pager, pageCount, prefs.swipeMode, ready) {
+        if (!prefs.swipeMode || !ready || pageCount <= 0) return@LaunchedEffect
+        snapshotFlow { pager.currentPage }.collect { page ->
+            onProgress(page.coerceIn(0, (pageCount - 1).coerceAtLeast(0)), pageCount)
+        }
     }
-    LaunchedEffect(epubPage, pageCount, prefs.swipeMode, book.format, ready) {
-        if (!prefs.swipeMode || book.format == BookFormat.PDF || !ready) return@LaunchedEffect
-        onProgress(epubPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0)), pageCount)
-    }
-    LaunchedEffect(scrollState, pageCount, prefs.swipeMode, book.format, ready, epubRestored) {
-        if (prefs.swipeMode || book.format == BookFormat.PDF || !ready || !epubRestored) return@LaunchedEffect
+    // Scrolling mode (EPUB without swipe pages, and PDF without swipe pages) reports the page it
+    // has scrolled to.
+    LaunchedEffect(scrollState, pageCount, prefs.swipeMode, book.format, ready) {
+        if (prefs.swipeMode || book.format == BookFormat.PDF || !ready) return@LaunchedEffect
         snapshotFlow { scrollState.value to scrollState.maxValue }.collect { (value, max) ->
             if (max <= 0 || pageCount <= 0) return@collect
             val page = ((value.toFloat() / max.toFloat()) * (pageCount - 1).coerceAtLeast(0)).toInt()
@@ -353,13 +347,13 @@ fun ReaderScreen(
             onProgress(index.coerceIn(0, (pageCount - 1).coerceAtLeast(0)), pageCount)
         }
     }
-    LaunchedEffect(book.id, ready, pageCount, prefs.swipeMode, book.format) {
-        if (book.format == BookFormat.PDF) return@LaunchedEffect
-        if (!prefs.swipeMode) return@LaunchedEffect
-        if (!ready || pageCount <= 0) return@LaunchedEffect
+    // Restoring the reader's place. It waits for the measured page list, so the jump lands on the
+    // page number the reader actually left, not on a guess made against the pre-measurement list.
+    LaunchedEffect(book.id, pager, pageCount, prefs.swipeMode, pagesReady, ready) {
+        if (!prefs.swipeMode || !ready || !pagesReady || pageCount <= 0) return@LaunchedEffect
+        if (book.format != BookFormat.PDF && !pagesReady) return@LaunchedEffect
         val target = book.currentPage.coerceIn(0, pageCount - 1)
-        if (epubPage != target) epubPage = target
-        epubRestored = true
+        if (pager.currentPage != target) pager.scrollToPage(target)
     }
     LaunchedEffect(book.id, ready, prefs.swipeMode, book.format, scrollState.maxValue, pageCount) {
         if (!ready || prefs.swipeMode || book.format == BookFormat.PDF) return@LaunchedEffect
@@ -367,7 +361,6 @@ fun ReaderScreen(
         val frac = if (pageCount <= 1) 0f else book.currentPage.toFloat() / (pageCount - 1).coerceAtLeast(1)
         val target = (frac * scrollState.maxValue).toInt().coerceIn(0, scrollState.maxValue)
         if (kotlin.math.abs(scrollState.value - target) > 8) scrollState.scrollTo(target)
-        epubRestored = true
     }
     LaunchedEffect(book.id, ready, prefs.swipeMode, book.format, pageCount) {
         if (!ready || prefs.swipeMode || book.format != BookFormat.PDF || pageCount <= 0) return@LaunchedEffect
@@ -392,7 +385,7 @@ fun ReaderScreen(
         val target = p.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
         scope.launch {
             if (prefs.swipeMode) {
-                if (book.format == BookFormat.PDF) pager.scrollToPage(target) else epubPage = target
+                pager.scrollToPage(target)
             } else if (book.format == BookFormat.PDF) {
                 pdfList.scrollToItem(target)
             } else if (scrollState.maxValue > 0 && pageCount > 1) {
@@ -493,25 +486,33 @@ fun ReaderScreen(
             }
             else -> key(book.id, epubUsesPager) {
                 if (epubUsesPager) {
-                    // The pager is re-created when anything that decides where a page *breaks*
-                    // changes — the book, the font size, the measured page box — instead of being
-                    // re-fed underneath a curl in flight. A page list that shrinks during an
-                    // animation is what used to hand `PageLeaf` a null page mid-turn; now the
-                    // surface is rebuilt from a clean state and starts on the reader's page.
-                    key(prefs.fontSizeSp, pages.size) {
-                        LeafPager(
-                            pageCount = pages.size.coerceAtLeast(1),
-                            page = epubPage,
-                            onPage = { epubPage = it },
-                            enabled = !menuOpen,
-                            paper = palette.page,
-                            modifier = Modifier.fillMaxSize().onSizeChanged { pageBox = it }
-                        ) { i, interactive ->
-                            PageLeaf(
-                                pages.getOrNull(i), family, prefs.fontSizeSp, ink,
-                                Modifier.fillMaxSize()
-                                    .then(if (interactive) pageTap else Modifier)
+                    // The same pager the PDF reader uses, on purpose. Two page-turning surfaces
+                    // meant two sources of truth about which page was showing, and the mismatch
+                    // between them is what made font-size changes and chapter jumps crash or
+                    // glitch. This is one mechanism, so there is nothing left to disagree.
+                    Box(Modifier.fillMaxSize().onSizeChanged { pageBox = it }) {
+                        if (!pagesReady) {
+                            // Measuring happens off the main thread; this is the honest state
+                            // while it runs, rather than a frozen screen or a guessed page count.
+                            Text(
+                                "Preparing…",
+                                color = mute,
+                                fontFamily = family,
+                                modifier = Modifier.align(Alignment.Center)
                             )
+                        }
+                        HorizontalPager(
+                            state = pager,
+                            modifier = Modifier.fillMaxSize(),
+                            userScrollEnabled = !menuOpen && pagesReady,
+                            beyondBoundsPageCount = 1
+                        ) { i ->
+                            Box(Modifier.fillMaxSize().then(pageTap)) {
+                                PageLeaf(
+                                    pageList.getOrNull(i), family, prefs.fontSizeSp, ink,
+                                    Modifier.fillMaxSize()
+                                )
+                            }
                         }
                     }
                 } else {
@@ -629,7 +630,7 @@ fun ReaderScreen(
                 }
                 ColBtn(Icons.Filled.Favorite, "Bookmarks", palette, selected = menu == ReaderMenu.Marks) {
                     val page = when {
-                        prefs.swipeMode -> if (book.format == BookFormat.PDF) pager.currentPage else epubPage
+                        prefs.swipeMode -> pager.currentPage
                         book.format == BookFormat.PDF -> pdfList.firstVisibleItemIndex
                         scrollState.maxValue <= 0 -> 0
                         else -> ((scrollState.value.toFloat() / scrollState.maxValue) * (pageCount - 1).coerceAtLeast(0)).toInt()

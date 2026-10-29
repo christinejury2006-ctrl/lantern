@@ -58,6 +58,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         private set
     var interestsChosen by mutableStateOf(false)
         private set
+
+    /** The edition Explore is currently downloading, so its card can show progress honestly. */
+    var fetchingEditionId by mutableStateOf<String?>(null)
+        private set
     var interests by mutableStateOf<List<String>>(emptyList())
         private set
     var editingInterests by mutableStateOf(false)
@@ -374,7 +378,34 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             return
         }
         val b = book(id) ?: return
-        upsert(b.copy(currentPage = page.coerceAtLeast(0), pageCount = pages.coerceAtLeast(1), lastReadAt = System.currentTimeMillis(), finished = pages > 0 && page >= pages - 1))
+        // `finished` latches. Reaching the end marks the book complete; scrolling back to re-read
+        // does not un-complete it, which is what the reader asked for: a finished book stays in
+        // Completed until they remove it or take it off the shelf.
+        val reachedEnd = pages > 0 && page >= pages - 1
+        upsert(
+            b.copy(
+                currentPage = page.coerceAtLeast(0),
+                pageCount = pages.coerceAtLeast(1),
+                lastReadAt = System.currentTimeMillis(),
+                finished = b.finished || reachedEnd
+            )
+        )
+    }
+
+    /** Marks a book as one the reader does not want to continue. Keeps the file and the place. */
+    fun markDidNotFinish(id: String) {
+        val b = book(id) ?: return
+        upsert(b.copy(dnf = true))
+        toast("Moved to Did not finish")
+        markLocalChanged()
+    }
+
+    /** Takes a book back out of Did not finish, so it returns to the shelf proper. */
+    fun clearDidNotFinish(id: String) {
+        val b = book(id) ?: return
+        upsert(b.copy(dnf = false))
+        toast("Back on the shelf")
+        markLocalChanged()
     }
     fun addBookmark(bookId: String, page: Int) {
         if (bookId == STUDIO_PREVIEW_ID) {
@@ -396,6 +427,20 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         synchronized(bookmarksLock) {
             bookmarkRecords.filter { it.bookId == bookId }.map { it.pageIndex }.distinct().sorted()
         }
+
+    /**
+     * Drops a saved-to-read entry once the book itself is on the shelf.
+     *
+     * "Want to read" is a promise the shelf makes; keeping the promise should remove the note, or
+     * the same book shows up twice — once as a cover the reader owns and once as a placeholder
+     * saying they are still waiting for it.
+     */
+    private fun clearWantForTitle(title: String) {
+        val key = Recommendations.normalize(title)
+        if (key.isEmpty()) return
+        val removed = wantToRead.removeAll { Recommendations.normalize(it.title) == key }
+        if (removed) persistWantToRead()
+    }
 
     fun isWantToRead(book: DiscoveryBook) = wantToRead.any { Recommendations.sameWork(it, book) }
 
@@ -982,6 +1027,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             val incoming = book.copy(pendingUpload = false)
             when (commitNewUserBook(incoming)) {
                 CommitUserBookResult.ACCEPTED -> {
+                    clearWantForTitle(incoming.title)
                     toast("Saved ${book.title}")
                     then?.invoke(incoming)
                 }
@@ -990,6 +1036,53 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     toast("Library is full (200 books)")
                 }
                 CommitUserBookResult.PERSIST_FAILED -> toast("Download failed")
+            }
+        }
+    }
+
+    /**
+     * Downloads a free edition found by Explore straight into the library.
+     *
+     * The file is validated by [BookIo.downloadEdition] before anything is added, so a failed or
+     * mislabelled download leaves the shelf exactly as it was. Re-downloading an edition the
+     * reader already has opens the existing book instead of adding a duplicate.
+     */
+    fun fetchEdition(edition: FreeEdition, then: ((LibraryBook) -> Unit)? = null) {
+        if (fetchingEditionId != null) {
+            toast("One download at a time")
+            return
+        }
+        fetchingEditionId = edition.id
+        viewModelScope.launch {
+            toast("Downloading ${edition.title}…")
+            val book = withContext(Dispatchers.IO) {
+                runCatching { BookIo.downloadEdition(getApplication(), edition) }.getOrNull()
+            }
+            fetchingEditionId = null
+            if (book == null) {
+                toast("That download failed — the file was not a readable ${edition.format.name.lowercase()}")
+                return@launch
+            }
+            val existing = synchronized(libraryLock) { books.firstOrNull { it.id == book.id } }
+            if (existing != null) {
+                toast("Already on your shelf")
+                then?.invoke(existing)
+                return@launch
+            }
+            when (commitNewUserBook(book)) {
+                CommitUserBookResult.ACCEPTED -> {
+                    clearWantForTitle(book.title)
+                    toast("Added ${book.title}")
+                    then?.invoke(book)
+                }
+                CommitUserBookResult.LIBRARY_FULL -> {
+                    withContext(Dispatchers.IO) { discardOrphan(book) }
+                    toast("Library is full (${MAX_USER_BOOKS} books)")
+                }
+                CommitUserBookResult.PERSIST_FAILED -> {
+                    withContext(Dispatchers.IO) { discardOrphan(book) }
+                    toast("Could not save that book")
+                }
             }
         }
     }
@@ -1098,6 +1191,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             .putString("prov", "google")
             .putString("uid", uid)
             .apply()
+        SyncDiag.mark(
+            "Google sign-in",
+            "name=$name id=${if (uid.isBlank()) "missing" else "ok"}"
+        )
         if (announce) toast("Signed in as $name")
     }
 
@@ -1116,11 +1213,13 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     private suspend fun connectDrive(quiet: Boolean, pullAccount: Boolean) {
         when (val result = GoogleAuth.driveToken(getApplication())) {
             is DriveTokenResult.Ok -> {
+                SyncDiag.mark("Drive token", "granted")
                 withContext(Dispatchers.Main) { setDriveConnected(true) }
                 retryPendingDeletes()
                 if (pullAccount) runAccountSync(announce = !quiet)
             }
             is DriveTokenResult.Recoverable -> {
+                SyncDiag.fail("Drive token", "needs the reader to grant Drive access")
                 withContext(Dispatchers.Main) {
                     setDriveConnected(false)
                     if (driveConsentPrompted) {
@@ -1131,6 +1230,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 }
             }
             DriveTokenResult.Unavailable -> {
+                SyncDiag.fail(
+                    "Drive token",
+                    "unavailable — no Google account on this device, or the Drive API is not enabled for the project"
+                )
                 withContext(Dispatchers.Main) {
                     setDriveConnected(false)
                     if (!quiet && account.signedIn) toast("Account sync is not connected")
@@ -1281,14 +1384,19 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     private suspend fun syncFirebaseAccount(account: GoogleSignInAccount?, announce: Boolean) {
         try {
             if (account != null) FirestoreAccountRepository.signIn(account)
-            if (!FirestoreAccountRepository.isSignedIn()) return
+            if (!FirestoreAccountRepository.isSignedIn()) {
+                SyncDiag.mark("Firebase", "skipped: not signed in to Firebase")
+                return
+            }
             val local = withContext(Dispatchers.Main) { currentSnapshot() }
             val cloud = AccountSync.fromJson(FirestoreAccountRepository.readSnapshot())
             val merged = AccountSync.merge(local, cloud)
             withContext(Dispatchers.Main) { applySnapshot(merged) }
             FirestoreAccountRepository.writeSnapshot(AccountSync.toJson(merged))
+            SyncDiag.mark("Firebase", "snapshot written")
             if (announce) withContext(Dispatchers.Main) { toast("Firebase library sync complete") }
         } catch (e: Exception) {
+            SyncDiag.fail("Firebase", e.message?.take(160) ?: e.javaClass.simpleName)
             if (announce) withContext(Dispatchers.Main) {
                 val message = e.message.orEmpty()
                 toast(if (message.contains("OAuth client ID") || message.contains("ID token"))
@@ -1398,6 +1506,12 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             // No token, no answer: every candidate is still owed, and none may be marked done.
             else -> UploadSummary(candidates.size, emptyList(), candidates.map { it.id })
         }
+        if (candidates.isNotEmpty()) {
+            SyncDiag.mark(
+                "File uploads",
+                "${summary.confirmed.size} confirmed, ${summary.failed.size} failed of ${summary.attempted}"
+            )
+        }
         val now = System.currentTimeMillis()
         withContext(Dispatchers.Main) {
             summary.confirmed.forEach { (bookId, fileId) ->
@@ -1429,9 +1543,18 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     }
 
     private suspend fun runAccountSync(announce: Boolean) {
-        if (!account.signedIn || account.provider != "google") return
-        if (GoogleAuth.accountId(getApplication<Application>()).isNullOrBlank()) return
-        if (!networkReady()) return
+        if (!account.signedIn || account.provider != "google") {
+            SyncDiag.fail("Account sync", "skipped: not signed in with Google")
+            return
+        }
+        if (GoogleAuth.accountId(getApplication<Application>()).isNullOrBlank()) {
+            SyncDiag.fail("Account sync", "skipped: Google returned no stable account id")
+            return
+        }
+        if (!networkReady()) {
+            SyncDiag.fail("Account sync", "skipped: no usable connection")
+            return
+        }
         // Files first: the snapshot describes them, so it must not be written before them.
         val uploads = uploadAvailableBooks()
         val local = withContext(Dispatchers.Main) { currentSnapshot() }
@@ -1451,6 +1574,14 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             is DriveOutcome.Ok -> cloudOutcome.value
         }
         val cloud = AccountSync.fromJson(cloudRaw)
+        SyncDiag.mark(
+            "Account snapshot read",
+            when {
+                cloudRaw.isNullOrBlank() -> "no snapshot in the account yet"
+                cloud == null -> "snapshot present but unreadable"
+                else -> "snapshot has ${cloud.books.size} books, updatedAt=${cloud.updatedAt}"
+            }
+        )
         // One Google account must never inherit another's library. Drive's appDataFolder is already
         // per-user, and this is the second lock: if the snapshot names an account and it is not the
         // one signed in, nothing is merged and nothing is written over it.
@@ -1502,9 +1633,18 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                         } ?: b
                     }
                 )
-                withContext(Dispatchers.Main) { applySnapshot(merged) }
             }
         }
+        // Apply the merged library locally, always. Uploading only happens when this phone holds
+        // files the account does not; on a fresh install nothing needs uploading, and that was the
+        // one case where the merged snapshot was never applied — so a new phone stayed empty even
+        // though the account held everything. Applying first also means the snapshot written below
+        // describes what is actually on this phone.
+        withContext(Dispatchers.Main) { applySnapshot(merged) }
+        SyncDiag.mark(
+            "Library applied",
+            "local=${local.books.size} cloud=${cloud?.books.size ?: 0} merged=${merged.books.size} books"
+        )
         val written = withDrive { token, owner ->
             when (val folder = DriveLibrary.ensureFolder(token, owner)) {
                 is DriveOutcome.Ok -> DriveLibrary.writeJsonByLoreId(
@@ -1519,6 +1659,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             }
         }
         if (written != null) {
+            SyncDiag.mark("Account snapshot written", "ok")
             withContext(Dispatchers.Main) {
                 val at = System.currentTimeMillis()
                 val pending = uploads.failed.size + extraFailures
@@ -1539,8 +1680,11 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     )
                 }
             }
-        } else if (announce) {
-            withContext(Dispatchers.Main) { toast("Could not sync account. Library stays on this phone.") }
+        } else {
+            SyncDiag.fail("Account snapshot written", "Drive rejected the write; the account copy is unchanged")
+            if (announce) withContext(Dispatchers.Main) {
+                toast("Could not sync account. Library stays on this phone.")
+            }
         }
     }
 
@@ -1807,7 +1951,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     o.optInt("pageCount", 1), o.optInt("currentPage", 0), o.optBoolean("finished"), o.optLong("addedAt", System.currentTimeMillis()),
                     o.optLong("lastReadAt"), o.optString("category", "Library"), o.optString("synopsis"), emptyList(),
                     o.optString("driveFileId").ifBlank { null }, o.optBoolean("pendingUpload", false),
-                    o.optLong("backupAt", 0L), o.optBoolean("backupFailed", false)
+                    o.optBoolean("dnf", false), o.optLong("backupAt", 0L), o.optBoolean("backupFailed", false)
                 )
             }
         }
@@ -1847,7 +1991,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     .put("pageCount", b.pageCount).put("currentPage", b.currentPage).put("finished", b.finished).put("addedAt", b.addedAt)
                     .put("lastReadAt", b.lastReadAt).put("category", b.category).put("synopsis", b.synopsis)
                     .put("driveFileId", b.driveFileId ?: "").put("pendingUpload", b.pendingUpload)
-                    .put("backupAt", b.backupAt).put("backupFailed", b.backupFailed)
+                    .put("backupAt", b.backupAt).put("backupFailed", b.backupFailed).put("dnf", b.dnf)
             )
         }
         atomicWrite(booksFile, arr.toString())

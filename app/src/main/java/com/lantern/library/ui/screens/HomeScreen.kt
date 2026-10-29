@@ -21,8 +21,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
@@ -39,6 +37,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.lantern.library.data.BookBackupState
 import com.lantern.library.data.CloudAccount
 import com.lantern.library.data.DiscoveryBook
 import com.lantern.library.data.LibraryBook
@@ -55,13 +54,12 @@ import com.lantern.library.ui.theme.nookPalette
 /**
  * The Reading Nook: the app's home.
  *
- * Four things, in the order a reader wants them: what they are reading, what they might want to
- * read next, a handful of daily picks, and the club. The shelf is a grid of the reader's own
- * covers with their progress under each — the covers *are* the labels, which is why the tiles are
- * large and the type underneath is small.
+ * Home answers one question: which of my books are safely in my account, and which are only on
+ * this phone? Two piles, side by side with the covers as the labels, and the editor's picks pinned
+ * above both. Managing the shelf — categories, search, removing a book — lives on the Library tab,
+ * where the reader expects a shelf to be.
  *
- * The physical bookcase (the Filament drum) is one tap away on the Library tab; this screen is the
- * room the nook is in.
+ * The community card that used to sit at the bottom is gone. It was copy, not a feature.
  */
 @Composable
 fun ReadingNookScreen(
@@ -74,92 +72,193 @@ fun ReadingNookScreen(
     onOpenBook: (LibraryBook) -> Unit,
     onOpenPick: (DiscoveryBook) -> Unit,
     onSearch: () -> Unit,
-    onShelf: () -> Unit,
-    onStudio: () -> Unit,
+    onLibrary: () -> Unit,
     onRefreshPicks: () -> Unit,
-    onNotifications: () -> Unit,
-    onSeeAll: () -> Unit
+    onNotifications: () -> Unit
 ) {
     val palette = nookPalette(theme)
+    // Two honest piles: what is provably in the reader's account, and what exists only on this
+    // phone. A book is only ever in the first pile once an upload has been verified — a Drive id
+    // on its own is a promise, not a backup.
+    // Recomputed each recomposition, not remembered: `books` is a snapshot list with a stable
+    // identity, so remembering on it would keep showing the shelf as it was before the last sync.
+    val synced = books.filter { it.backupState == BookBackupState.BACKED_UP }
+    val localOnly = books.filter { it.backupState != BookBackupState.BACKED_UP }
+
     NookBackdrop(palette) {
-        LazyColumn(
-            Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 120.dp)
-        ) {
-            item { NookHeader(palette, account, onNotifications, onStudio) }
-            item { SearchPill(palette, onSearch, onShelf) }
+        Column(Modifier.fillMaxSize()) {
+            NookHeader(palette, account, onNotifications)
+            // The editor's picks sit above the shelf and stay there: they are the one part of the
+            // page that is about books the reader does not own yet, and it should not disappear
+            // the moment they start scrolling their own.
+            PicksBar(palette, picks, picksBusy, picksFailed, onOpenPick, onRefreshPicks)
 
-            item {
-                Spacer(Modifier.height(26.dp))
-                NookSectionTitle("My Shelf", palette) {
-                    Icon(
-                        Icons.Filled.MoreHoriz,
-                        "All books",
-                        tint = palette.mute,
-                        modifier = Modifier.size(20.dp).clip(CircleShape).clickable(onClick = onSeeAll)
-                    )
-                }
-                Spacer(Modifier.height(12.dp))
-            }
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 120.dp)
+            ) {
+                item { SearchPill(palette, onSearch, onLibrary) }
 
-            if (books.isEmpty()) {
-                item { EmptyShelf(palette, onSeeAll) }
-            } else {
-                // Three across, in rows: a LazyColumn of Rows keeps the whole page one scroll
-                // surface, so the shelf, the picks and the club move together.
-                val rows = books.chunked(3)
-                items(rows.size) { index ->
-                    val row = rows[index]
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        row.forEach { book ->
-                            ShelfTile(book, palette, Modifier.weight(1f)) { onOpenBook(book) }
-                        }
-                        repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                item {
+                    Spacer(Modifier.height(22.dp))
+                    NookSectionTitle("In your account", palette) {
+                        Text(
+                            "${synced.size}",
+                            color = palette.mute,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
                     }
-                }
-            }
-
-            item {
-                Spacer(Modifier.height(26.dp))
-                NookSectionTitle("Editor's Choice", palette) {
                     Text(
-                        if (picksFailed) "Retry" else "Refresh",
-                        color = palette.accent,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(14.dp))
-                            .clickable(enabled = !picksBusy, onClick = onRefreshPicks)
-                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                        "Books whose file has been confirmed in your cloud account.",
+                        color = palette.faint,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
                     )
+                    Spacer(Modifier.height(8.dp))
                 }
-                Spacer(Modifier.height(8.dp))
-            }
 
-            item {
-                when {
-                    picksBusy && picks.isEmpty() -> PicksPlaceholder(palette)
-                    picks.isEmpty() -> EmptyPicks(palette, picksFailed, onRefreshPicks)
-                    else -> LazyRow(
-                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(14.dp)
-                    ) {
-                        items(picks, key = { it.volumeId }) { pick ->
-                            PickCard(pick, palette) { onOpenPick(pick) }
-                        }
+                if (synced.isEmpty()) {
+                    item { AccountEmpty(palette, account) }
+                } else {
+                    items(synced.chunked(3).size) { index ->
+                        BookRow(synced.chunked(3)[index], palette, onOpenBook)
+                    }
+                }
+
+                item {
+                    Spacer(Modifier.height(26.dp))
+                    NookSectionTitle("Only on this phone", palette) {
+                        Text(
+                            "${localOnly.size}",
+                            color = palette.mute,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                    Text(
+                        if (account.signedIn)
+                            "Not backed up yet. They stay here, and stay safe, until an upload is confirmed."
+                        else "Sign in and they will be backed up. Nothing is deleted from this phone either way.",
+                        color = palette.faint,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+
+                if (localOnly.isEmpty()) {
+                    item {
+                        Text(
+                            if (books.isEmpty()) "Your shelf is empty." else "Everything is in your account.",
+                            color = palette.mute,
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)
+                        )
+                    }
+                } else {
+                    items(localOnly.chunked(3).size) { index ->
+                        BookRow(localOnly.chunked(3)[index], palette, onOpenBook)
+                    }
+                }
+
+                if (books.isEmpty()) {
+                    item {
+                        Spacer(Modifier.height(10.dp))
+                        EmptyShelf(palette, onLibrary)
                     }
                 }
             }
+        }
+    }
+}
 
-            item {
-                Spacer(Modifier.height(26.dp))
-                NookSectionTitle("Community Insights", palette)
-                Spacer(Modifier.height(12.dp))
-                CommunityCard(palette)
+/** One row of three covers, with the progress each book has reached under it. */
+@Composable
+private fun BookRow(
+    row: List<LibraryBook>,
+    palette: NookPalette,
+    onOpenBook: (LibraryBook) -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        row.forEach { book ->
+            ShelfTile(book, palette, Modifier.weight(1f)) { onOpenBook(book) }
+        }
+        repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+    }
+}
+
+/**
+ * Editor's Choice, pinned above the shelf.
+ *
+ * A fixed strip rather than a section inside the scroll: the reader asked for recommendations that
+ * keep their place, and this is the simplest honest way to give them that without a sticky header
+ * fighting the list for the top of the screen.
+ */
+@Composable
+private fun PicksBar(
+    palette: NookPalette,
+    picks: List<DiscoveryBook>,
+    picksBusy: Boolean,
+    picksFailed: Boolean,
+    onOpenPick: (DiscoveryBook) -> Unit,
+    onRefreshPicks: () -> Unit
+) {
+    Column(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 6.dp)) {
+        NookSectionTitle("Editor's Choice", palette) {
+            Text(
+                if (picksFailed) "Retry" else "Refresh",
+                color = palette.accent,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(14.dp))
+                    .clickable(enabled = !picksBusy, onClick = onRefreshPicks)
+                    .padding(horizontal = 10.dp, vertical = 4.dp)
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        when {
+            picksBusy && picks.isEmpty() -> PicksPlaceholder(palette)
+            picks.isEmpty() -> EmptyPicks(palette, picksFailed, onRefreshPicks)
+            else -> LazyRow(
+                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                items(picks, key = { it.volumeId }) { pick -> PickCard(pick, palette) { onOpenPick(pick) } }
             }
+        }
+    }
+}
+
+/** Said plainly when nothing has been confirmed in the account yet. */
+@Composable
+private fun AccountEmpty(palette: NookPalette, account: CloudAccount) {
+    GlassSurface(palette, Modifier.fillMaxWidth().padding(horizontal = 20.dp), shape = RoundedCornerShape(20.dp)) {
+        Column(Modifier.padding(18.dp)) {
+            Text(
+                when {
+                    !account.signedIn -> "Not signed in"
+                    !account.driveConnected -> "Drive access not granted"
+                    else -> "Nothing backed up yet"
+                },
+                color = palette.ink,
+                fontFamily = Playfair,
+                fontSize = 16.sp
+            )
+            Text(
+                when {
+                    !account.signedIn -> "Sign in from You and your books will be copied to your account."
+                    !account.driveConnected -> "Sign in again and allow Drive access; without it the app cannot upload anything."
+                    else -> "Books are copied up one at a time. Anything that fails stays queued and is retried."
+                },
+                color = palette.mute,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(top = 6.dp)
+            )
         }
     }
 }
@@ -176,8 +275,7 @@ fun ReadingNookScreen(
 private fun NookHeader(
     palette: NookPalette,
     account: CloudAccount,
-    onNotifications: () -> Unit,
-    onStudio: () -> Unit
+    onNotifications: () -> Unit
 ) {
     Column(Modifier.fillMaxWidth().padding(top = 26.dp, bottom = 16.dp)) {
         Row(
@@ -185,7 +283,7 @@ private fun NookHeader(
             verticalAlignment = Alignment.Top
         ) {
             // Left slot balances the two buttons on the right so the title stays centred.
-            Spacer(Modifier.width(40.dp))
+            Spacer(Modifier.width(38.dp))
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
                     "THE",
@@ -210,14 +308,8 @@ private fun NookHeader(
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                GlassSurface(palette, Modifier.size(38.dp), shape = CircleShape, onClick = onStudio) {
-                    Icon(
-                        Icons.Filled.AutoAwesome,
-                        "Studio",
-                        tint = palette.ink,
-                        modifier = Modifier.align(Alignment.Center).size(18.dp)
-                    )
-                }
+                // Studio used to sit here. Explore now finds and fetches a book in one step, so a
+                // separate import workshop was a second way to do the same thing.
                 GlassSurface(palette, Modifier.size(38.dp), shape = CircleShape, onClick = onNotifications) {
                     Icon(
                         Icons.Filled.Notifications,
@@ -453,50 +545,3 @@ private fun EmptyShelf(palette: NookPalette, onImport: () -> Unit) {
     }
 }
 
-@Composable
-private fun CommunityCard(palette: NookPalette) {
-    GlassSurface(palette, Modifier.fillMaxWidth().padding(horizontal = 20.dp), shape = RoundedCornerShape(22.dp)) {
-        Row(
-            Modifier.fillMaxWidth().padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(horizontalArrangement = Arrangement.spacedBy((-10).dp)) {
-                listOf(0.0f, 1.0f, 2.0f).forEachIndexed { i, _ ->
-                    Box(
-                        Modifier
-                            .size(30.dp)
-                            .clip(CircleShape)
-                            .background(
-                                Brush.linearGradient(
-                                    listOf(
-                                        palette.aurora[i % palette.aurora.size],
-                                        palette.aurora[(i + 1) % palette.aurora.size]
-                                    )
-                                )
-                            )
-                            .padding(2.dp)
-                    ) {
-                        Box(Modifier.fillMaxSize().clip(CircleShape).background(palette.backdrop[0].copy(alpha = 0.55f)))
-                        Text(
-                            listOf("A", "M", "J")[i],
-                            color = palette.ink,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.align(Alignment.Center)
-                        )
-                    }
-                }
-            }
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Text("Book Club Discussions", color = palette.ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                Text(
-                    "Rewarding reading together — chapters, notes and chats",
-                    color = palette.mute,
-                    fontSize = 11.sp,
-                    maxLines = 2
-                )
-            }
-        }
-    }
-}

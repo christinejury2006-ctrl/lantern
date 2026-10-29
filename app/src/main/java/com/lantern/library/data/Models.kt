@@ -16,6 +16,20 @@ import com.lantern.library.ui.theme.SourceSerif
 
 enum class Shelf { ALL, CURRENT, TO_READ, FINISHED }
 
+/**
+ * The library's sections.
+ *
+ * The reader thinks in these, not in "current page 43 of 210": a book is something they want to
+ * read, are reading, finished, or put down. [ALL] is the shelf itself.
+ */
+enum class LibraryCategory(val label: String) {
+    ALL("All"),
+    READING("Reading"),
+    WANT_TO_READ("Want to read"),
+    COMPLETED("Completed"),
+    DNF("Did not finish")
+}
+
 enum class BookFormat { TEXT, EPUB, PDF }
 
 enum class BookOrigin { BUNDLED, DOWNLOAD, IMPORT }
@@ -88,6 +102,11 @@ data class LibraryBook(
     val driveFileId: String? = null,
     val pendingUpload: Boolean = false,
     /**
+     * The reader has decided not to continue. A book keeps this until they say otherwise or
+     * remove it; it is a decision, not a reading position, so progress never clears it.
+     */
+    val dnf: Boolean = false,
+    /**
      * When the remote copy of this book's *contents* was last confirmed, in epoch millis.
      *
      * Zero means "no confirmed backup", and it stays zero until an upload has been verified against
@@ -125,10 +144,28 @@ data class LibraryBook(
             else -> BookBackupState.PENDING
         }
 
-    val shelf: Shelf
+    /**
+     * Which section of the library this book belongs to.
+     *
+     * Named `section` rather than `category` because [LibraryBook.category] already means the
+     * book's genre as supplied by its source, and the two would collide.
+     *
+     * Completed is decided by [finished], which is *latched*: once a reader reaches the end, going
+     * back to page three to re-read does not make the book un-completed. Only removing the book, or
+     * that being the point of the shelf, takes it out again.
+     */
+    val section: LibraryCategory
         get() = when {
-            finished || progress >= 0.98f -> Shelf.FINISHED
-            lastReadAt > 0 || currentPage > 0 -> Shelf.CURRENT
+            dnf -> LibraryCategory.DNF
+            finished || progress >= 0.999f -> LibraryCategory.COMPLETED
+            lastReadAt > 0L || currentPage > 0 -> LibraryCategory.READING
+            else -> LibraryCategory.WANT_TO_READ
+        }
+
+    val shelf: Shelf
+        get() = when (section) {
+            LibraryCategory.COMPLETED -> Shelf.FINISHED
+            LibraryCategory.READING -> Shelf.CURRENT
             else -> Shelf.TO_READ
         }
 }

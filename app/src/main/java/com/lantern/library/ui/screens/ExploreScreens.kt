@@ -43,131 +43,251 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.lantern.library.data.CatalogBook
-import com.lantern.library.data.Gutendex
-import com.lantern.library.data.GoogleBooks
 import com.lantern.library.data.DiscoveryBook
+import com.lantern.library.data.FreeEdition
+import com.lantern.library.data.GoogleBooks
+import com.lantern.library.data.OpenCatalogs
 import com.lantern.library.data.ReaderTheme
-import com.lantern.library.ui.components.NookBackdrop
-import com.lantern.library.ui.theme.nookPalette
 import com.lantern.library.ui.components.CoverFace
 import com.lantern.library.ui.components.GlassCard
-import com.lantern.library.ui.theme.nookPalette
-import com.lantern.library.ui.theme.Ink
-import com.lantern.library.ui.theme.InkSoft
+import com.lantern.library.ui.components.NookBackdrop
 import com.lantern.library.ui.theme.Playfair
-import org.json.JSONArray
-import kotlinx.coroutines.delay
+import com.lantern.library.ui.theme.nookPalette
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
+/**
+ * Explore: search the internet for a book, and take the book if it can legally be taken.
+ *
+ * Two things happen on every search, and they answer different questions:
+ *
+ * 1. **Open catalogues** ([OpenCatalogs]) are asked whether a free file exists. Project Gutenberg
+ *    and the Internet Archive both publish downloadable public-domain editions, and a hit here
+ *    turns straight into a book on the shelf: the file is downloaded, validated, given a cover and
+ *    a page count, and the reader can open it without ever seeing an import dialog.
+ * 2. **Google Books** is asked what the book *is* — description, cover, store links — for titles
+ *    that are not free. Those results open the details sheet, where the reader can save the book
+ *    to Want to read or follow the store's page.
+ *
+ * Z-Library and the various "ocean of PDF" mirrors are deliberately absent. They host
+ * in-copyright books without permission; scraping them is not something this app does, and there
+ * is no hidden setting that turns it on. The label under each downloadable card says where the
+ * file came from and what its rights are, because the reader deserves to know.
+ */
 @Composable
-fun ExploreScreen(theme: ReaderTheme, onOpen: (CatalogBook) -> Unit) {
-    CatalogBrowser("Explore", "Public-domain books you can download", theme, "Fantasy", onOpen)
-}
-
-@Composable
-fun SearchScreen(theme: ReaderTheme, onOpen: (DiscoveryBook) -> Unit) {
-    DiscoveryBrowser(theme, onOpen)
-}
-
-@Composable
-private fun DiscoveryBrowser(theme: ReaderTheme, onOpen: (DiscoveryBook) -> Unit) {
+fun SearchScreen(
+    theme: ReaderTheme,
+    fetchingId: String? = null,
+    onOpen: (DiscoveryBook) -> Unit,
+    onDownload: (FreeEdition) -> Unit
+) {
     val dark = theme == ReaderTheme.DARK
     val palette = nookPalette(dark)
     val ink = palette.ink
     val mute = palette.mute
     var query by remember { mutableStateOf("") }
+    var editions by remember { mutableStateOf<List<FreeEdition>>(emptyList()) }
     var results by remember { mutableStateOf<List<DiscoveryBook>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf(false) }
-    val context = androidx.compose.ui.platform.LocalContext.current
+    var searched by remember { mutableStateOf(false) }
+    val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("lore_search", android.content.Context.MODE_PRIVATE) }
-    var history by remember { mutableStateOf(prefs.getString("history", "")!!.split("\n").filter { it.isNotBlank() }.take(8)) }
-    val trending = remember { listOf("Married to the Devil's Son", "billionaire", "werewolf", "Rich Dad Poor Dad", "romance", "mafia romance", "dark romance", "fantasy", "romantasy", "CEO romance") }
+    var history by remember {
+        mutableStateOf(prefs.getString("history", "").orEmpty().split("\n").filter { it.isNotBlank() }.take(8))
+    }
+    // Suggestions, not a substitute for searching: these are the terms the shelves over-ask for.
+    val trending = remember {
+        listOf("Pride and Prejudice", "Dracula", "Sherlock Holmes", "Alice in Wonderland",
+            "Frankenstein", "romance", "werewolf", "fantasy")
+    }
+
     LaunchedEffect(query) {
         val q = query.trim()
-        if (q.isBlank()) { results = emptyList(); loading = false; error = false; return@LaunchedEffect }
-        kotlinx.coroutines.delay(350)
+        if (q.length < 2) {
+            editions = emptyList()
+            results = emptyList()
+            loading = false
+            searched = false
+            return@LaunchedEffect
+        }
+        delay(350)
         loading = true
-        error = false
-        val google = runCatching { GoogleBooks.volumes(q, "relevance", 24) }.getOrDefault(emptyList())
-        results = if (google.isNotEmpty()) google else runCatching {
-            Gutendex.search(q, null).map { b ->
-                DiscoveryBook(volumeId = "gutendex:${b.remoteId}", title = b.title,
-                    authors = listOf(b.author), categories = listOf(b.subjects),
-                    coverUrl = b.cover, coverUrls = listOfNotNull(b.cover),
-                    infoLink = "https://www.gutenberg.org/ebooks/${b.remoteId}",
-                    publicDomain = true)
-            }
-        }.getOrDefault(emptyList())
-        error = results.isEmpty()
+        // Both lookups run off the main thread; the free-file lookup is the slower of the two
+        // because the Archive may need a second request per item to resolve a filename.
+        val free = withContext(Dispatchers.IO) { runCatching { OpenCatalogs.find(q) }.getOrDefault(emptyList()) }
+        editions = free
+        val google = withContext(Dispatchers.IO) {
+            runCatching { GoogleBooks.volumes(q, "relevance", 24) }.getOrDefault(emptyList())
+        }
+        results = google
         loading = false
-        if (results.isNotEmpty()) {
+        searched = true
+        if (free.isNotEmpty() || google.isNotEmpty()) {
             history = (listOf(q) + history.filterNot { it.equals(q, true) }).take(8)
             prefs.edit().putString("history", history.joinToString("\n")).apply()
         }
     }
+
     NookBackdrop(nookPalette(theme)) {
-        LazyVerticalGrid(columns = GridCells.Fixed(2), modifier = Modifier.fillMaxSize(),
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(2),
+            modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(18.dp, 18.dp, 18.dp, 96.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
             item(span = { GridItemSpan(2) }) {
                 Column {
                     Text("Explore", color = ink, fontFamily = Playfair, fontSize = 30.sp)
-                    Text("Search books across genres, authors and trending stories", color = mute, fontSize = 13.sp)
+                    Text(
+                        "Find a book. Free editions download straight to your shelf.",
+                        color = mute,
+                        fontSize = 13.sp
+                    )
                     Spacer(Modifier.height(12.dp))
                     GlassCard(Modifier.fillMaxWidth(), dark, 18) {
-                        Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Icon(Icons.Filled.Search, null, tint = mute, modifier = Modifier.size(20.dp))
-                            BasicTextField(value = query, onValueChange = { query = it }, singleLine = true,
-                                textStyle = TextStyle(color = ink, fontSize = 15.sp), cursorBrush = SolidColor(ink),
-                                modifier = Modifier.weight(1f).padding(start = 8.dp), decorationBox = { inner ->
-                                    if (query.isEmpty()) Text("Search books, authors, tropes…", color = mute, fontSize = 15.sp)
+                            BasicTextField(
+                                value = query,
+                                onValueChange = { query = it },
+                                singleLine = true,
+                                textStyle = TextStyle(color = ink, fontSize = 15.sp),
+                                cursorBrush = SolidColor(palette.accent),
+                                modifier = Modifier.weight(1f).padding(start = 8.dp),
+                                decorationBox = { inner ->
+                                    if (query.isEmpty()) {
+                                        Text("Title or author…", color = mute, fontSize = 15.sp)
+                                    }
                                     inner()
-                                })
+                                }
+                            )
                         }
                     }
-                    if (query.isBlank()) {
+
+                    if (query.trim().length < 2) {
                         Spacer(Modifier.height(16.dp))
-                        Text("TRENDING SEARCHES", color = mute, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("TRY", color = mute, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(8.dp))
-                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
                             trending.forEach { term ->
-                                Box(Modifier.clip(RoundedCornerShape(18.dp)).background(if (dark) Color(0xFF35404F) else Color(0xCCFFFFFF))
-                                    .clickable { query = term }.padding(horizontal = 13.dp, vertical = 10.dp)) {
+                                Box(
+                                    Modifier
+                                        .clip(RoundedCornerShape(18.dp))
+                                        .background(if (dark) Color(0xFF35404F) else Color(0xCCFFFFFF))
+                                        .clickable { query = term }
+                                        .padding(horizontal = 13.dp, vertical = 10.dp)
+                                ) {
                                     Text(term, color = ink, fontSize = 12.sp, maxLines = 1, softWrap = false)
                                 }
                             }
                         }
                         if (history.isNotEmpty()) {
                             Spacer(Modifier.height(16.dp))
-                            Text("RECENT SEARCHES", color = mute, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text("RECENT", color = mute, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             Spacer(Modifier.height(8.dp))
-                            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
                                 history.forEach { term ->
-                                    Box(Modifier.clip(RoundedCornerShape(18.dp)).background(if (dark) Color(0xFF35404F) else Color(0xCCFFFFFF))
-                                        .clickable { query = term }.padding(horizontal = 13.dp, vertical = 9.dp)) {
+                                    Box(
+                                        Modifier
+                                            .clip(RoundedCornerShape(18.dp))
+                                            .background(if (dark) Color(0xFF35404F) else Color(0xCCFFFFFF))
+                                            .clickable { query = term }
+                                            .padding(horizontal = 13.dp, vertical = 9.dp)
+                                    ) {
                                         Text(term, color = ink, fontSize = 12.sp, maxLines = 1, softWrap = false)
                                     }
                                 }
                             }
                         }
+                        Spacer(Modifier.height(18.dp))
+                        Text(
+                            "Free files come from Project Gutenberg and the Internet Archive. " +
+                                "Everything else links to the shop that sells it.",
+                            color = mute,
+                            fontSize = 11.sp
+                        )
                     }
-                    if (loading) Text("Searching books…", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
-                    if (error) Text("No results found. Try another title, author, or genre.", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
-                    if (query.isNotBlank() && !GoogleBooks.isConfigured()) Text("Google Books discovery needs an API key in the build configuration. Public-domain matches are still searched.", color = mute, fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp))
+
+                    if (loading) {
+                        Text("Searching libraries…", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
+                    }
+                    if (searched && editions.isEmpty() && results.isEmpty() && !loading) {
+                        Text(
+                            "Nothing found. Try fewer words, or the author's surname.",
+                            color = mute,
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(top = 12.dp)
+                        )
+                    }
+                    if (searched && editions.isEmpty() && !loading) {
+                        Text(
+                            if (GoogleBooks.isConfigured())
+                                "No free edition of this one — it is still in copyright, or nobody has scanned it yet."
+                            else "No free edition found. Book details need a Google Books key in this build.",
+                            color = mute,
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                    }
+                    if (editions.isNotEmpty()) {
+                        Spacer(Modifier.height(16.dp))
+                        Text("DOWNLOAD FREE", color = mute, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
-            items(results, key = { it.volumeId }) { book ->
-                GlassCard(Modifier.fillMaxWidth(), dark, 16) {
-                    Column(Modifier.clickable { onOpen(book) }.padding(10.dp)) {
-                        CoverFace(book.title, null, book.coverUrl, Modifier.fillMaxWidth().aspectRatio(0.68f), dark)
-                        Spacer(Modifier.height(8.dp))
-                        Text(book.title, color = ink, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        Text(book.authorLine, color = mute, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(if (book.publicDomain) "Public-domain edition" else "Preview / book details",
-                            color = if (book.publicDomain) palette.accent else mute, fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
+
+            items(editions, key = { it.id }) { edition ->
+                EditionCard(
+                    edition = edition,
+                    dark = dark,
+                    busy = fetchingId == edition.id,
+                    enabled = fetchingId == null,
+                    onDownload = { onDownload(edition) }
+                )
+            }
+
+            if (results.isNotEmpty()) {
+                item(span = { GridItemSpan(2) }) {
+                    Column(Modifier.padding(top = 10.dp)) {
+                        Text("MORE BOOKS", color = mute, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            "Details, covers and shop links. Tap one to save it or find a copy.",
+                            color = mute,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+                items(results, key = { it.volumeId }) { book ->
+                    GlassCard(Modifier.fillMaxWidth(), dark, 16) {
+                        Column(Modifier.clickable { onOpen(book) }.padding(10.dp)) {
+                            CoverFace(
+                                book.title, null, book.coverUrl,
+                                Modifier.fillMaxWidth().aspectRatio(0.68f), dark, book.coverUrls
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                book.title, color = ink, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                                maxLines = 2, overflow = TextOverflow.Ellipsis
+                            )
+                            Text(book.authorLine, color = mute, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                if (book.publicDomain) "Public-domain edition" else "Book details",
+                                color = if (book.publicDomain) palette.accent else mute,
+                                fontSize = 10.sp,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -175,107 +295,55 @@ private fun DiscoveryBrowser(theme: ReaderTheme, onOpen: (DiscoveryBook) -> Unit
     }
 }
 
+/** One downloadable edition: where it comes from, what it is, and a button that fetches it. */
 @Composable
-private fun CatalogBrowser(title: String, subtitle: String, theme: ReaderTheme, initialTopic: String?, onOpen: (CatalogBook) -> Unit) {
-    val dark = theme == ReaderTheme.DARK
+private fun EditionCard(
+    edition: FreeEdition,
+    dark: Boolean,
+    busy: Boolean,
+    enabled: Boolean,
+    onDownload: () -> Unit
+) {
     val palette = nookPalette(dark)
-    val ink = palette.ink
-    val mute = palette.mute
-    val context = LocalContext.current
-    val searchPrefs = remember { context.getSharedPreferences("lore_search", android.content.Context.MODE_PRIVATE) }
-    val trending = remember {
-        runCatching {
-            context.assets.open("hot_search.json").bufferedReader().use { reader ->
-                val arr = JSONArray(reader.readText())
-                (0 until arr.length()).map { arr.optString(it).trim() }.filter { it.isNotBlank() }
-            }
-        }.getOrDefault(listOf("billionaire", "werewolf", "romance", "fantasy", "Rich Dad Poor Dad", "Married to the Devil's Son"))
-    }
-    var history by remember {
-        mutableStateOf(searchPrefs.getString("history", "").orEmpty().split("\n").filter { it.isNotBlank() }.take(8))
-    }
-    var query by remember { mutableStateOf("") }
-    var topic by remember { mutableStateOf(initialTopic) }
-    var results by remember { mutableStateOf<List<CatalogBook>>(emptyList()) }
-    var loading by remember { mutableStateOf(false) }
-    LaunchedEffect(query, topic) {
-        delay(300)
-        loading = true
-        results = withContext(Dispatchers.IO) { runCatching { Gutendex.search(query, topic) }.getOrDefault(emptyList()) }
-        loading = false
-        val clean = query.trim()
-        if (clean.length >= 2 && results.isNotEmpty()) {
-            history = (listOf(clean) + history.filterNot { it.equals(clean, ignoreCase = true) }).take(8)
-            searchPrefs.edit().putString("history", history.joinToString("\n")).apply()
-        }
-    }
-    NookBackdrop(nookPalette(dark)) {
-        LazyVerticalGrid(columns = GridCells.Fixed(2), modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp, 18.dp, 18.dp, 96.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            item(span = { GridItemSpan(2) }) {
-                Column {
-                    Text(title, color = ink, fontFamily = Playfair, fontSize = 30.sp)
-                    Text(subtitle, color = mute, fontSize = 13.sp)
-                    Spacer(Modifier.height(12.dp))
-                    GlassCard(Modifier.fillMaxWidth(), dark, 18) {
-                        Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Filled.Search, null, tint = mute, modifier = Modifier.size(20.dp))
-                            BasicTextField(value = query, onValueChange = { query = it }, singleLine = true, textStyle = TextStyle(color = ink, fontSize = 15.sp), cursorBrush = SolidColor(ink), modifier = Modifier.weight(1f).padding(start = 8.dp), decorationBox = { inner ->
-                                if (query.isEmpty()) Text("Search titles…", color = mute, fontSize = 15.sp)
-                                inner()
-                            })
-                        }
-                    }
-                    Spacer(Modifier.height(14.dp))
-                    Text("TRENDING SEARCHES", color = mute, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(7.dp))
-                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        trending.forEach { term ->
-                            Box(Modifier.clip(RoundedCornerShape(18.dp)).background(Color(0xCCFFFFFF)).clickable {
-                                query = term
-                                topic = null
-                            }.padding(horizontal = 13.dp, vertical = 9.dp), contentAlignment = Alignment.Center) {
-                                Text(term, color = ink, fontSize = 12.sp, maxLines = 1, softWrap = false)
-                            }
-                        }
-                    }
-                    if (history.isNotEmpty()) {
-                        Spacer(Modifier.height(12.dp))
-                        Text("HISTORY", color = mute, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                        Spacer(Modifier.height(7.dp))
-                        history.forEach { term ->
-                            Row(
-                                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable {
-                                    query = term
-                                    topic = null
-                                }.padding(vertical = 9.dp, horizontal = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Filled.Search, null, tint = mute, modifier = Modifier.size(16.dp))
-                                Text(term, color = ink, fontSize = 13.sp, modifier = Modifier.padding(start = 10.dp))
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(14.dp))
-                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Gutendex.topics.forEach { t ->
-                            val on = topic == t && query.isEmpty()
-                            Box(Modifier.height(36.dp).clip(RoundedCornerShape(18.dp)).background(if (on) palette.accent else palette.glass).clickable { topic = t; query = "" }.padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
-                                Text(t, color = if (on) Color.White else ink, fontSize = 13.sp, maxLines = 1, softWrap = false)
-                            }
-                        }
-                    }
-                    if (loading) Text("Looking up free books…", color = mute, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
-                }
-            }
-            items(results, key = { it.remoteId }) { book ->
-                GlassCard(Modifier.fillMaxWidth(), dark, 16) {
-                    Column(Modifier.clickable { onOpen(book) }.padding(10.dp)) {
-                        CoverFace(book.title, null, book.cover, Modifier.fillMaxWidth().aspectRatio(0.68f), dark)
-                        Spacer(Modifier.height(8.dp))
-                        Text(book.title, color = ink, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        Text(book.author, color = mute, fontSize = 11.sp, maxLines = 1)
-                    }
-                }
+    GlassCard(Modifier.fillMaxWidth(), dark, 16) {
+        Column(Modifier.padding(10.dp)) {
+            CoverFace(
+                edition.title, null, edition.coverUrl,
+                Modifier.fillMaxWidth().aspectRatio(0.68f), dark
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                edition.title, color = palette.ink, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                maxLines = 2, overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                edition.author.ifBlank { "Unknown" }, color = palette.mute, fontSize = 11.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                "${edition.format.name} · ${edition.source}", color = palette.mute, fontSize = 10.sp,
+                modifier = Modifier.padding(top = 3.dp)
+            )
+            Text(edition.rights, color = palette.faint, fontSize = 10.sp, maxLines = 1)
+            Spacer(Modifier.height(8.dp))
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(
+                        if (enabled) palette.accent
+                        else palette.accent.copy(alpha = 0.45f)
+                    )
+                    .clickable(enabled = enabled, onClick = onDownload)
+                    .padding(vertical = 9.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    if (busy) "Downloading…" else "Download",
+                    color = palette.accentInk,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
             }
         }
     }

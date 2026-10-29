@@ -1382,6 +1382,14 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 val result = UploadPool.shared.run(token, remaining, uploadListener)
                 confirmed.putAll(result.confirmed)
                 failed += result.failed
+                // A book another transfer already owns is neither done nor broken. Say so, so it
+                // stays in the queue instead of looking finished because nothing was reported.
+                result.skipped.forEach { book ->
+                    failed += book to DriveLibrary.TransferFailure(
+                        book.id, book.title, "upload",
+                        "another transfer for this book is already running", retryable = true
+                    )
+                }
                 if (!result.unauthorized) break
                 // A refused token is worth exactly one more attempt with a fresh one.
                 GoogleAuth.clearToken(ctx, token)
@@ -1401,7 +1409,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         } finally {
             withContext(Dispatchers.Main) { uploadingIds = uploadingIds - todo.map { it.id }.toSet() }
         }
-        return BatchResult(confirmed, failed)
+        // One entry per book, and the most recent reason wins: the second round's answer is the
+        // one the reader needs. Two failures for one book would also make the counts lie.
+        val deduped = failed.reversed().distinctBy { it.first.id }.reversed()
+        return BatchResult(confirmed, deduped)
     }
 
     /** A Drive token, or null if this device cannot get one right now. */

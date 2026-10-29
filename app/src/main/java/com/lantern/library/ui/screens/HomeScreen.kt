@@ -332,13 +332,7 @@ private fun ShelfTile(
         }
         Spacer(Modifier.height(7.dp))
         NookProgress(book.progress, palette)
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "${(book.progress * 100).toInt()}%",
-            color = palette.mute,
-            fontSize = 10.sp,
-            textAlign = TextAlign.Start
-        )
+
     }
 }
 

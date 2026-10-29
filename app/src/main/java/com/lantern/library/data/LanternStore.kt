@@ -381,7 +381,17 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         // `finished` latches. Reaching the end marks the book complete; scrolling back to re-read
         // does not un-complete it, which is what the reader asked for: a finished book stays in
         // Completed until they remove it or take it off the shelf.
-        val reachedEnd = pages > 0 && page >= pages - 1
+        //
+        // Two conditions guard the latch. A one-page report is not a finished book — it is a book
+        // whose pages have not been measured yet, and the reader saw exactly that as unread EPUBs
+        // sitting in Completed. And a report that does not know its page count must not overwrite
+        // one that did, or leaving and reopening a book would reset its progress.
+        if (pages <= 1) {
+            if (b.pageCount <= 1) return
+            upsert(b.copy(currentPage = page.coerceAtLeast(0), lastReadAt = System.currentTimeMillis()))
+            return
+        }
+        val reachedEnd = page >= pages - 1
         upsert(
             b.copy(
                 currentPage = page.coerceAtLeast(0),
@@ -1381,7 +1391,20 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
 
     private var firebaseSyncGen = 0
 
+    /**
+     * Set once Firestore says the rules are not published.
+     *
+     * Fuel for nothing: the document is rejected every single time until the project's rules are
+     * deployed, and retrying it on every sync only fills the diagnosis with the same line. Drive
+     * holds the library in the meantime, so the mirror is simply skipped until the next launch.
+     */
+    private var firebaseBlocked = false
+
     private suspend fun syncFirebaseAccount(account: GoogleSignInAccount?, announce: Boolean) {
+        if (firebaseBlocked) {
+            SyncDiag.mark("Firebase", "skipped: the project's Firestore rules are not published")
+            return
+        }
         try {
             if (account != null) FirestoreAccountRepository.signIn(account)
             if (!FirestoreAccountRepository.isSignedIn()) {
@@ -1396,9 +1419,21 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             SyncDiag.mark("Firebase", "snapshot written")
             if (announce) withContext(Dispatchers.Main) { toast("Firebase library sync complete") }
         } catch (e: Exception) {
-            SyncDiag.fail("Firebase", e.message?.take(160) ?: e.javaClass.simpleName)
+            val message = e.message.orEmpty()
+            if (message.contains("PERMISSION_DENIED", true) || message.contains("insufficient permissions", true)) {
+                firebaseBlocked = true
+            }
+            SyncDiag.fail(
+                "Firebase",
+                if (message.contains("PERMISSION_DENIED", true) || message.contains("insufficient permissions", true)) {
+                    "Firestore rejected the write: this project's security rules have never been " +
+                        "published. Run `firebase deploy --only firestore:rules`. Drive sync is " +
+                        "unaffected — it already holds your library."
+                } else {
+                    message.take(160).ifBlank { e.javaClass.simpleName }
+                }
+            )
             if (announce) withContext(Dispatchers.Main) {
-                val message = e.message.orEmpty()
                 toast(if (message.contains("OAuth client ID") || message.contains("ID token"))
                     "Firebase needs its Web OAuth client ID. Google Drive sync remains available."
                 else "Firebase sync unavailable. Your local library and Drive sync are preserved.")
@@ -1511,6 +1546,12 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 "File uploads",
                 "${summary.confirmed.size} confirmed, ${summary.failed.size} failed of ${summary.attempted}"
             )
+            // A count is not a diagnosis. When something failed, the HTTP reason goes in the same
+            // list, because that is what says whether this is the Drive API being switched off,
+            // the app-data scope never granted, or a quota.
+            if (summary.failed.isNotEmpty()) {
+                SyncDiag.fail("Upload refused", DriveLibrary.lastError ?: "no response from Drive")
+            }
         }
         val now = System.currentTimeMillis()
         withContext(Dispatchers.Main) {
@@ -1623,6 +1664,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 }
                 extraFailures = failed
                 done
+            }
+            if (extraFailures > 0) {
+                SyncDiag.fail("Upload refused", DriveLibrary.lastError ?: "no response from Drive")
             }
             if (uploaded.isNotEmpty()) {
                 val at = System.currentTimeMillis()
@@ -1845,25 +1889,34 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         return "${book.id}.$ext"
     }
 
+    /**
+     * The books that used to ship with the app are gone, and existing copies are cleared out.
+     *
+     * They were starter titles copied out of the APK on first launch, so they are not the
+     * reader's books, they cannot be backed up, and — never opened — they filled Want to read with
+     * three titles nobody chose. The shelf holds what the reader added: imported files,
+     * downloads from Explore, and what came back from their account.
+     */
     private fun maybeSeedStartersUnlocked(target: MutableList<LibraryBook>) {
-        if (prefs.getBoolean("starter_seeded", false)) return
-        val hasUser = target.any { it.origin == BookOrigin.IMPORT || it.origin == BookOrigin.DOWNLOAD }
-        prefs.edit().putBoolean("starter_seeded", true).apply()
-        if (hasUser) return
-        val app = getApplication<Application>()
-        BundledBooks.starter.asReversed().forEach { spec ->
-            addStarterUnlocked(app, spec, target)
+        val removed = target.filter { book ->
+            book.id.startsWith("starter_") || BundledBooks.seedIds.contains(book.id)
         }
+        if (removed.isNotEmpty()) {
+            val ids = removed.map { it.id }.toSet()
+            target.removeAll { it.id in ids }
+            // The copies in app storage go too: they were unpacked from the APK, so nothing of
+            // the reader's is lost, and leaving them behind would just waste space.
+            removed.forEach { book ->
+                book.filePath?.let { runCatching { File(it).delete() } }
+            }
+        }
+        prefs.edit().putBoolean("starter_seeded", true).apply()
     }
 
+    /** Retained as a no-op: the bundled PDF is removed with the rest of the starter books. */
     private fun maybeSeedStarterPdfUnlocked(target: MutableList<LibraryBook>) {
-        if (prefs.getBoolean("starter_pdf_v1", false)) return
         prefs.edit().putBoolean("starter_pdf_v1", true).apply()
-        val spec = BundledBooks.starter.firstOrNull { it.format == BookFormat.PDF } ?: return
-        if (target.any { it.id == spec.id }) return
-        if (target.isEmpty()) return
-        if (target.any { !it.id.startsWith("starter_") }) return
-        addStarterUnlocked(getApplication(), spec, target)
+        target.removeAll { it.id.startsWith("starter_") }
     }
 
     private fun addStarterUnlocked(app: Application, spec: StarterSpec, target: MutableList<LibraryBook>) {

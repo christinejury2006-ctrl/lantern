@@ -124,6 +124,27 @@ class ShelfSectionsTest {
         assertFalse(downloaded.dnf)
     }
 
+
+    @Test
+    fun `a book that has not been measured yet is not completed`() {
+        // A freshly imported or downloaded EPUB reports a single page until the reader has laid
+        // it out. Every one of them used to appear under Completed, because page 1 of 1 is "the
+        // last page". Completion needs a page count that means something.
+        val unmeasured = book(page = 0, pages = 1, lastRead = 1_500L)
+        assertEquals(LibraryCategory.READING, unmeasured.section)
+
+        val measuredButUnread = book(page = 0, pages = 220, lastRead = 1_500L)
+        assertEquals(LibraryCategory.READING, measuredButUnread.section)
+    }
+
+    @Test
+    fun `reopening a book never resets a finished book to reading`() {
+        // The reader's place is only reported once the layout is complete, so a partial layout
+        // can never write "page 0 of 1" over a real position. This pins the rule that the
+        // resulting record — finished, read, later re-opened — still presents as completed.
+        assertEquals(LibraryCategory.COMPLETED, book(page = 0, pages = 220, lastRead = 9_000L, finished = true).section)
+    }
+
     private fun snapshotOf(vararg books: LibraryBook) = AccountSnapshot(
         updatedAt = 1_000L,
         userId = "user-1",

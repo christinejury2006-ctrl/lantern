@@ -157,7 +157,10 @@ data class LibraryBook(
     val section: LibraryCategory
         get() = when {
             dnf -> LibraryCategory.DNF
-            finished || progress >= 0.999f -> LibraryCategory.COMPLETED
+            // Only a book big enough to have a "last page" can be completed by progress alone. A
+            // freshly added book reports one page until it has been measured, and treating that
+            // as 100% is how unread EPUBs ended up under Completed.
+            finished || (pageCount > 1 && progress >= 0.999f) -> LibraryCategory.COMPLETED
             lastReadAt > 0L || currentPage > 0 -> LibraryCategory.READING
             else -> LibraryCategory.WANT_TO_READ
         }

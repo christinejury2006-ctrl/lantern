@@ -174,7 +174,12 @@ internal fun LanternRoot(store: LanternStore) {
         })
     }
     fun openDiscoveryLink(book: DiscoveryBook): Boolean {
+        // An Explore result's `volumeId` *is* its detail page — the site it was found on. A Google
+        // Books result carries the same thing in `infoLink`. Both are just a link to the book's
+        // page, so both go through the same door, and the same gesture does the same thing
+        // whichever screen the book came from.
         val url = book.infoLink ?: book.buyLink ?: book.previewLink ?: book.canonicalLink
+            ?: book.volumeId.takeIf { it.startsWith("http") }
         if (url.isNullOrBlank()) return false
         return runCatching {
             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
@@ -205,7 +210,7 @@ internal fun LanternRoot(store: LanternStore) {
             }
             return
         }
-        if (!openDiscoveryLink(book)) store.toast("No store link available")
+        if (!openDiscoveryLink(book)) store.toast("This book has no page to open")
     }
     val needsOnboarding = !store.interestsChosen
     LanternTheme(theme) {

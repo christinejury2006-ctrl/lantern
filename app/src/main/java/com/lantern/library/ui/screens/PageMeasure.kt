@@ -16,10 +16,14 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lantern.library.data.Chapter
+import com.lantern.library.data.EpubMedia
 import com.lantern.library.data.Paginator
 import com.lantern.library.data.ReaderPage
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import java.util.Collections
 
 /**
  * The page's own margins, in one place.
@@ -35,10 +39,57 @@ internal val PagePadBottom = 80.dp
 /** The gap between the chapter heading and the first paragraph. */
 internal val PageTitleGap = 20.dp
 
+/** A book's pages, and whether pagination has finished for the current layout. */
+data class MeasuredPages(
+    val pages: List<ReaderPage>,
+    /** False while later chapters are still being measured; the list only ever grows. */
+    val complete: Boolean
+)
+
+/**
+ * Pages already laid out for a book, kept for the session.
+ *
+ * Reopening a book is the single most common thing a reader does, and measuring a long novel takes
+ * seconds — which is what "the EPUB takes too long to load" was: every open re-measured the whole
+ * book from scratch. A handful of entries is enough (the book they are reading and the one they
+ * just left), and an eviction only costs a re-measure, never correctness: the key includes the
+ * font, the size and the exact page box, so a stale layout can never be served for a new one.
+ */
+internal object PageCache {
+    private const val MAX = 6
+    private val entries: MutableMap<String, List<ReaderPage>> =
+        Collections.synchronizedMap(
+            object : LinkedHashMap<String, List<ReaderPage>>(8, 0.75f, true) {
+                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<ReaderPage>>) =
+                    size > MAX
+            }
+        )
+
+    fun key(
+        bookId: String?,
+        filePath: String?,
+        family: String,
+        fontSizeSp: Float,
+        width: Int,
+        height: Int
+    ): String = listOf(bookId ?: "-", filePath ?: "-", family, fontSizeSp, width, height).joinToString("|")
+
+    fun get(key: String): List<ReaderPage>? = entries[key]
+
+    fun put(key: String, pages: List<ReaderPage>) {
+        entries[key] = pages
+    }
+
+    /** Drops a book's pages, e.g. after its file changed. */
+    fun clear(bookId: String) {
+        synchronized(entries) { entries.keys.removeAll { it.startsWith("$bookId|") } }
+    }
+}
+
 /**
  * Pages for a book, measured against the real page box — computed off the main thread.
  *
- * Two problems are solved here, and both of them were visible to the reader as "the EPUB is slow
+ * Three problems are solved here, and all of them were visible to the reader as "the EPUB is slow
  * and then it janks":
  *
  * 1. **Cost.** The old paginator re-measured the whole growing page every time a paragraph was
@@ -46,11 +97,12 @@ internal val PageTitleGap = 20.dp
  *    adds up the heights, and starts a new page when the next one will not fit. Only a paragraph
  *    taller than a whole page costs more, and that one paragraph is split by binary search.
  * 2. **Where it runs.** It used to run inside composition, on the main thread, so opening a long
- *    book froze the first frame of the reader. It now runs on [Dispatchers.Default] and the screen
- *    shows "Preparing…" until it lands, while the previous page list keeps being drawn if there is
- *    one. Measuring text off the main thread is safe: `TextMeasurer` has no UI state.
+ *    book froze the first frame of the reader. It now runs on [Dispatchers.Default].
+ * 3. **When the pages appear.** The first chapter's pages are published as soon as they are
+ *    measured, so a long book starts reading immediately and the rest arrives behind it. The list
+ *    only ever grows; [MeasuredPages.complete] says when it has stopped growing.
  *
- * The returned [State] is `null` while the first pass for the current inputs has not finished.
+ * Measuring text off the main thread is safe: `TextMeasurer` has no UI state.
  */
 @Composable
 fun rememberMeasuredPages(
@@ -58,8 +110,9 @@ fun rememberMeasuredPages(
     fallback: String,
     family: FontFamily,
     fontSizeSp: Float,
-    pageBox: IntSize
-): State<List<ReaderPage>?> {
+    pageBox: IntSize,
+    cacheKey: String? = null
+): State<MeasuredPages?> {
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
     val body = remember(family, fontSizeSp) {
@@ -80,14 +133,14 @@ fun rememberMeasuredPages(
 
     // The page box arrives from the pager's own layout. Until it does, the window size stands in,
     // so the first pass is already close and the "Preparing…" flash is short.
-    return produceState<List<ReaderPage>?>(
+    return produceState<MeasuredPages?>(
         initialValue = null,
-        chapters, fallback, body, heading, pageBox, density, measurer
+        chapters, fallback, body, heading, pageBox, density, measurer, cacheKey
     ) {
         val textWidth = pageBox.width - with(density) { (PagePadHorizontal * 2).roundToPx() }
         val textHeight = pageBox.height - with(density) { (PagePadTop + PagePadBottom).roundToPx() }
         if (textWidth < 80 || textHeight < 80) {
-            value = Paginator.pages(chapters, fontSizeSp, fallback)
+            value = MeasuredPages(Paginator.pages(chapters, fontSizeSp, fallback), complete = true)
             return@produceState
         }
         val gap = with(density) { PageTitleGap.roundToPx() }
@@ -95,6 +148,13 @@ fun rememberMeasuredPages(
         // between two paragraphs is exactly one line height — not an arbitrary constant. Measuring
         // it here is what keeps the last paragraph of a page from being cut off.
         val lineGap = with(density) { (fontSizeSp * 1.55f).sp.roundToPx() }
+        val key = cacheKey?.let { "$it|$textWidth|$textHeight" }
+
+        if (key != null) PageCache.get(key)?.let {
+            value = MeasuredPages(it, complete = true)
+            return@produceState
+        }
+
         value = withContext(Dispatchers.Default) {
             paginate(
                 measurer = measurer,
@@ -105,13 +165,21 @@ fun rememberMeasuredPages(
                 widthPx = textWidth,
                 heightPx = textHeight,
                 titleGapPx = gap,
-                lineGapPx = lineGap
+                lineGapPx = lineGap,
+                onPartial = { partial ->
+                    // Published as it goes, so the first chapter is readable while the rest of
+                    // the book is still being laid out.
+                    withContext(Dispatchers.Main.immediate) { value = MeasuredPages(partial, false) }
+                }
             )
+        }.let { result ->
+            if (key != null) PageCache.put(key, result)
+            MeasuredPages(result, complete = true)
         }
     }
 }
 
-private fun paginate(
+private suspend fun paginate(
     measurer: TextMeasurer,
     chapters: List<Chapter>,
     fallback: String,
@@ -120,12 +188,13 @@ private fun paginate(
     widthPx: Int,
     heightPx: Int,
     titleGapPx: Int,
-    lineGapPx: Int
+    lineGapPx: Int,
+    onPartial: suspend (List<ReaderPage>) -> Unit
 ): List<ReaderPage> {
     val out = mutableListOf<ReaderPage>()
     val source = chapters.ifEmpty { listOf(Chapter("Book", fallback)) }
 
-    source.forEachIndexed { chapterIndex, chapter ->
+    for ((chapterIndex, chapter) in source.withIndex()) {
         val title = chapter.title.ifBlank { "Chapter ${chapterIndex + 1}" }
         val paragraphs = chapter.body
             .split(Regex("\\n\\s*\\n"))
@@ -134,7 +203,8 @@ private fun paginate(
 
         if (paragraphs.isEmpty()) {
             out += ReaderPage(title, chapterIndex, emptyList(), true)
-            return@forEachIndexed
+            currentCoroutineContext().ensureActive()
+            continue
         }
 
         var pageNumber = 0
@@ -152,39 +222,65 @@ private fun paginate(
             while (pending.isNotEmpty()) {
                 val next = pending.first()
                 val gap = if (page.isEmpty()) 0 else lineGapPx
-                val height = measureHeight(measurer, body, next, widthPx)
+                // A picture is sized to the page it lands on; prose is measured as text.
+                val picture = EpubMedia.parse(next)
+                val drawn = if (picture != null) {
+                    val fit = EpubMedia.fit(
+                        picture.width, picture.height,
+                        widthPx, (room - used - gap).coerceAtLeast(heightPx / 3)
+                    )
+                    EpubMedia.marker(picture.path, fit.first, fit.second)
+                } else next
+                val height = if (picture != null) {
+                    EpubMedia.parse(drawn)?.height ?: 0
+                } else {
+                    measureHeight(measurer, body, next, widthPx)
+                }
                 if (page.isNotEmpty() && used + gap + height > room) break
                 if (page.isEmpty() && height > room) break
-                page += pending.removeFirst()
+                pending.removeFirst()
+                page += if (picture != null) drawn else next
                 used += gap + height
             }
 
             if (page.isEmpty()) {
-                // A single paragraph taller than the page: take the longest prefix that fits and
-                // carry the rest over, so text is continued rather than dropped.
-                val paragraph = pending.removeFirst()
-                val best = longestFitting(paragraph, widthPx, room, measurer, body)
-                if (best <= 0) {
-                    // Degenerate layout (huge font, tiny window). Show the rest of the chapter
-                    // rather than looping forever or losing it.
-                    page += paragraph
-                    page += pending.toList()
-                    pending.clear()
+                val paragraph = pending.first()
+                if (EpubMedia.isPicture(paragraph)) {
+                    // A picture on a page of its own: fit it to the whole page and move on. It is
+                    // never split, so this always makes progress.
+                    val drawn = EpubMedia.parse(paragraph)?.let { p ->
+                        val fit = EpubMedia.fit(p.width, p.height, widthPx, room.coerceAtLeast(1))
+                        EpubMedia.marker(p.path, fit.first, fit.second)
+                    } ?: paragraph
+                    pending.removeFirst()
+                    page += drawn
                 } else {
-                    var cut = best
-                    if (cut < paragraph.length) {
-                        val space = paragraph.lastIndexOf(' ', cut)
-                        if (space > cut / 2) cut = space
-                    }
-                    val head = paragraph.substring(0, cut).trim()
-                    val rest = paragraph.substring(cut).trim()
-                    if (head.isEmpty()) {
+                    // A single paragraph taller than the page: take the longest prefix that fits
+                    // and carry the rest over, so text is continued rather than dropped.
+                    val best = longestFitting(paragraph, widthPx, room, measurer, body)
+                    if (best <= 0) {
+                        // Degenerate layout (huge font, tiny window). Show the rest of the chapter
+                        // rather than looping forever or losing it.
                         page += paragraph
                         page += pending.toList()
                         pending.clear()
                     } else {
-                        page += head
-                        if (rest.isNotEmpty()) pending.addFirst(rest)
+                        var cut = best
+                        if (cut < paragraph.length) {
+                            val space = paragraph.lastIndexOf(' ', cut)
+                            if (space > cut / 2) cut = space
+                        }
+                        val head = paragraph.substring(0, cut).trim()
+                        val rest = paragraph.substring(cut).trim()
+                        if (head.isEmpty()) {
+                            page += paragraph
+                            page += pending.toList()
+                            pending.clear()
+                        } else {
+                            pending.removeFirst()
+                            page += head
+                            if (rest.isNotEmpty()) pending.addFirst(rest)
+                        }
                     }
                 }
             }
@@ -193,6 +289,8 @@ private fun paginate(
             out += ReaderPage(title, chapterIndex, page.toList(), isFirst)
             pageNumber++
         }
+        currentCoroutineContext().ensureActive()
+        if (out.isNotEmpty()) onPartial(out.toList())
     }
 
     if (out.isEmpty()) out += ReaderPage("Book", 0, listOf(fallback), true)

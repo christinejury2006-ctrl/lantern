@@ -31,6 +31,26 @@ object DriveLibrary {
     @Volatile private var cachedFolderOwner: String? = null
     private val uploadLocks = HashMap<String, Any>()
 
+    /**
+     * Why the last Drive call failed, in words the reader can act on.
+     *
+     * "6 failed" with no reason is not a diagnosis. A 403 here almost always means the Drive API
+     * is not enabled for the project, or the account never granted the app its hidden app-data
+     * scope; a 401 means the token was rejected. Both are invisible from the phone otherwise.
+     */
+    @Volatile
+    var lastError: String? = null
+        private set
+
+    private fun noteError(what: String, code: Int, body: String?) {
+        val snippet = body.orEmpty().replace(Regex("\\s+"), " ").take(140)
+        lastError = "$what failed: HTTP $code" + if (snippet.isBlank()) "" else " — $snippet"
+    }
+
+    fun clearError() {
+        lastError = null
+    }
+
     fun clearCachedFolder() {
         synchronized(folderLock) {
             cachedFolderId = null
@@ -134,11 +154,14 @@ object DriveLibrary {
             .header("Authorization", "Bearer $token")
             .post(multipart)
             .build()
-        val raw = executeRaw(req) ?: return DriveOutcome.Failed
+        val raw = executeRaw(req) ?: return DriveOutcome.Failed.also { noteError("upload", 0, "no response") }
         if (raw.code == 401) return DriveOutcome.Unauthorized
-        if (!raw.ok || raw.body == null) return DriveOutcome.Failed
+        if (!raw.ok || raw.body == null) {
+            noteError("upload", raw.code, raw.body)
+            return DriveOutcome.Failed
+        }
         val id = JSONObject(raw.body).optString("id").takeIf { it.isNotBlank() }
-            ?: return DriveOutcome.Failed
+            ?: return DriveOutcome.Failed.also { noteError("upload", raw.code, "no file id in response") }
         return DriveOutcome.Ok(id)
     }
 
@@ -149,9 +172,12 @@ object DriveLibrary {
             .header("Authorization", "Bearer $token")
             .patch(file.asRequestBody(mimeFor(book).toMediaType()))
             .build()
-        val raw = executeRaw(req) ?: return DriveOutcome.Failed
+        val raw = executeRaw(req) ?: return DriveOutcome.Failed.also { noteError("replace", 0, "no response") }
         if (raw.code == 401) return DriveOutcome.Unauthorized
-        if (!raw.ok) return DriveOutcome.Failed
+        if (!raw.ok) {
+            noteError("replace", raw.code, raw.body)
+            return DriveOutcome.Failed
+        }
         return DriveOutcome.Ok(fileId)
     }
 
@@ -186,7 +212,11 @@ object DriveLibrary {
             .build()
         val raw = executeRaw(req) ?: return VerifyOutcome.Unknown
         if (raw.code == 401) return VerifyOutcome.Unauthorized
-        if (!raw.ok || raw.body == null) return VerifyOutcome.Unknown
+        if (!raw.ok || raw.body == null) {
+            // A refused checksum read is a failed backup, not an unknown one: say why.
+            noteError("checksum check", raw.code, raw.body)
+            return VerifyOutcome.Unknown
+        }
         return runCatching {
             val json = JSONObject(raw.body)
             val remoteMd5 = json.optString("md5Checksum").takeIf { it.isNotBlank() }

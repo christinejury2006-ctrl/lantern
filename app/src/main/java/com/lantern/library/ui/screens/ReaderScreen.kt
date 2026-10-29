@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.pdf.PdfRenderer
 import android.os.BatteryManager
 import android.os.Build
@@ -112,6 +113,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.lantern.library.data.BookFormat
 import com.lantern.library.data.BookIo
 import com.lantern.library.data.Chapter
+import com.lantern.library.data.EpubMedia
 import com.lantern.library.data.LanternFonts
 import com.lantern.library.data.LibraryBook
 import com.lantern.library.data.ReaderPage
@@ -292,14 +294,19 @@ fun ReaderScreen(
         fallback = book.synopsis.ifBlank { "This book has no text yet." },
         family = family,
         fontSizeSp = prefs.fontSizeSp,
-        pageBox = if (pageBox.width > 0 && pageBox.height > 0) pageBox else estimatedBox
+        pageBox = if (pageBox.width > 0 && pageBox.height > 0) pageBox else estimatedBox,
+        // Same book, same font, same size, same box: reuse the layout instead of measuring it
+        // again. This is what makes leaving a book and coming back instant.
+        cacheKey = "${book.id}|${book.filePath.orEmpty()}|${prefs.fontId}|${prefs.fontSizeSp}"
     )
-    // Pagination runs off the main thread now, so there is an honest "not ready" state instead of
-    // a frozen first frame. The page count is never zero: the pager needs a page to exist.
-    val pages = pagesState.value
-    val pagesReady = pages != null
-    val pageList = pages ?: emptyList()
-    val pageCount = if (book.format == BookFormat.PDF) pdfCount else (pages?.size ?: 1).coerceAtLeast(1)
+    // Pagination runs off the main thread, one chapter at a time, so the first pages are readable
+    // while the rest of the book is still being laid out. Nothing is saved until it is complete —
+    // a half-measured page count would overwrite the reader's real place.
+    val measured = pagesState.value
+    val pagesReady = measured != null && measured.pages.isNotEmpty()
+    val pagesComplete = measured?.complete == true
+    val pageList = measured?.pages ?: emptyList()
+    val pageCount = if (book.format == BookFormat.PDF) pdfCount else pageList.size.coerceAtLeast(1)
     val pager = rememberPagerState(
         initialPage = book.currentPage.coerceIn(0, (pageCount - 1).coerceAtLeast(0)),
         pageCount = { pageCount }
@@ -314,7 +321,9 @@ fun ReaderScreen(
     )
     val chapterY = remember(book.id) { mutableStateMapOf<Int, Int>() }
     val scope = rememberCoroutineScope()
-    val epubUsesPager = prefs.swipeMode && book.format != BookFormat.PDF
+    // An EPUB is a book, and a book is read a page at a time. The swipe setting still governs the
+    // PDF reader, where a scanned page *is* the unit; for text there is one way to read it.
+    val epubUsesPager = book.format != BookFormat.PDF
     val pdfUsesPager = book.format == BookFormat.PDF && prefs.swipeMode
     val pdfSession = remember(book.id, book.filePath, pdfUsesPager) {
         if (book.format == BookFormat.PDF && !pdfUsesPager)
@@ -324,9 +333,14 @@ fun ReaderScreen(
     DisposableEffect(pdfSession) {
         onDispose { pdfSession?.close() }
     }
+    // The reader's saved place, restored once per open. Until it has been restored, nothing is
+    // reported back to the store: an early report of page 0 of 1 is what used to overwrite the
+    // reader's real position (and mark unread books as finished) the moment a book was opened.
+    var placeRestored by remember(book.id) { mutableStateOf(false) }
     // Progress is read from the pager whenever the pager is what is turning the page.
-    LaunchedEffect(pager, pageCount, prefs.swipeMode, ready) {
+    LaunchedEffect(pager, pageCount, prefs.swipeMode, ready, pagesComplete, placeRestored) {
         if (!prefs.swipeMode || !ready || pageCount <= 0) return@LaunchedEffect
+        if (book.format != BookFormat.PDF && (!pagesComplete || !placeRestored)) return@LaunchedEffect
         snapshotFlow { pager.currentPage }.collect { page ->
             onProgress(page.coerceIn(0, (pageCount - 1).coerceAtLeast(0)), pageCount)
         }
@@ -347,13 +361,18 @@ fun ReaderScreen(
             onProgress(index.coerceIn(0, (pageCount - 1).coerceAtLeast(0)), pageCount)
         }
     }
-    // Restoring the reader's place. It waits for the measured page list, so the jump lands on the
-    // page number the reader actually left, not on a guess made against the pre-measurement list.
-    LaunchedEffect(book.id, pager, pageCount, prefs.swipeMode, pagesReady, ready) {
+    // Restoring the reader's place. It waits until either the saved page has been measured or the
+    // whole book has, so the jump lands on the page the reader actually left — and it happens
+    // once, so it can never fight the reader's own scrolling afterwards.
+    LaunchedEffect(book.id, pager, pageCount, prefs.swipeMode, pagesReady, pagesComplete, ready) {
+        if (placeRestored) return@LaunchedEffect
         if (!prefs.swipeMode || !ready || !pagesReady || pageCount <= 0) return@LaunchedEffect
-        if (book.format != BookFormat.PDF && !pagesReady) return@LaunchedEffect
+        if (book.format != BookFormat.PDF && !pagesComplete && book.currentPage >= pageCount) {
+            return@LaunchedEffect
+        }
         val target = book.currentPage.coerceIn(0, pageCount - 1)
         if (pager.currentPage != target) pager.scrollToPage(target)
+        placeRestored = true
     }
     LaunchedEffect(book.id, ready, prefs.swipeMode, book.format, scrollState.maxValue, pageCount) {
         if (!ready || prefs.swipeMode || book.format == BookFormat.PDF) return@LaunchedEffect
@@ -1056,25 +1075,79 @@ private fun PageLeaf(page: ReaderPage?, family: FontFamily, size: Float, ink: Co
                 )
                 Spacer(Modifier.height(PageTitleGap))
             }
-            // A page is a block of text, not a column of lines: the paragraphs flow into one
-            // justified measure rather than each starting a new, ragged line at the left edge.
-            Text(
-                text = buildAnnotatedString {
-                    page.paragraphs.forEachIndexed { i, para ->
-                        if (i > 0) append("\n\n")
-                        append(para.trim())
-                    }
-                },
-                color = ink,
-                fontFamily = family,
-                fontSize = size.sp,
-                lineHeight = (size * 1.55f).sp,
-                textAlign = TextAlign.Justify,
-                modifier = Modifier.fillMaxWidth()
-            )
+            // Paragraphs flow as one justified measure when they are prose, but a picture has to
+            // be drawn, not printed — so the page walks its blocks and alternates between a Text
+            // for the prose between pictures and an Image for the picture itself. Pagination
+            // assigned each picture its exact size, so the block never overflows the page.
+            var first = true
+            page.paragraphs.forEach { para ->
+                val picture = EpubMedia.parse(para)
+                if (!first) Spacer(Modifier.height((size * 1.55f).sp))
+                first = false
+                if (picture != null) {
+                    BookPicture(picture, modifier = Modifier.fillMaxWidth())
+                } else if (para.isNotBlank()) {
+                    Text(
+                        text = para.trim(),
+                        color = ink,
+                        fontFamily = family,
+                        fontSize = size.sp,
+                        lineHeight = (size * 1.55f).sp,
+                        textAlign = TextAlign.Justify,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
         }
     }
 }
+
+/**
+ * One illustration from a book.
+ *
+ * Decoded at the width it will be drawn at rather than at its full size: a scanned plate can be
+ * 3000 px wide, and decoding those in full is how a reader runs out of memory on a phone while
+ * paging through a picture book.
+ */
+@Composable
+private fun BookPicture(picture: EpubMedia.Picture, modifier: Modifier = Modifier) {
+    val density = LocalDensity.current
+    val targetWidth = with(density) { picture.width.toDp() }
+    val targetHeight = with(density) { picture.height.toDp() }
+    var bmp by remember(picture.path, picture.width, picture.height) {
+        mutableStateOf<Bitmap?>(null)
+    }
+    LaunchedEffect(picture.path, picture.width) {
+        bmp = withContext(Dispatchers.IO) { decodeSized(picture.path, picture.width) }
+    }
+    val image = bmp
+    if (image != null) {
+        Image(
+            bitmap = image.asImageBitmap(),
+            contentDescription = null,
+            modifier = modifier.width(targetWidth).height(targetHeight),
+            contentScale = ContentScale.Fit
+        )
+    } else {
+        // The space is reserved from the first frame, so the page does not reflow when the
+        // picture arrives.
+        Box(modifier.width(targetWidth).height(targetHeight))
+    }
+}
+
+/** Decodes a picture at roughly [targetWidth] pixels, sampling down instead of loading it whole. */
+private fun decodeSized(path: String, targetWidth: Int): Bitmap? = runCatching {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(path, bounds)
+    if (bounds.outWidth <= 0) return@runCatching null
+    var sample = 1
+    while (bounds.outWidth / (sample * 2) >= targetWidth) sample *= 2
+    val opts = BitmapFactory.Options().apply {
+        inSampleSize = sample
+        inPreferredConfig = Bitmap.Config.RGB_565
+    }
+    BitmapFactory.decodeFile(path, opts)
+}.getOrNull()
 
 @Composable
 private fun Drop(text: String, family: FontFamily, size: Float, ink: Color) {

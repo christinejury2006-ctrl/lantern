@@ -54,10 +54,9 @@ import com.lantern.library.ui.theme.nookPalette
 /**
  * The Reading Nook: the app's home.
  *
- * Home answers one question: which of my books are safely in my account, and which are only on
- * this phone? Two piles, side by side with the covers as the labels, and the editor's picks pinned
- * above both. Managing the shelf — categories, search, removing a book — lives on the Library tab,
- * where the reader expects a shelf to be.
+ * Home is the room the reader reads in: the editor's picks pinned at the top, and their own shelf
+ * under it as one grid of covers. Managing the shelf — categories, search, removing a book — lives
+ * on the Library tab, where the reader expects a shelf to be.
  *
  * The community card that used to sit at the bottom is gone. It was copy, not a feature.
  */
@@ -77,13 +76,6 @@ fun ReadingNookScreen(
     onNotifications: () -> Unit
 ) {
     val palette = nookPalette(theme)
-    // Two honest piles: what is provably in the reader's account, and what exists only on this
-    // phone. A book is only ever in the first pile once an upload has been verified — a Drive id
-    // on its own is a promise, not a backup.
-    // Recomputed each recomposition, not remembered: `books` is a snapshot list with a stable
-    // identity, so remembering on it would keep showing the shelf as it was before the last sync.
-    val synced = books.filter { it.backupState == BookBackupState.BACKED_UP }
-    val localOnly = books.filter { it.backupState != BookBackupState.BACKED_UP }
 
     NookBackdrop(palette) {
         Column(Modifier.fillMaxSize()) {
@@ -101,71 +93,25 @@ fun ReadingNookScreen(
 
                 item {
                     Spacer(Modifier.height(22.dp))
-                    NookSectionTitle("In your account", palette) {
+                    NookSectionTitle("My Shelf", palette) {
                         Text(
-                            "${synced.size}",
+                            "${books.size}",
                             color = palette.mute,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium
                         )
                     }
-                    Text(
-                        "Books whose file has been confirmed in your cloud account.",
-                        color = palette.faint,
-                        fontSize = 11.sp,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
-                    )
                     Spacer(Modifier.height(8.dp))
-                }
-
-                if (synced.isEmpty()) {
-                    item { AccountEmpty(palette, account) }
-                } else {
-                    items(synced.chunked(3).size) { index ->
-                        BookRow(synced.chunked(3)[index], palette, onOpenBook)
-                    }
-                }
-
-                item {
-                    Spacer(Modifier.height(26.dp))
-                    NookSectionTitle("Only on this phone", palette) {
-                        Text(
-                            "${localOnly.size}",
-                            color = palette.mute,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                    Text(
-                        if (account.signedIn)
-                            "Not backed up yet. They stay here, and stay safe, until an upload is confirmed."
-                        else "Sign in and they will be backed up. Nothing is deleted from this phone either way.",
-                        color = palette.faint,
-                        fontSize = 11.sp,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
-                    )
-                    Spacer(Modifier.height(8.dp))
-                }
-
-                if (localOnly.isEmpty()) {
-                    item {
-                        Text(
-                            if (books.isEmpty()) "Your shelf is empty." else "Everything is in your account.",
-                            color = palette.mute,
-                            fontSize = 13.sp,
-                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)
-                        )
-                    }
-                } else {
-                    items(localOnly.chunked(3).size) { index ->
-                        BookRow(localOnly.chunked(3)[index], palette, onOpenBook)
-                    }
                 }
 
                 if (books.isEmpty()) {
-                    item {
-                        Spacer(Modifier.height(10.dp))
-                        EmptyShelf(palette, onLibrary)
+                    item { EmptyShelf(palette, onLibrary) }
+                } else {
+                    // One shelf, in the order the reader added the books. Whether a book is in the
+                    // account is shown on the cover itself (the little cloud), not by splitting
+                    // the shelf into groups that read like two different libraries.
+                    items(books.chunked(3).size) { index ->
+                        BookRow(books.chunked(3)[index], palette, onOpenBook)
                     }
                 }
             }
@@ -235,42 +181,6 @@ private fun PicksBar(
 }
 
 /** Said plainly when nothing has been confirmed in the account yet. */
-@Composable
-private fun AccountEmpty(palette: NookPalette, account: CloudAccount) {
-    GlassSurface(palette, Modifier.fillMaxWidth().padding(horizontal = 20.dp), shape = RoundedCornerShape(20.dp)) {
-        Column(Modifier.padding(18.dp)) {
-            Text(
-                when {
-                    !account.signedIn -> "Not signed in"
-                    !account.driveConnected -> "Drive access not granted"
-                    else -> "Nothing backed up yet"
-                },
-                color = palette.ink,
-                fontFamily = Playfair,
-                fontSize = 16.sp
-            )
-            Text(
-                when {
-                    !account.signedIn -> "Sign in from You and your books will be copied to your account."
-                    !account.driveConnected -> "Sign in again and allow Drive access; without it the app cannot upload anything."
-                    else -> "Books are copied up one at a time. Anything that fails stays queued and is retried."
-                },
-                color = palette.mute,
-                fontSize = 12.sp,
-                modifier = Modifier.padding(top = 6.dp)
-            )
-        }
-    }
-}
-
-/**
- * The masthead.
- *
- * The title is the one piece of display type in the app that is allowed to be decorative: it is
- * drawn the way a book's title page is set — a rule, two lines of serif, a rule — because it is
- * the first thing a reader sees and it should feel like opening a book rather than launching an
- * app.
- */
 @Composable
 private fun NookHeader(
     palette: NookPalette,
@@ -406,7 +316,21 @@ private fun ShelfTile(
                 Modifier.fillMaxSize(),
                 palette.dark
             )
-            if (!book.localFileAvailable) {
+            if (book.backupState == BookBackupState.BACKED_UP) {
+                // Backed up, and only once the upload was actually confirmed. This is the whole of
+                // "synced or not" now: a mark on the cover rather than a group of its own.
+                Text(
+                    "☁",
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(5.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0x55000000))
+                        .padding(horizontal = 5.dp, vertical = 1.dp)
+                )
+            } else if (!book.localFileAvailable) {
                 // Not a defect: the book lives in the account and is fetched when opened. Say so
                 // quietly on the cover rather than pretending the file is on the phone.
                 Text(

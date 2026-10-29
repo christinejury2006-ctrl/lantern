@@ -295,6 +295,18 @@ object BookIo {
 
     fun readEpubChapters(file: File): List<Chapter> = readEpubDocument(file).chapters
 
+    /**
+     * Reads an EPUB into chapters, unpacking its pictures alongside the book once.
+     *
+     * Text-only stripping is what made illustrated books unreadable: a page that is a picture has
+     * no text at all, so the old reader showed a nearly empty chapter. Markup is now walked in
+     * document order and each `<img>` (or SVG `<image>`) becomes an [EpubMedia] marker paragraph in
+     * the position it occupies, so pictures and prose stay in the order the book was designed in.
+     *
+     * The images themselves are extracted next to the book on first open — into
+     * `media_<book file name>/` — and never again: a twelve-picture novel costs one pass, and a
+     * hundred-picture children's book still opens straight into reading the second time.
+     */
     fun readEpubDocument(file: File): EpubDocument {
         val zip = try { ZipFile(file) } catch (_: Exception) { return EpubDocument(emptyList(), emptyList()) }
         zip.use { z ->
@@ -305,6 +317,7 @@ object BookIo {
             val opfDir = opf?.name?.substringBeforeLast('/', "")?.let { if (it == opf.name) "" else it }.orEmpty()
             val manifest = parseOpfManifest(opfXml)
             val spineIds = parseOpfSpine(opfXml)
+            val media = unpackMedia(z, file)
             val chapters = mutableListOf<Chapter>()
             if (spineIds.isNotEmpty() && manifest.isNotEmpty()) {
                 spineIds.forEach { id ->
@@ -314,7 +327,7 @@ object BookIo {
                     val path = resolveEpubPath(opfDir, item.href)
                     val entry = zipEntry(z, path) ?: zipEntry(z, item.href) ?: return@forEach
                     val raw = runCatching { z.getInputStream(entry).bufferedReader().use { it.readText() } }.getOrNull() ?: return@forEach
-                    val body = stripHtml(raw)
+                    val body = blocksOf(raw, entry.name, media)
                     val href = normalizeEpubPath(entry.name)
                     chapters += Chapter(
                         titleFromHtml(raw) ?: item.href.substringAfterLast('/'),
@@ -333,7 +346,7 @@ object BookIo {
                     .sortedBy { it.name }
                     .forEach { entry ->
                         val raw = z.getInputStream(entry).bufferedReader().use { it.readText() }
-                        val body = stripHtml(raw)
+                        val body = blocksOf(raw, entry.name, media)
                         chapters += Chapter(
                             titleFromHtml(raw) ?: entry.name.substringAfterLast('/'),
                             body.ifBlank { " " },
@@ -341,9 +354,144 @@ object BookIo {
                         )
                     }
             }
+            // Some books hide the cover in the archive rather than in the spine. If no chapter
+            // already shows it, open the book with it — the cover is part of the book.
+            val cover = coverEntry(z, opf, opfXml)
+            val coverPath = cover?.let { media[normalizeEpubPath(it.name)]?.absolutePath }
+            if (coverPath != null && chapters.none { it.body.contains(EpubMedia.MARK + coverPath) }) {
+                val size = imageSize(File(coverPath)) ?: (600 to 900)
+                chapters.add(
+                    0,
+                    Chapter("Cover", EpubMedia.marker(coverPath, size.first, size.second), "")
+                )
+            }
             val toc = parseEpubToc(z, opfDir, opfXml, manifest, chapters)
             return EpubDocument(chapters, toc)
         }
+    }
+
+    /**
+     * Walks one XHTML file in order, turning text runs into paragraphs and each picture into a
+     * marker.
+     *
+     * A regex over `<img>` is enough here — after tags are stripped the text is what it is, and the
+     * only thing that matters is where in the document each picture sat. `<svg><image href>` is
+     * handled too because that is how a large number of covers and full-page plates are authored.
+     */
+    private fun blocksOf(raw: String, entryName: String, media: Map<String, File>): String {
+        val baseDir = entryName.substringBeforeLast('/', "")
+        val out = StringBuilder()
+        var cursor = 0
+        val pattern = Regex("""(?is)<img\b[^>]*>|<image\b[^>]*>""")
+        fun flush(until: Int) {
+            if (until <= cursor) return
+            val text = stripHtml(raw.substring(cursor, until))
+            if (text.isNotBlank()) {
+                if (out.isNotEmpty()) out.append("\n\n")
+                out.append(text)
+            }
+        }
+        for (match in pattern.findAll(raw)) {
+            val tag = match.value
+            val src = attr(tag, "src") ?: attr(tag, "xlink:href") ?: attr(tag, "href") ?: continue
+            val resolved = resolveEpubPath(baseDir, src)
+            val file = media[resolved] ?: media[normalizeEpubPath(src)] ?: continue
+            flush(match.range.first)
+            cursor = match.range.last + 1
+            val size = imageSize(file) ?: continue
+            if (out.isNotEmpty()) out.append("\n\n")
+            out.append(EpubMedia.marker(file.absolutePath, size.first, size.second))
+        }
+        flush(raw.length)
+        return out.toString().trim()
+    }
+
+    /** One attribute value from a raw tag, tolerant of quotes and of namespaced names. */
+    private fun attr(tag: String, name: String): String? {
+        val quoted = Regex("""(?is)\b${Regex.escape(name)}\s*=\s*["']([^"']+)["']""").find(tag)?.groupValues?.getOrNull(1)
+        if (!quoted.isNullOrBlank()) return quoted
+        return Regex("""(?is)\b${Regex.escape(name)}\s*=\s*([^\s>]+)""").find(tag)?.groupValues?.getOrNull(1)
+            ?.takeIf { it.isNotBlank() }
+    }
+
+    /** Pixel size of an image file, read from its header without decoding the whole bitmap. */
+    private fun imageSize(file: File): Pair<Int, Int>? = runCatching {
+        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, opts)
+        if (opts.outWidth > 0 && opts.outHeight > 0) opts.outWidth to opts.outHeight else null
+    }.getOrNull()
+
+    /**
+     * Unpacks every image in the archive once, keyed by its normalised entry name.
+     *
+     * A finished pass leaves a marker file so reopening the book does not rescan (and, for a
+     * picture book, does not rewrite a hundred JPEGs every time the reader taps it). Vector images
+     * are skipped: they cannot be drawn without an SVG renderer, and a missing illustration is
+     * better than a broken page.
+     */
+    private fun unpackMedia(zip: ZipFile, book: File): Map<String, File> {
+        val dir = File(book.parentFile, "media_" + book.name)
+        val done = File(dir, ".unpacked")
+        val map = HashMap<String, File>()
+        val imageEntries = zip.entries().toList().filter { e ->
+            val n = e.name.lowercase()
+            !e.isDirectory && (n.endsWith(".jpg") || n.endsWith(".jpeg") ||
+                n.endsWith(".png") || n.endsWith(".webp") || n.endsWith(".gif") || n.endsWith(".bmp"))
+        }
+        if (done.exists()) {
+            imageEntries.forEach { e ->
+                val f = File(dir, mediaName(e.name))
+                if (f.exists() && f.length() > 0L) map[normalizeEpubPath(e.name)] = f
+            }
+            return map
+        }
+        dir.mkdirs()
+        imageEntries.forEach { e ->
+            val target = File(dir, mediaName(e.name))
+            val wrote = runCatching {
+                zip.getInputStream(e).use { input -> target.outputStream().use { input.copyTo(it) } }
+                target.length() > 0L
+            }.getOrDefault(false)
+            if (wrote) map[normalizeEpubPath(e.name)] = target else runCatching { target.delete() }
+        }
+        runCatching { done.writeText(System.currentTimeMillis().toString()) }
+        return map
+    }
+
+    /** A flat, filesystem-safe name for an archive entry, unique per source path. */
+    private fun mediaName(entryName: String): String {
+        val lower = entryName.lowercase()
+        val ext = lower.substringAfterLast('.', "jpg").let { if (it.length <= 4) it else "jpg" }
+        val hash = entryName.hashCode().toUInt().toString(16)
+        val stem = lower.substringAfterLast('/').substringBeforeLast('.').replace(Regex("[^a-z0-9]+"), "_").take(28)
+        return "${stem}_$hash.$ext"
+    }
+
+    /** The archive entry the book's own metadata calls its cover, if there is one. */
+    private fun coverEntry(zip: ZipFile, opf: ZipEntry?, opfXml: String): ZipEntry? {
+        if (opf != null) {
+            val coverId = Regex("""(?is)<meta[^>]+name=["']cover["'][^>]*content=["']([^"']+)["']""")
+                .find(opfXml)?.groupValues?.getOrNull(1)
+                ?: Regex("""(?is)<meta[^>]+content=["']([^"']+)["'][^>]*name=["']cover["']""")
+                    .find(opfXml)?.groupValues?.getOrNull(1)
+            val byId = coverId?.let { id ->
+                Regex("""(?is)<item[^>]+id=["']${Regex.escape(id)}["'][^>]*>""").find(opfXml)?.value
+                    ?.let { tag -> attr(tag, "href") }
+            }
+            val byProp = Regex("""(?is)<item[^>]+properties=["'][^"']*cover-image[^"']*["'][^>]*>""")
+                .find(opfXml)?.value?.let { tag -> attr(tag, "href") }
+            val href = byId ?: byProp
+            if (!href.isNullOrBlank()) {
+                val base = opf?.name?.substringBeforeLast('/', "").orEmpty()
+                zipEntry(zip, resolveEpubPath(base, href))?.let { return it }
+            }
+        }
+        val images = zip.entries().toList().filter { e ->
+            val n = e.name.lowercase()
+            !e.isDirectory && (n.endsWith(".jpg") || n.endsWith(".jpeg") || n.endsWith(".png") || n.endsWith(".webp"))
+        }
+        return images.firstOrNull { it.name.lowercase().contains("cover") }
+            ?: images.maxByOrNull { it.size }
     }
 
     fun pdfPageCount(file: File): Int {

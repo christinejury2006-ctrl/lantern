@@ -113,6 +113,8 @@ data class DiscoveryBook(
     val title: String,
     val authors: List<String> = emptyList(),
     val description: String = "",
+    /** Provider-supplied text snippet, only when the API returns one. Never generated. */
+    val excerpt: String = "",
     val categories: List<String> = emptyList(),
     val coverUrl: String? = null,
     val coverUrls: List<String> = emptyList(),

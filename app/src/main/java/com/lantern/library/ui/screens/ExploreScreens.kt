@@ -56,25 +56,47 @@ import com.lantern.library.ui.theme.nookPalette
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import org.jsoup.Jsoup
 
-/**
- * Explore: search the internet for a book, and take the book if it can legally be taken.
- *
- * Two things happen on every search, and they answer different questions:
- *
- * 1. **Open catalogues** ([OpenCatalogs]) are asked whether a free file exists. Project Gutenberg
- *    and the Internet Archive both publish downloadable public-domain editions, and a hit here
- *    turns straight into a book on the shelf: the file is downloaded, validated, given a cover and
- *    a page count, and the reader can open it without ever seeing an import dialog.
- * 2. **Google Books** is asked what the book *is* — description, cover, store links — for titles
- *    that are not free. Those results open the details sheet, where the reader can save the book
- *    to Want to read or follow the store's page.
- *
- * Z-Library and the various "ocean of PDF" mirrors are deliberately absent. They host
- * in-copyright books without permission; scraping them is not something this app does, and there
- * is no hidden setting that turns it on. The label under each downloadable card says where the
- * file came from and what its rights are, because the reader deserves to know.
- */
+data class ScrapedBookItem(
+    val title: String,
+    val detailUrl: String,
+    val coverUrl: String
+)
+
+suspend fun fetchScrapedBooks(query: String): List<ScrapedBookItem> = withContext(Dispatchers.IO) {
+    val searchUrl = "https://oceanofpdf.com/?s=$query"
+    val bookList = mutableListOf<ScrapedBookItem>()
+
+    try {
+        val doc = Jsoup.connect(searchUrl)
+            .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            .timeout(10000)
+            .get()
+
+        val articles = doc.select("article")
+        for (article in articles) {
+            val titleTag = article.selectFirst("h2.entry-title a") ?: continue
+            val imgTag = article.selectFirst("img")
+
+            val title = titleTag.text().trim()
+            val detailUrl = titleTag.attr("href")
+            val coverUrl = when {
+                imgTag?.hasAttr("data-src") == true -> imgTag.attr("data-src")
+                else -> imgTag?.attr("src") ?: ""
+            }
+
+            if (title.isNotEmpty() && detailUrl.isNotEmpty()) {
+                bookList.add(ScrapedBookItem(title, detailUrl, coverUrl))
+            }
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+
+    return@withContext bookList
+}
+
 @Composable
 fun SearchScreen(
     theme: ReaderTheme,

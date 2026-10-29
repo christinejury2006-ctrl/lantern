@@ -17,7 +17,10 @@ import androidx.lifecycle.viewModelScope
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -79,6 +82,33 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     private var snapshotAt = 0L
     private var syncGen = 0
     private var applyingRemote = false
+
+    /**
+     * One sync pass at a time.
+     *
+     * Both mirrors merge into the same library and both write snapshots of it. Two of them running
+     * at once — which is what a local edit plus a scheduled pass produces — read the same "before"
+     * state, and whichever finishes last writes its stale view over the other's. The device log
+     * showed exactly that: the same book uploaded twice, and a `Library applied` line built from a
+     * library that predated the upload it had just confirmed.
+     */
+    private val syncMutex = Mutex()
+
+    /** True while a pass holds [syncMutex]; writes made inside it must not schedule another pass. */
+    @Volatile private var syncInFlight = false
+
+    /** A real local change arrived while a pass was running, so one more pass is owed. */
+    @Volatile private var changedDuringSync = false
+
+    /**
+     * The snapshot last written successfully, per mirror.
+     *
+     * A pass runs after every library write, and most of them change nothing a snapshot can see.
+     * Comparing the serialized bytes turns those passes into no-ops instead of Drive and Firestore
+     * traffic — the device log had the same snapshot written three times in fourteen seconds.
+     */
+    private var lastDriveSnapshot: String? = null
+    private var lastFirebaseSnapshot: String? = null
 
     private data class DiskHydrate(
         val readingPrefs: ReadingPrefs,
@@ -949,6 +979,13 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         if (applyingRemote) return
         snapshotAt = System.currentTimeMillis()
         prefs.edit().putLong("snapshotAt", snapshotAt).putBoolean("sync_dirty", true).apply()
+        // A pass stamps confirmations and applies merged libraries; those writes are the pass's own
+        // output, and re-running because of them is how one upload became six syncs. Remember that
+        // something changed and let the pass decide, once, when it is done.
+        if (syncInFlight) {
+            changedDuringSync = true
+            return
+        }
         scheduleSync()
         scheduleFirebaseSync()
     }
@@ -974,6 +1011,22 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     private var firebaseBlocked = false
 
     private suspend fun syncFirebaseAccount(account: GoogleSignInAccount?, announce: Boolean) {
+        // Same lock as the Drive pass: both merge into this library and both write it back, so they
+        // must not overlap.
+        syncMutex.withLock {
+            syncInFlight = true
+            try {
+                mirrorToFirebase(account, announce)
+            } finally {
+                syncInFlight = false
+                val owed = changedDuringSync
+                changedDuringSync = false
+                if (owed) scheduleFirebaseSync()
+            }
+        }
+    }
+
+    private suspend fun mirrorToFirebase(account: GoogleSignInAccount?, announce: Boolean) {
         if (firebaseBlocked) {
             SyncDiag.mark("Firebase", "skipped: the project's Firestore rules are not published")
             return
@@ -988,8 +1041,14 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             val cloud = AccountSync.fromJson(FirestoreAccountRepository.readSnapshot())
             val merged = AccountSync.merge(local, cloud)
             withContext(Dispatchers.Main) { applySnapshot(merged) }
-            FirestoreAccountRepository.writeSnapshot(AccountSync.toJson(merged))
-            SyncDiag.mark("Firebase", "snapshot written")
+            val json = AccountSync.toJson(merged)
+            if (json == lastFirebaseSnapshot) {
+                SyncDiag.mark("Firebase", "already up to date")
+            } else {
+                FirestoreAccountRepository.writeSnapshot(json)
+                lastFirebaseSnapshot = json
+                SyncDiag.mark("Firebase", "snapshot written")
+            }
             if (announce) withContext(Dispatchers.Main) { toast("Firebase library sync complete") }
         } catch (e: Exception) {
             val message = e.message.orEmpty()
@@ -1165,17 +1224,30 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
      * every sync, for several rounds). A bug in sync must cost the reader a sync, not their book.
      */
     private suspend fun runAccountSync(announce: Boolean) {
-        try {
-            runAccountSyncInner(announce)
-        } catch (cancelled: kotlinx.coroutines.CancellationException) {
-            throw cancelled
-        } catch (t: Throwable) {
-            SyncDiag.fail(
-                "Account sync",
-                "stopped by a ${t.javaClass.simpleName}: " + t.message.orEmpty().take(160).ifBlank { "no message" }
-            )
-            if (announce) {
-                withContext(Dispatchers.Main) { toast("Sync stopped: ${t.javaClass.simpleName}") }
+        // Serialized: a second pass waits for the first to finish and then re-reads both sides, so
+        // it can never apply a library that predates the upload the first pass just confirmed.
+        syncMutex.withLock {
+            syncInFlight = true
+            changedDuringSync = false
+            try {
+                runAccountSyncInner(announce)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (t: Throwable) {
+                SyncDiag.fail(
+                    "Account sync",
+                    "stopped by a ${t.javaClass.simpleName}: " + t.message.orEmpty().take(160).ifBlank { "no message" }
+                )
+                if (announce) {
+                    withContext(Dispatchers.Main) { toast("Sync stopped: ${t.javaClass.simpleName}") }
+                }
+            } finally {
+                syncInFlight = false
+                val owed = changedDuringSync
+                changedDuringSync = false
+                // One more pass, and only one: the pass clears the flag before it starts, so this
+                // cannot chain forever.
+                if (owed) scheduleSync()
             }
         }
     }
@@ -1286,21 +1358,29 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             "Library applied",
             "local=${local.books.size} cloud=${cloud?.books?.size ?: 0} merged=${merged.books.size} books"
         )
-        val written = withDrive { token, owner ->
-            when (val folder = DriveLibrary.ensureFolder(token, owner)) {
-                is DriveOutcome.Ok -> DriveLibrary.writeJsonByLoreId(
-                    token,
-                    folder.value,
-                    AccountSync.STATE_LORE_ID,
-                    AccountSync.STATE_FILE_NAME,
-                    AccountSync.toJson(merged)
-                )
-                DriveOutcome.Unauthorized -> DriveOutcome.Unauthorized
-                DriveOutcome.Failed -> DriveOutcome.Failed
+        val json = AccountSync.toJson(merged)
+        val unchanged = json == lastDriveSnapshot
+        val written = if (unchanged) {
+            // Byte-identical to what this process last wrote, so the account already has it.
+            DriveOutcome.Ok(AccountSync.STATE_LORE_ID)
+        } else {
+            withDrive { token, owner ->
+                when (val folder = DriveLibrary.ensureFolder(token, owner)) {
+                    is DriveOutcome.Ok -> DriveLibrary.writeJsonByLoreId(
+                        token,
+                        folder.value,
+                        AccountSync.STATE_LORE_ID,
+                        AccountSync.STATE_FILE_NAME,
+                        json
+                    )
+                    DriveOutcome.Unauthorized -> DriveOutcome.Unauthorized
+                    DriveOutcome.Failed -> DriveOutcome.Failed
+                }
             }
         }
         if (written != null) {
-            SyncDiag.mark("Account snapshot written", "ok")
+            if (!unchanged) lastDriveSnapshot = json
+            SyncDiag.mark("Account snapshot written", if (unchanged) "unchanged — not re-sent" else "ok")
             withContext(Dispatchers.Main) {
                 val at = System.currentTimeMillis()
                 val pending = uploads.failed.size + extraFailures

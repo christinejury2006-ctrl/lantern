@@ -120,7 +120,17 @@ object AccountSync {
             val l = localById[id]
             val c = cloudById[id]
             when {
-                l == null && c != null -> mergedBooks += c.copy(filePath = null, pendingUpload = false)
+                // Remote-only: the phone has no file, so nothing may claim it does. The Drive id
+                // and the confirmed-backup stamp are what make this book restorable, so they are
+                // carried over exactly as the cloud recorded them.
+                l == null && c != null -> mergedBooks += c.copy(
+                    filePath = null,
+                    pendingUpload = false,
+                    backupFailed = false,
+                    // The cloud's own confirmation, never inferred from reading progress: a stamp
+                    // invented here would tell the reader a book is safe when it never was.
+                    backupAt = if (c.driveFileId.isNullOrBlank()) 0L else c.backupAt
+                )
                 l != null && c == null -> mergedBooks += l
                 l != null && c != null -> mergedBooks += mergeBook(l, c)
             }
@@ -181,6 +191,9 @@ object AccountSync {
             !cloud.remoteCover.isNullOrBlank() && cloud.remoteCover.startsWith("http") -> cloud.remoteCover
             else -> localCover ?: cloud.remoteCover
         }
+        // The id this book will keep. Local wins when it has one: the local side is where an
+        // upload just happened, and it is the only side that can have been re-verified.
+        val keptId = local.driveFileId ?: cloud.driveFileId
         return local.copy(
             title = if (fileOk || local.title.isNotBlank()) local.title.ifBlank { cloud.title } else cloud.title,
             author = if (fileOk) local.author.ifBlank { cloud.author } else local.author.ifBlank { cloud.author },
@@ -195,8 +208,18 @@ object AccountSync {
             lastReadAt = progress.lastReadAt,
             category = local.category.ifBlank { cloud.category },
             synopsis = local.synopsis.ifBlank { cloud.synopsis },
-            driveFileId = local.driveFileId ?: cloud.driveFileId,
-            pendingUpload = false
+            driveFileId = keptId,
+            // A confirmation is only meaningful for the file id it was issued against. If the two
+            // sides point at the same file, either side's stamp counts; if only one side has an
+            // id, only that side's stamp is evidence.
+            backupAt = when {
+                keptId == null -> 0L
+                local.driveFileId == keptId && cloud.driveFileId == keptId -> maxOf(local.backupAt, cloud.backupAt)
+                local.driveFileId == keptId -> local.backupAt
+                else -> cloud.backupAt
+            },
+            pendingUpload = false,
+            backupFailed = false
         )
     }
 
@@ -242,8 +265,10 @@ object AccountSync {
             .put("synopsis", b.synopsis)
             .put("remoteCover", cover)
             // The Drive file id is what lets a fresh install fetch the book itself, so the
-            // phone never has to keep every file locally.
+            // phone never has to keep every file locally. `backupAt` says whether the contents
+            // behind that id were ever confirmed, which is a different question.
             .put("driveFileId", b.driveFileId.orEmpty())
+            .put("backupAt", b.backupAt)
     }
 
     private fun bookFromCloud(o: JSONObject): LibraryBook? {
@@ -270,7 +295,8 @@ object AccountSync {
             category = o.optString("category", "Library"),
             synopsis = o.optString("synopsis"),
             driveFileId = o.optString("driveFileId").ifBlank { null },
-            pendingUpload = false
+            pendingUpload = false,
+            backupAt = o.optLong("backupAt", 0L)
         )
     }
 

@@ -25,7 +25,10 @@ class AccountSyncMergeTest {
         driveFileId: String? = null,
         filePath: String? = null,
         origin: BookOrigin = BookOrigin.IMPORT,
-        finished: Boolean = false
+        finished: Boolean = false,
+        backupAt: Long = 0L,
+        backupFailed: Boolean = false,
+        pendingUpload: Boolean = false
     ) = LibraryBook(
         id = id,
         title = title,
@@ -37,7 +40,10 @@ class AccountSyncMergeTest {
         currentPage = page,
         lastReadAt = lastRead,
         finished = finished,
-        driveFileId = driveFileId
+        driveFileId = driveFileId,
+        backupAt = backupAt,
+        backupFailed = backupFailed,
+        pendingUpload = pendingUpload
     )
 
     private fun snapshot(
@@ -136,5 +142,65 @@ class AccountSyncMergeTest {
         val local = snapshot(listOf(book("a"), book("b")))
         val merged = AccountSync.merge(local, null)
         assertEquals(listOf("a", "b"), merged.books.map { it.id })
+    }
+
+    @Test
+    fun `a restored book keeps its remote id and claims no local file`() {
+        val cloud = snapshot(listOf(book("a", driveFileId = "drive-1", backupAt = 555L)))
+        val restored = AccountSync.merge(snapshot(emptyList()), cloud).books.single()
+        assertEquals("drive-1", restored.driveFileId)
+        assertEquals(555L, restored.backupAt)
+        assertNull(restored.filePath)
+        assertTrue(!restored.localFileAvailable)
+        assertTrue(BackupRules.restorable(restored))
+    }
+
+    @Test
+    fun `a merge never invents a confirmation the cloud did not have`() {
+        // The cloud entry has an id but was never confirmed; reading progress must not be mistaken
+        // for evidence that the file is safe.
+        val cloud = snapshot(listOf(book("a", driveFileId = "drive-1", backupAt = 0L, lastRead = 9_000L)))
+        val merged = AccountSync.merge(snapshot(emptyList()), cloud).books.single()
+        assertEquals(0L, merged.backupAt)
+        assertEquals(BookBackupState.PENDING, merged.backupState)
+        assertTrue(!BackupRules.restorable(merged))
+    }
+
+    @Test
+    fun `a confirmed backup survives a merge where the phone also has the file`() {
+        val local = book("a", driveFileId = "drive-1", backupAt = 700L)
+        val cloud = book("a", driveFileId = "drive-1", backupAt = 600L)
+        assertEquals(700L, AccountSync.merge(snapshot(listOf(local)), snapshot(listOf(cloud))).books.single().backupAt)
+    }
+
+    @Test
+    fun `a confirmation for a different file is not carried across`() {
+        // The phone points at drive-1 and was confirmed; the cloud now points at drive-2. The
+        // stamp says nothing about drive-2, so only the cloud's own stamp may be used.
+        val local = book("a", driveFileId = "drive-1", backupAt = 700L)
+        val cloud = book("a", driveFileId = "drive-2", backupAt = 0L)
+        val merged = AccountSync.merge(snapshot(listOf(local)), snapshot(listOf(cloud))).books.single()
+        assertEquals("drive-1", merged.driveFileId)
+        assertEquals(700L, merged.backupAt)
+    }
+
+    @Test
+    fun `repeat merges keep the remote ids stable`() {
+        val local = snapshot(listOf(book("a", driveFileId = "drive-1"), book("b")))
+        val cloud = snapshot(listOf(book("a", driveFileId = "drive-1"), book("c", driveFileId = "drive-3")))
+        val once = AccountSync.merge(local, cloud)
+        val twice = AccountSync.merge(once, once)
+        assertEquals("drive-1", twice.books.first { it.id == "a" }.driveFileId)
+        assertEquals("drive-3", twice.books.first { it.id == "c" }.driveFileId)
+        assertEquals(3, twice.books.size)
+    }
+
+    @Test
+    fun `a local failure state does not leak into the account`() {
+        val local = book("a", driveFileId = "drive-1", backupAt = 0L, backupFailed = true)
+        val cloud = book("a", driveFileId = "drive-1", backupAt = 900L)
+        val merged = AccountSync.merge(snapshot(listOf(local)), snapshot(listOf(cloud))).books.single()
+        assertTrue(!merged.backupFailed)
+        assertEquals(900L, merged.backupAt)
     }
 }

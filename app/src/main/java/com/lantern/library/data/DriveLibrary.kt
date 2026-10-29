@@ -56,48 +56,171 @@ object DriveLibrary {
         }
     }
 
+    /**
+     * Puts [file] in the account's Drive and returns the id of the file that now holds it.
+     *
+     * The previous version queried for an existing `loreId` and returned its id immediately, on the
+     * assumption that "there is already a file" means "the right bytes are already there". That is
+     * wrong in the one case that matters: a book whose local file was repaired, re-imported or
+     * re-exported keeps its id and silently never updates its contents, so the reader restores an
+     * old or broken copy on the next phone. Now a match is an instruction to **replace the media**
+     * of that file, keeping the id and the `loreId` association, and the result is verified by
+     * comparing Drive's checksum with the local file's before success is reported.
+     */
     fun upload(token: String, folderId: String, book: LibraryBook, file: File): DriveOutcome<String> {
+        if (!file.exists() || file.length() <= 0L) return DriveOutcome.Failed
         val lock = synchronized(uploadLocks) { uploadLocks.getOrPut(book.id) { Any() } }
         synchronized(lock) {
-            val q = "appProperties has { key='loreId' and value='${escape(book.id)}' } and trashed=false"
-            when (val lookup = query(token, q)) {
-                QueryOutcome.Unauthorized -> return DriveOutcome.Unauthorized
-                QueryOutcome.Error -> return DriveOutcome.Failed
-                is QueryOutcome.Ok -> {
-                    val existing = lookup.ids.firstOrNull()
-                    if (!existing.isNullOrBlank()) return DriveOutcome.Ok(existing)
+            val existing = when (val lookup = findByLoreId(token, book.id)) {
+                LoreLookup.Error -> return DriveOutcome.Failed
+                LoreLookup.NotFound -> null
+                is LoreLookup.Found -> lookup.id
+            }
+            val id = if (existing != null) {
+                when (val replaced = replaceMedia(token, existing, book, file)) {
+                    is DriveOutcome.Ok -> replaced.value
+                    DriveOutcome.Unauthorized -> return DriveOutcome.Unauthorized
+                    DriveOutcome.Failed -> return DriveOutcome.Failed
+                }
+            } else {
+                when (val created = createFile(token, book, file)) {
+                    is DriveOutcome.Ok -> created.value
+                    DriveOutcome.Unauthorized -> return DriveOutcome.Unauthorized
+                    DriveOutcome.Failed -> return DriveOutcome.Failed
                 }
             }
-            val meta = JSONObject()
-                .put("name", driveName(book))
-                .put("parents", JSONArray().put(APP_DATA_FOLDER))
-                .put("appProperties", JSONObject().put("loreId", book.id))
-            val multipart = MultipartBody.Builder()
-                .setType(relatedType)
-                .addPart(
-                    Headers.headersOf("Content-Type", "application/json; charset=UTF-8"),
-                    meta.toString().toRequestBody(jsonType)
-                )
-                .addPart(
-                    Headers.headersOf("Content-Type", mimeFor(book)),
-                    file.asRequestBody(mimeFor(book).toMediaType())
-                )
-                .build()
-            val req = Request.Builder()
-                .url("$UPLOAD?uploadType=multipart")
-                .header("Authorization", "Bearer $token")
-                .post(multipart)
-                .build()
-            val raw = executeRaw(req) ?: return DriveOutcome.Failed
-            if (raw.code == 401) return DriveOutcome.Unauthorized
-            if (!raw.ok || raw.body == null) return DriveOutcome.Failed
-            val id = JSONObject(raw.body).optString("id").takeIf { it.isNotBlank() }
-                ?: return DriveOutcome.Failed
-            return DriveOutcome.Ok(id)
+            // Confirm the bytes are there. A 200 from the upload endpoint is not the same thing as
+            // the file being intact, and a backup that is not confirmed must not be reported.
+            when (val check = verify(token, id, file)) {
+                VerifyOutcome.Verified -> return DriveOutcome.Ok(id)
+                VerifyOutcome.Unauthorized -> return DriveOutcome.Unauthorized
+                VerifyOutcome.Mismatch -> {
+                    // One retry, because the usual cause is a transfer the service truncated.
+                    when (replaceMedia(token, id, book, file)) {
+                        is DriveOutcome.Ok -> Unit
+                        DriveOutcome.Unauthorized -> return DriveOutcome.Unauthorized
+                        DriveOutcome.Failed -> return DriveOutcome.Failed
+                    }
+                    return when (verify(token, id, file)) {
+                        VerifyOutcome.Verified -> DriveOutcome.Ok(id)
+                        VerifyOutcome.Unauthorized -> DriveOutcome.Unauthorized
+                        VerifyOutcome.Mismatch, VerifyOutcome.Unknown -> DriveOutcome.Failed
+                    }
+                }
+                VerifyOutcome.Unknown -> return DriveOutcome.Ok(id)
+            }
         }
     }
 
-    fun download(token: String, fileId: String, dest: File): DriveOutcome<Unit> {
+    private fun createFile(token: String, book: LibraryBook, file: File): DriveOutcome<String> {
+        val meta = JSONObject()
+            .put("name", driveName(book))
+            .put("parents", JSONArray().put(APP_DATA_FOLDER))
+            .put("appProperties", JSONObject().put("loreId", book.id))
+        val multipart = MultipartBody.Builder()
+            .setType(relatedType)
+            .addPart(
+                Headers.headersOf("Content-Type", "application/json; charset=UTF-8"),
+                meta.toString().toRequestBody(jsonType)
+            )
+            .addPart(
+                Headers.headersOf("Content-Type", mimeFor(book)),
+                file.asRequestBody(mimeFor(book).toMediaType())
+            )
+            .build()
+        val req = Request.Builder()
+            .url("$UPLOAD?uploadType=multipart")
+            .header("Authorization", "Bearer $token")
+            .post(multipart)
+            .build()
+        val raw = executeRaw(req) ?: return DriveOutcome.Failed
+        if (raw.code == 401) return DriveOutcome.Unauthorized
+        if (!raw.ok || raw.body == null) return DriveOutcome.Failed
+        val id = JSONObject(raw.body).optString("id").takeIf { it.isNotBlank() }
+            ?: return DriveOutcome.Failed
+        return DriveOutcome.Ok(id)
+    }
+
+    /** Overwrites an existing file's bytes, keeping its id, name and app properties. */
+    private fun replaceMedia(token: String, fileId: String, book: LibraryBook, file: File): DriveOutcome<String> {
+        val req = Request.Builder()
+            .url("$UPLOAD/${enc(fileId)}?uploadType=media")
+            .header("Authorization", "Bearer $token")
+            .patch(file.asRequestBody(mimeFor(book).toMediaType()))
+            .build()
+        val raw = executeRaw(req) ?: return DriveOutcome.Failed
+        if (raw.code == 401) return DriveOutcome.Unauthorized
+        if (!raw.ok) return DriveOutcome.Failed
+        return DriveOutcome.Ok(fileId)
+    }
+
+    /**
+     * Whether the file already in the account holds exactly these bytes.
+     *
+     * `true` — no upload is needed; `false` — the remote copy is stale or broken and must be
+     * replaced; `null` — the service would not say, in which case the caller should upload rather
+     * than assume.
+     *
+     * This exists so that a library which was already backed up is *confirmed* rather than
+     * re-uploaded on every sync: with a few hundred books, "verify then maybe upload" is the
+     * difference between a second of metadata traffic and an hour of mobile data.
+     */
+    fun remoteMatches(token: String, fileId: String, file: File): Boolean? =
+        when (verify(token, fileId, file)) {
+            VerifyOutcome.Verified -> true
+            VerifyOutcome.Mismatch -> false
+            VerifyOutcome.Unauthorized, VerifyOutcome.Unknown -> null
+        }
+
+    /**
+     * Compares Drive's checksum (or size, if the service does not report one) with the local file.
+     * `Unknown` means the service gave us nothing to compare against; the caller then trusts the
+     * upload rather than calling a good upload bad.
+     */
+    private fun verify(token: String, fileId: String, file: File): VerifyOutcome {
+        val req = Request.Builder()
+            .url("$FILES/${enc(fileId)}?fields=id,size,md5Checksum")
+            .header("Authorization", "Bearer $token")
+            .get()
+            .build()
+        val raw = executeRaw(req) ?: return VerifyOutcome.Unknown
+        if (raw.code == 401) return VerifyOutcome.Unauthorized
+        if (!raw.ok || raw.body == null) return VerifyOutcome.Unknown
+        return runCatching {
+            val json = JSONObject(raw.body)
+            val remoteMd5 = json.optString("md5Checksum").takeIf { it.isNotBlank() }
+            val remoteSize = json.optLong("size", -1L)
+            if (remoteMd5 != null) {
+                if (remoteMd5.equals(md5Of(file), ignoreCase = true)) VerifyOutcome.Verified else VerifyOutcome.Mismatch
+            } else if (remoteSize >= 0L) {
+                if (remoteSize == file.length()) VerifyOutcome.Verified else VerifyOutcome.Mismatch
+            } else {
+                VerifyOutcome.Unknown
+            }
+        }.getOrDefault(VerifyOutcome.Unknown)
+    }
+
+    private fun md5Of(file: File): String = java.security.MessageDigest.getInstance("MD5").let { digest ->
+        file.inputStream().use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val read = input.read(buffer)
+                if (read <= 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    /**
+     * Downloads a book and refuses to leave anything invalid in its place.
+     *
+     * The transfer lands in a `.part` file, is checked against the EPUB/PDF container rules in
+     * [BookFiles], and only then replaces [dest] atomically. A captive-portal HTML page, an API
+     * error document or a truncated transfer therefore never becomes a book, and never overwrites
+     * one that was already there.
+     */
+    fun download(token: String, fileId: String, dest: File, format: BookFormat? = null): DriveOutcome<Unit> {
         val req = Request.Builder()
             .url("$FILES/${enc(fileId)}?alt=media")
             .header("Authorization", "Bearer $token")
@@ -106,19 +229,30 @@ object DriveLibrary {
         return runCatching {
             http.newCall(req).execute().use { res ->
                 if (res.code == 401) return@use DriveOutcome.Unauthorized
+                if (res.code == 404) return@use DriveOutcome.Failed
                 if (!res.isSuccessful) return@use DriveOutcome.Failed
                 val body = res.body ?: return@use DriveOutcome.Failed
                 dest.parentFile?.mkdirs()
                 val tmp = File(dest.parentFile, dest.name + ".part")
                 try {
                     tmp.outputStream().use { out -> body.byteStream().copyTo(out) }
-                    if (tmp.length() <= 0L) {
+                    if (tmp.length() < BookFiles.MIN_BYTES) {
                         tmp.delete()
                         return@use DriveOutcome.Failed
                     }
-                    if (!tmp.renameTo(dest)) {
-                        tmp.copyTo(dest, overwrite = true)
+                    val expected = format ?: formatFromName(dest.name)
+                    if (expected != null) {
+                        when (val check = BookFiles.validate(tmp, expected)) {
+                            is BookFiles.Check.Invalid -> {
+                                tmp.delete()
+                                return@use DriveOutcome.Failed
+                            }
+                            BookFiles.Check.Ok -> Unit
+                        }
+                    }
+                    if (!BookFiles.commit(tmp, dest)) {
                         tmp.delete()
+                        return@use DriveOutcome.Failed
                     }
                     DriveOutcome.Ok(Unit)
                 } catch (_: Exception) {
@@ -127,6 +261,13 @@ object DriveLibrary {
                 }
             }
         }.getOrDefault(DriveOutcome.Failed)
+    }
+
+    private fun formatFromName(name: String): BookFormat? = when {
+        name.endsWith(".pdf", ignoreCase = true) -> BookFormat.PDF
+        name.endsWith(".epub", ignoreCase = true) -> BookFormat.EPUB
+        name.endsWith(".txt", ignoreCase = true) -> BookFormat.TEXT
+        else -> null
     }
 
     fun readJsonByLoreId(token: String, loreId: String): DriveOutcome<String?> {
@@ -278,6 +419,13 @@ sealed class LoreLookup {
     data class Found(val id: String) : LoreLookup()
     object NotFound : LoreLookup()
     object Error : LoreLookup()
+}
+
+private sealed class VerifyOutcome {
+    object Verified : VerifyOutcome()
+    object Mismatch : VerifyOutcome()
+    object Unknown : VerifyOutcome()
+    object Unauthorized : VerifyOutcome()
 }
 
 private sealed class QueryOutcome {

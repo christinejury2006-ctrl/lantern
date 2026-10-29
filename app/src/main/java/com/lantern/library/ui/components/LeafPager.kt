@@ -6,7 +6,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -20,12 +19,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Outline
-import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
@@ -33,10 +31,12 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import com.lantern.library.reader.LeafWindow
+import com.lantern.library.reader.LeafWindowMath
 import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.abs
@@ -45,58 +45,49 @@ import kotlin.math.sin
 /**
  * A page that curls the way paper does.
  *
- * ## What this is modelling
+ * ## What it draws
  *
- * Every reader that turns pages properly models the curl the same way: as a **cylinder** rolling
- * across the sheet. The page is cut into three regions by two lines — the curl axis (the crease
- * where the paper leaves the flat page) and the far side of the roll:
+ * The turn is modelled the way every real reader models it — Harism's `android-pagecurl`, the
+ * iBooks mesh transform, the DirectX `page_curl` sample: a cylinder rolling across the sheet, which
+ * divides it into three regions.
  *
- * 1. ahead of the crease, outside the roll — the sheet, still lying flat, front up;
- * 2. inside the roll — the sheet curving away around the cylinder: foreshortened, shaded at the
- *    crease and lit along the crest;
- * 3. behind the crease — the sheet has gone over and lies face down, so what you see there is the
- *    *back* of the same sheet: the front mirrored, and a shade darker.
+ * 1. left of the crease: the sheet, still flat, front up;
+ * 2. between the crease and the roll's far edge: the sheet curving away, shaded at the crease and
+ *    lit along the crest;
+ * 3. past the roll: the same sheet, face down — the *back* of the page, which is the front
+ *    mirrored, and darker.
  *
- * That is the model in Harism's `android-pagecurl` (a ~60-vertex mesh in OpenGL), in Apple's
- * iBooks curl (a private CoreAnimation mesh transform), in the DirectX `page_curl` sample and in
- * Andrew Hung's shader breakdown — a cylinder with a radius and a crease, and per-fragment mapping
- * of those three regions. The physics is the same everywhere; only the renderer differs.
+ * Compose has no mesh, so those regions are built from what exists: clipped copies of the page and
+ * a drawn strip of paper between two curves. The strip tapers to nothing at both ends of the turn,
+ * so no straight edge ever appears.
  *
- * ## Why this is not that, and what it is instead
+ * ## Why the structure looks like this
  *
- * Those implementations deform a *texture*: they sample the page bitmap at a UV the shader
- * computes. Compose has no such hook — a composable can be translated, scaled, rotated and
- * clipped, and that is all; there is no mesh, and `androidx.compose.ui.graphics` exposes no way to
- * warp what a child drew. (This is the same wall that makes every SwiftUI "page curl" tutorial end
- * in a `rotation3DEffect` fold or a `UIViewController` wrapper.)
+ * The reader crashed with `IndexOutOfBoundsException: Index -1 out of bounds for length 0` inside
+ * `ComposerImpl.exitGroup`. That exception means the composition emitted an unbalanced number of
+ * groups — the slot table was asked to close a group that was never opened. Three properties of
+ * this file are the answer to that, and they are not stylistic choices:
  *
- * So this builds the three regions out of the tools that do exist:
+ * 1. **A constant number of composition slots, in a constant order, in every state.** Four boxes
+ *    and a canvas are composed whether the reader is at rest, mid-drag, mid-fling, on page one of
+ *    a one-page book, or looking at an empty book. Visibility comes from `alpha` and from clip
+ *    geometry, never from composing a different set of children. Nothing can be added to or
+ *    removed from this subtree while a gesture is in flight.
  *
- * - the flat part of the sheet: the page, clipped to the region left of the crease;
- * - the back of the sheet: a second copy of the page, mirrored about the crease and clipped to the
- *   part that has gone over — which is why its text is reversed, exactly like the back of a real
- *   page held up to the light;
- * - the roll: a strip of paper between the crease and the roll's outer edge, filled with a
- *   cross-section gradient (dark at the crease, lit at the crest), with a specular hairline and
- *   cast shadows on the page beneath and on the sheet beside it.
+ * 2. **Every index is decided before composition, by a pure function.** [LeafWindowMath] clamps the
+ *    page count, the page and the turn, and returns the two pages that exist. A page list that
+ *    shrinks under a drag (font size, rotation, a chapter jump) can therefore never produce an
+ *    index past the end, which is what used to feed `pages.getOrNull(i)` a null and collapse the
+ *    page subtree mid-turn.
  *
- * Both edges are curves and the strip tapers to nothing at each end of the turn. A straight-edged
- * rectangle that rotates is exactly what this replaces.
+ * 3. **No subcomposition.** The previous version measured itself with `BoxWithConstraints`, which
+ *    is a `SubcomposeLayout`: its children live in a second composition that is composed during
+ *    layout, while the gesture is changing state. The size now arrives from `onSizeChanged` and is
+ *    held in plain state, so this subtree is composed in one composition only.
  *
- * ## Why the layers are unconditional
- *
- * Every layer is composed on every frame, at rest included; visibility comes from the geometry
- * collapsing, not from an `if`. The previous version composed the turning leaf only while it was
- * turning, which added and removed a subtree from the slot table mid-gesture and threw
- * `IndexOutOfBoundsException` out of `ComposerImpl.exitGroup` when a drag began during a
- * recomposition. A stable slot shape makes that impossible rather than unlikely.
- *
- * ## Direction
- *
- * One code path serves both directions. [curl] is 0 when the sheet lies flat over the whole page
- * and 1 when it has gone entirely: a forward turn runs it 0 → 1 with the current page as the
- * sheet, and a backward turn runs the *same* animation 1 → 0 with the previous page as the sheet,
- * which is what the finger sees when it drags back.
+ * The page content is composed twice — once as the sheet's front, once mirrored for its back. That
+ * is inherent: the back of a page is a different picture of the same page, and both are on screen
+ * at once. The two calls sit in different parents, so they never collide as keys.
  */
 @Composable
 fun LeafPager(
@@ -118,24 +109,31 @@ fun LeafPager(
 ) {
     val scope = rememberCoroutineScope()
     val turn = remember { Animatable(0f) }
-    var widthPx by remember { mutableStateOf(0f) }
-    val safeCount = pageCount.coerceAtLeast(1)
-    val safePage = rememberUpdatedState(page.coerceIn(0, safeCount - 1)).value
-    val safeOnPage = rememberUpdatedState(onPage).value
+    var size by remember { mutableStateOf(IntSize.Zero) }
+    val safeCount = if (pageCount > 0) pageCount else 1
+    // Held as state, not as values: the drag block below is remembered across recompositions, so a
+    // captured `page` would be the page the reader was on when the gesture began.
+    val pageState = rememberUpdatedState(LeafWindowMath.clampPage(page, safeCount))
+    val onPageState = rememberUpdatedState(onPage)
+    val safePage = pageState.value
 
-    // A page changed from outside (chapter jump, restore) resets the sheet.
-    LaunchedEffect(page) { if (turn.value != 0f) turn.snapTo(0f) }
+    // A page changed from outside (chapter jump, restore, clamping after a re-pagination) resets
+    // the sheet. `snapTo` never suspends for a frame, so the reader cannot see an intermediate
+    // state where the old sheet is still lifted over the new page.
+    LaunchedEffect(safePage, safeCount) {
+        if (turn.value != 0f) turn.snapTo(0f)
+    }
 
     val settleEasing = CubicBezierEasing(0.22f, 0.68f, 0.28f, 1f)
 
     suspend fun settle() {
         val v = turn.value
         val forward = v >= 0f
-        val target = if (forward) safePage + 1 else safePage - 1
-        val canCommit = target in 0 until safeCount
-        if (canCommit && abs(v) > 0.22f) {
+        val from = pageState.value
+        val target = LeafWindowMath.targetAfterTurn(safeCount, from, forward)
+        if (target != null && abs(v) > 0.22f) {
             turn.animateTo(if (forward) 1f else -1f, tween(durationMillis = 380, easing = settleEasing))
-            safeOnPage(target)
+            onPageState.value(target)
             turn.snapTo(0f)
         } else {
             turn.animateTo(0f, tween(durationMillis = 280, easing = settleEasing))
@@ -149,12 +147,13 @@ fun LeafPager(
             onHorizontalDrag = { change, dragAmount ->
                 if (!turn.isRunning) {
                     change.consume()
-                    val w = widthPx
+                    val w = size.width.toFloat()
                     if (w > 1f) {
                         var next = (turn.value + -dragAmount / w).coerceIn(-1f, 1f)
-                        // There is no sheet past the first or last page.
-                        if (next > 0f && safePage + 1 >= safeCount) next = 0f
-                        if (next < 0f && safePage - 1 < 0) next = 0f
+                        // A drag with nowhere to go is not a turn at all.
+                        val current = pageState.value
+                        if (next > 0f && LeafWindowMath.targetAfterTurn(safeCount, current, true) == null) next = 0f
+                        if (next < 0f && LeafWindowMath.targetAfterTurn(safeCount, current, false) == null) next = 0f
                         scope.launch { turn.snapTo(next) }
                     }
                 }
@@ -162,15 +161,10 @@ fun LeafPager(
         )
     }
 
-    val t = turn.value
-    val forward = t >= 0f
-    val dragged = abs(t).coerceIn(0f, 1f)
-    // Forward: the current page is the sheet, and the turn runs 0 → 1.
-    // Backward: the previous page is the sheet and it un-turns, so the same run goes 1 → 0.
-    val curl = if (forward) dragged else 1f - dragged
-    val sheetPage = (if (forward) safePage else safePage - 1).coerceIn(0, safeCount - 1)
-    val basePage = (if (forward) safePage + 1 else safePage).coerceIn(0, safeCount - 1)
-    val drawing = curl > 0.0005f && curl < 0.9995f
+    val window = LeafWindowMath.window(safeCount, safePage, turn.value)
+    val w = size.width.toFloat()
+    val h = size.height.toFloat()
+    val measured = w > 0f && h > 0f
 
     // The sheet's shading is derived from its own colour, not painted in cream: a night page is
     // deep ink-blue, and a cream highlight on its edge would read as a strip of another material.
@@ -181,146 +175,152 @@ fun LeafPager(
     Box(
         modifier
             .fillMaxSize()
-            .onSizeChanged { widthPx = it.width.toFloat() }
+            .onSizeChanged { size = it }
             .clipToBounds()
             .then(dragMod)
     ) {
-        BoxWithConstraints(Modifier.fillMaxSize()) {
-            val density = LocalDensity.current
-            val w = with(density) { maxWidth.toPx() }
-            val h = with(density) { maxHeight.toPx() }.coerceAtLeast(1f)
+        // ---- Slot 1: the page underneath (revealed by a forward turn, kept by a backward one).
+        Box(Modifier.fillMaxSize()) { pageContent(window.basePage, false) }
 
-            // All curvature is multiplied by sin(π · curl), so the roll has neither width nor bend
-            // at either end of the turn: it grows out of the page and shrinks back into it, which
-            // is what keeps the first and last frame indistinguishable from a still page.
-            val bend = sin(PI * curl).toFloat()
-            val c = w * (1f - curl)                        // centre of the roll
-            val rollW = 0.085f * w * bend                  // width of the strip at the crest
-            val creaseBow = -0.030f * w * bend             // the crease bows back from the roll
-            val outerBow = 0.055f * w * bend               // the outer edge bows out past it
-            val creaseBase = c - rollW / 2f
-            val outerBase = c + rollW / 2f
-            // Where the folded-back sheet ends. Once the roll has passed the middle of the page this
-            // is off the left edge, and the region is clamped to the screen.
-            val tipBase = 2f * c - w
+        // ---- Slot 2: the sheet itself, flat, front up, everything left of the crease.
+        Box(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer { alpha = if (window.drawing) 1f else 0f }
+                .then(sheetClip(window, w, h, measured))
+        ) { pageContent(window.sheetPage, true) }
 
-            fun creaseAt(y: Float) = creaseBase + creaseBow * sin(PI * y / h).toFloat()
-            fun outerAt(y: Float) = outerBase + outerBow * sin(PI * y / h).toFloat()
+        // ---- Slot 3: the back of the same sheet, mirrored about the crease and lit from behind.
+        Box(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer { alpha = if (window.drawing) 1f else 0f }
+                .then(backClip(window, w, h, measured))
+        ) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        transformOrigin = TransformOrigin(0f, 0f)
+                        scaleX = -1f
+                        // Mirroring happens about the crease, which sits at x = c.
+                        translationX = 2f * w * (1f - window.curl)
+                    }
+            ) { pageContent(window.sheetPage, false) }
+        }
 
-            // Clips are plain paths: a Shape whose outline is the region we computed. This is the
-            // one job `Modifier.clip` can do that a transformed copy of the content cannot.
-            val sheetShape = PathShape { leftOf(::creaseAt, w, h) }
-            val backPath = between({ tipBase }, ::creaseAt, w, h)
-            val backShape = PathShape { backPath }
-
-            // 1. The page underneath — the one being revealed (forward) or kept (backward).
-            Box(Modifier.fillMaxSize()) { pageContent(basePage, false) }
-
-            // 2. The sheet, flat, front up: everything left of the crease.
-            Box(Modifier.fillMaxSize().clip(sheetShape)) { pageContent(sheetPage, true) }
-
-            // 3. The shadow the folded-back sheet drops on the page it is covering. Drawn between
-            //    the two so it lands on the page and under the sheet.
-            Canvas(Modifier.fillMaxSize()) {
-                if (!drawing || w <= 0f) return@Canvas
-                if (tipBase > 1f) {
-                    drawRect(
-                        Brush.horizontalGradient(
-                            colorStops = arrayOf(
-                                0f to Color.Transparent,
-                                1f to Color.Black.copy(alpha = 0.22f * bend)
-                            ),
-                            startX = tipBase - 0.16f * w,
-                            endX = tipBase
-                        )
-                    )
-                }
-            }
-
-            // 4. The back of the sheet: the same page, mirrored about the crease, clipped to the
-            //    part that has gone over. Reversed type is the honest thing to draw here — it is
-            //    what the underside of a printed page looks like.
-            Box(Modifier.fillMaxSize().clip(backShape)) {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            transformOrigin = TransformOrigin(0f, 0f)
-                            scaleX = -1f
-                            translationX = 2f * c
-                        }
-                ) { pageContent(sheetPage, false) }
-            }
-
-            // 5. The roll itself, its shadows, and the crease.
-            Canvas(Modifier.fillMaxSize()) {
-                if (!drawing || w <= 0f) return@Canvas
-                val roll = between(::creaseAt, ::outerAt, w, h)
-
-                // The back of the sheet is paper seen from behind: a shade darker.
-                clipPath(backPath) { drawRect(backTint.copy(alpha = 0.55f)) }
-
-                // The page revealed under the curl sits in the roll's shadow.
-                drawPath(
-                    rightOf(::outerAt, w, h),
-                    Brush.horizontalGradient(
-                        colorStops = arrayOf(
-                            0f to Color.Black.copy(alpha = 0.30f * bend),
-                            0.45f to Color.Black.copy(alpha = 0.10f * bend),
-                            1f to Color.Transparent
-                        ),
-                        startX = outerBase,
-                        endX = outerBase + 0.24f * w
-                    )
-                )
-
-                // The strip: paper, turning away into shadow at the crease, lit at the crest.
-                drawPath(roll, paper)
-                drawPath(
-                    roll,
-                    Brush.horizontalGradient(
-                        colorStops = arrayOf(
-                            0f to Color.Black.copy(alpha = 0.30f * bend),
-                            0.30f to Color.Black.copy(alpha = 0.08f * bend),
-                            0.62f to Color.Transparent,
-                            0.86f to lit.copy(alpha = 0.85f * bend),
-                            1f to Color.Black.copy(alpha = 0.16f * bend)
-                        ),
-                        startX = creaseBase,
-                        endX = outerBase
-                    )
-                )
-                // Fibres, so the strip is a piece of the sheet and not a block of colour.
-                var y = 12f
-                while (y < h) {
-                    drawLine(
-                        fibre,
-                        Offset(creaseAt(y), y),
-                        Offset(outerAt(y), y - 0.6f),
-                        strokeWidth = 1f,
-                        alpha = 0.05f
-                    )
-                    y += 15f
-                }
-                // The crest: a specular run along the outer edge, and the shadow the crease casts.
-                drawPath(
-                    edgePath(::outerAt, w, h),
-                    lit.copy(alpha = 0.70f * bend),
-                    style = Stroke(width = 2.5.dp.toPx())
-                )
-                drawPath(
-                    edgePath(::creaseAt, w, h),
-                    Color.Black.copy(alpha = 0.18f * bend),
-                    style = Stroke(width = 1.5.dp.toPx())
-                )
-            }
+        // ---- Slot 4: the roll, its shadows and its specular crest. Always composed.
+        Canvas(Modifier.fillMaxSize()) {
+            if (!window.drawing || !measured) return@Canvas
+            drawRoll(window, w, paper, lit, fibre, backTint)
         }
     }
 }
 
+/**
+ * Clip to everything left of the (curved) crease: the flat part of the sheet.
+ *
+ * At rest the window is not drawing, so the sheet slot is transparent and this is never seen; when
+ * the turn begins, the crease starts at the right edge and moves left.
+ */
+private fun sheetClip(window: LeafWindow, w: Float, h: Float, measured: Boolean): Modifier {
+    if (!measured || !window.drawing) return Modifier
+    val geometry = CurlGeometry(w, h, window.curl)
+    return Modifier.clip(PathShape { leftOf(geometry.creaseAt, w, h) })
+}
+
+/** Clip to the part of the page that has gone over, which is where its back is visible. */
+private fun backClip(window: LeafWindow, w: Float, h: Float, measured: Boolean): Modifier {
+    if (!measured || !window.drawing) return Modifier
+    val geometry = CurlGeometry(w, h, window.curl)
+    val tip = 2f * geometry.centre - w
+    return Modifier.clip(PathShape { between({ tip }, geometry.creaseAt, w, h) })
+}
+
+/**
+ * The two curves and the strip between them, for one value of the turn.
+ *
+ * All curvature is multiplied by `sin(π · curl)`, so the roll has neither width nor bend at either
+ * end of the turn: it grows out of the page and shrinks back into it, which is what keeps the first
+ * and last frame of a turn indistinguishable from a still page.
+ */
+private class CurlGeometry(w: Float, val h: Float, curl: Float) {
+    val bend = sin(PI * curl).toFloat()
+    val centre = w * (1f - curl)
+    private val rollWidth = 0.085f * w * bend
+    private val creaseBow = -0.030f * w * bend
+    private val outerBow = 0.055f * w * bend
+    val creaseBase = centre - rollWidth / 2f
+    val outerBase = centre + rollWidth / 2f
+
+    fun creaseAt(y: Float): Float = creaseBase + creaseBow * sin(PI * y / h).toFloat()
+    fun outerAt(y: Float): Float = outerBase + outerBow * sin(PI * y / h).toFloat()
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawRoll(
+    window: LeafWindow,
+    w: Float,
+    paper: Color,
+    lit: Color,
+    fibre: Color,
+    backTint: Color
+) {
+    val h = size.height
+    if (h <= 0f) return
+    val geometry = CurlGeometry(w, h, window.curl)
+    val bend = geometry.bend
+    val crease = geometry::creaseAt
+    val outer = geometry::outerAt
+    val tip = 2f * geometry.centre - w
+
+    // The back of the sheet is paper seen from behind: a shade darker.
+    clipPath(between({ tip }, crease, w, h)) { drawRect(backTint.copy(alpha = 0.55f)) }
+
+    // The page revealed under the curl sits in the roll's shadow.
+    drawPath(
+        rightOf(outer, w, h),
+        Brush.horizontalGradient(
+            colorStops = arrayOf(
+                0f to Color.Black.copy(alpha = 0.30f * bend),
+                0.45f to Color.Black.copy(alpha = 0.10f * bend),
+                1f to Color.Transparent
+            ),
+            startX = geometry.outerBase,
+            endX = geometry.outerBase + 0.24f * w
+        )
+    )
+
+    // The strip: paper, turning away into shadow at the crease, lit at the crest.
+    val roll = between(crease, outer, w, h)
+    drawPath(roll, paper)
+    drawPath(
+        roll,
+        Brush.horizontalGradient(
+            colorStops = arrayOf(
+                0f to Color.Black.copy(alpha = 0.30f * bend),
+                0.30f to Color.Black.copy(alpha = 0.08f * bend),
+                0.62f to Color.Transparent,
+                0.86f to lit.copy(alpha = 0.85f * bend),
+                1f to Color.Black.copy(alpha = 0.16f * bend)
+            ),
+            startX = geometry.creaseBase,
+            endX = geometry.outerBase
+        )
+    )
+    // Fibres, so the strip is a piece of the sheet and not a block of colour.
+    var y = 12f
+    while (y < h) {
+        drawLine(fibre, Offset(crease(y), y), Offset(outer(y), y - 0.6f), strokeWidth = 1f, alpha = 0.05f)
+        y += 15f
+    }
+    // The crest: a specular run along the outer edge, and the shadow the crease casts.
+    drawPath(edgePath(outer, w, h), lit.copy(alpha = 0.70f * bend), style = Stroke(width = 2.5.dp.toPx()))
+    drawPath(edgePath(crease, w, h), Color.Black.copy(alpha = 0.18f * bend), style = Stroke(width = 1.5.dp.toPx()))
+}
+
 /** A clip region built from the curl geometry. */
 private class PathShape(private val build: () -> Path) : Shape {
-    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline =
+    override fun createOutline(size: androidx.compose.ui.geometry.Size, layoutDirection: LayoutDirection, density: Density): Outline =
         Outline.Generic(build())
 }
 

@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.lantern.library.data.BookBackupState
 import com.lantern.library.data.BookFormat
 import com.lantern.library.data.BookOrigin
 import com.lantern.library.data.CloudAccount
@@ -61,8 +62,12 @@ fun ProfileScreen(
 ) {
     val palette = nookPalette(prefs.theme)
     val fileBooks = books.filter { it.origin != BookOrigin.BUNDLED && it.format != BookFormat.TEXT }
-    val backedUp = fileBooks.count { !it.driveFileId.isNullOrBlank() }
-    val waiting = fileBooks.count { it.driveFileId.isNullOrBlank() && it.localFileAvailable }
+    // Counted from the confirmed state, not from "an id exists". A book whose Drive id was never
+    // verified is still waiting — telling the reader it is backed up is how they end up deleting
+    // the only copy that existed.
+    val backedUp = fileBooks.count { it.backupState == BookBackupState.BACKED_UP }
+    val failed = fileBooks.count { it.backupState == BookBackupState.FAILED }
+    val waiting = fileBooks.count { it.backupState == BookBackupState.PENDING && it.localFileAvailable }
     val elsewhere = fileBooks.count { it.driveFileId.isNullOrBlank() && !it.localFileAvailable }
 
     NookBackdrop(palette) {
@@ -113,6 +118,13 @@ fun ProfileScreen(
                             )
                             if (waiting > 0) {
                                 SyncRow(palette, "Waiting to upload", "$waiting book${if (waiting == 1) "" else "s"}")
+                            }
+                            if (failed > 0) {
+                                SyncRow(
+                                    palette,
+                                    "Backup failed",
+                                    "$failed book${if (failed == 1) "" else "s"} — will retry on the next sync"
+                                )
                             }
                             if (elsewhere > 0) {
                                 SyncRow(palette, "Not on this phone", "$elsewhere available from your account")

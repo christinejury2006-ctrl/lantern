@@ -1223,15 +1223,37 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         return ready
     }
 
+    /**
+     * Fetches a book's bytes if this phone does not have them, and returns a book that points at a
+     * file which is known to be a valid EPUB/PDF.
+     *
+     * The download is written to `.part`, checked by [BookFiles], and only then moved into place,
+     * so an HTML error page or a half-finished transfer can never be mistaken for the reader's
+     * book. Local metadata is updated only after that succeeds — and because a completed download
+     * proves the cloud holds these bytes, it also stamps [LibraryBook.backupAt].
+     */
     private suspend fun ensureCached(book: LibraryBook): LibraryBook? {
         if (book.origin == BookOrigin.BUNDLED || book.format == BookFormat.TEXT) return book
         val local = book.filePath?.let { File(it) }
-        if (local != null && local.exists() && local.length() > 0L) return book
+        if (local != null && local.exists() && local.length() > 0L &&
+            BookFiles.validate(local, book.format) is BookFiles.Check.Ok
+        ) {
+            return book
+        }
         val driveId = book.driveFileId ?: return null
         val dest = File(BookIo.booksDir(getApplication()), cacheFileName(book))
-        val ok = withDrive { token, _ -> DriveLibrary.download(token, driveId, dest) }
-        if (ok == null || !dest.exists() || dest.length() <= 0L) return null
-        val updated = book.copy(filePath = dest.absolutePath)
+        val ok = withDrive { token, _ -> DriveLibrary.download(token, driveId, dest, book.format) }
+        if (ok == null) return null
+        if (!dest.exists() || dest.length() <= 0L) return null
+        if (BookFiles.validate(dest, book.format) !is BookFiles.Check.Ok) {
+            runCatching { dest.delete() }
+            return null
+        }
+        val updated = book.copy(
+            filePath = dest.absolutePath,
+            backupAt = maxOf(book.backupAt, System.currentTimeMillis()),
+            backupFailed = false
+        )
         withContext(Dispatchers.Main) { upsert(updated) }
         maybeEvictCache(keepId = book.id)
         return updated
@@ -1318,59 +1340,100 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
 
 
     /**
-     * Back up local imported/downloaded EPUBs and PDFs before syncing their metadata.
-     * A book only receives a cloud file ID after Drive confirms the upload succeeded.
-     * Existing IDs are retained and local files are never removed by this operation.
+     * Puts every book that still owes the cloud a file into Drive, and records what happened.
+     *
+     * Three things changed here and each of them was a real way to lose a book:
+     *
+     * - **Stale copies are re-uploaded.** The old filter only looked at books with no Drive id, so a
+     *   book whose remote copy was older than the local file was skipped forever.
+     * - **Nothing is called backed up without confirmation.** A book only gets [LibraryBook.backupAt]
+     *   after `DriveLibrary.upload` has verified the bytes against Drive's checksum. A failed upload
+     *   leaves `backupFailed` set and the book queued.
+     * - **The caller learns whether the account is complete**, so a snapshot is never presented as a
+     *   finished backup when some of it is missing.
      */
-    private suspend fun uploadAvailableBooks() {
+    private suspend fun uploadAvailableBooks(): UploadSummary {
         val candidates = withContext(Dispatchers.Main) {
             synchronized(libraryLock) { books.toList() }
         }.filter { book ->
-            book.origin != BookOrigin.BUNDLED &&
-                book.format != BookFormat.TEXT &&
-                book.driveFileId.isNullOrBlank() &&
-                book.filePath?.let { path -> File(path).let { it.exists() && it.length() > 0L } } == true
+            val file = book.filePath?.let(::File)
+            BackupRules.needsUpload(book, file != null && file.exists() && file.length() > 0L)
         }
-        if (candidates.isEmpty()) return
-        val uploadOutcome = withDriveOutcome { token, owner ->
+        if (candidates.isEmpty()) return UploadSummary(attempted = 0, confirmed = emptyList(), failed = emptyList())
+
+        val outcome = withDriveOutcome { token, owner ->
             when (val folder = DriveLibrary.ensureFolder(token, owner)) {
                 is DriveOutcome.Ok -> {
-                    val results = ArrayList<Pair<String, String>>()
+                    val confirmed = ArrayList<Pair<String, String>>()
+                    val failed = ArrayList<String>()
                     for (book in candidates) {
-                        val file = book.filePath?.let(::File) ?: continue
-                        if (!file.exists() || file.length() <= 0L) continue
+                        val file = book.filePath?.let(::File)
+                        if (file == null || !file.exists() || file.length() <= 0L) {
+                            failed += book.id
+                            continue
+                        }
+                        // A book that already has an id is checked before it is re-sent: if the
+                        // account already holds these exact bytes, the only thing missing is the
+                        // confirmation, and moving the file again would be pointless traffic.
+                        val existing = book.driveFileId
+                        if (!existing.isNullOrBlank() && DriveLibrary.remoteMatches(token, existing, file) == true) {
+                            confirmed += book.id to existing
+                            continue
+                        }
                         when (val result = DriveLibrary.upload(token, folder.value, book, file)) {
-                            is DriveOutcome.Ok -> results += book.id to result.value
+                            is DriveOutcome.Ok -> confirmed += book.id to result.value
                             DriveOutcome.Unauthorized -> return@withDriveOutcome DriveOutcome.Unauthorized
-                            DriveOutcome.Failed -> Unit
+                            DriveOutcome.Failed -> failed += book.id
                         }
                     }
-                    DriveOutcome.Ok(results)
+                    DriveOutcome.Ok(confirmed to failed)
                 }
                 DriveOutcome.Unauthorized -> DriveOutcome.Unauthorized
                 DriveOutcome.Failed -> DriveOutcome.Failed
             }
-        } ?: return
-        val uploaded = when (uploadOutcome) {
-            is DriveOutcome.Ok -> uploadOutcome.value
-            DriveOutcome.Unauthorized, DriveOutcome.Failed -> return
         }
-        if (uploaded.isEmpty()) return
+
+        val summary = when (outcome) {
+            is DriveOutcome.Ok -> UploadSummary(candidates.size, outcome.value.first, outcome.value.second)
+            // No token, no answer: every candidate is still owed, and none may be marked done.
+            else -> UploadSummary(candidates.size, emptyList(), candidates.map { it.id })
+        }
+        val now = System.currentTimeMillis()
         withContext(Dispatchers.Main) {
-            uploaded.forEach { (bookId, fileId) ->
+            summary.confirmed.forEach { (bookId, fileId) ->
                 val latest = book(bookId) ?: return@forEach
-                if (latest.driveFileId.isNullOrBlank()) {
-                    upsert(latest.copy(driveFileId = fileId, pendingUpload = false))
-                }
+                upsert(
+                    latest.copy(
+                        driveFileId = fileId,
+                        pendingUpload = false,
+                        backupFailed = false,
+                        backupAt = now
+                    )
+                )
+            }
+            summary.failed.forEach { bookId ->
+                val latest = book(bookId) ?: return@forEach
+                upsert(latest.copy(pendingUpload = true, backupFailed = true, backupAt = 0L))
             }
         }
+        return summary
+    }
+
+    /** What a backup pass managed to confirm, and what it still owes. */
+    private data class UploadSummary(
+        val attempted: Int,
+        val confirmed: List<Pair<String, String>>,
+        val failed: List<String>
+    ) {
+        val complete: Boolean get() = failed.isEmpty()
     }
 
     private suspend fun runAccountSync(announce: Boolean) {
         if (!account.signedIn || account.provider != "google") return
         if (GoogleAuth.accountId(getApplication<Application>()).isNullOrBlank()) return
         if (!networkReady()) return
-        uploadAvailableBooks()
+        // Files first: the snapshot describes them, so it must not be written before them.
+        val uploads = uploadAvailableBooks()
         val local = withContext(Dispatchers.Main) { currentSnapshot() }
         val cloudOutcome = withDriveOutcome { token, owner ->
             when (val folder = DriveLibrary.ensureFolder(token, owner)) {
@@ -1388,26 +1451,38 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             is DriveOutcome.Ok -> cloudOutcome.value
         }
         val cloud = AccountSync.fromJson(cloudRaw)
+        // One Google account must never inherit another's library. Drive's appDataFolder is already
+        // per-user, and this is the second lock: if the snapshot names an account and it is not the
+        // one signed in, nothing is merged and nothing is written over it.
+        if (cloud != null && cloud.userId.isNotBlank() && local.userId.isNotBlank() && cloud.userId != local.userId) {
+            if (announce) withContext(Dispatchers.Main) {
+                toast("That backup belongs to a different Google account. Sign in with the account it was made with.")
+            }
+            return
+        }
         var merged = AccountSync.merge(local, cloud)
-        // Put the book files themselves in the account, so the library can be restored on
-        // another phone without keeping every download on this one.
-        val uploads = merged.books.filter {
-            it.origin != BookOrigin.BUNDLED &&
-                it.format != BookFormat.TEXT &&
-                it.driveFileId == null &&
-                it.localFileAvailable
+        // Books that arrived from the cloud have no file here; books added locally since the pass
+        // above still owe one. Deliberately excludes anything the phone cannot read, and caps the
+        // batch so one sync cannot turn into an hour of uploads on a phone connection.
+        val stillOwed = merged.books.filter { b ->
+            val file = b.filePath?.let(::File)
+            BackupRules.needsUpload(b, file != null && file.exists() && file.length() > 0L)
         }.take(40)
-        if (uploads.isNotEmpty()) {
+        var extraFailures = 0
+        if (stillOwed.isNotEmpty()) {
             val uploaded = withContext(Dispatchers.IO) {
                 val done = HashMap<String, String>()
+                var failed = 0
                 withDrive { token, owner ->
                     when (val folder = DriveLibrary.ensureFolder(token, owner)) {
                         is DriveOutcome.Ok -> {
-                            for (book in uploads) {
+                            for (book in stillOwed) {
                                 val file = book.filePath?.let { File(it) } ?: continue
                                 if (!file.exists() || file.length() <= 0L) continue
-                                val result = DriveLibrary.upload(token, folder.value, book, file)
-                                if (result is DriveOutcome.Ok) done[book.id] = result.value
+                                when (val result = DriveLibrary.upload(token, folder.value, book, file)) {
+                                    is DriveOutcome.Ok -> done[book.id] = result.value
+                                    else -> failed++
+                                }
                             }
                             DriveOutcome.Ok(done)
                         }
@@ -1415,12 +1490,16 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                         DriveOutcome.Failed -> DriveOutcome.Failed
                     }
                 }
+                extraFailures = failed
                 done
             }
             if (uploaded.isNotEmpty()) {
+                val at = System.currentTimeMillis()
                 merged = merged.copy(
                     books = merged.books.map { b ->
-                        uploaded[b.id]?.let { b.copy(driveFileId = it, pendingUpload = false) } ?: b
+                        uploaded[b.id]?.let {
+                            b.copy(driveFileId = it, pendingUpload = false, backupFailed = false, backupAt = at)
+                        } ?: b
                     }
                 )
                 withContext(Dispatchers.Main) { applySnapshot(merged) }
@@ -1442,9 +1521,23 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         if (written != null) {
             withContext(Dispatchers.Main) {
                 val at = System.currentTimeMillis()
-                prefs.edit().putBoolean("sync_dirty", false).putLong("lastSyncAt", at).apply()
+                val pending = uploads.failed.size + extraFailures
+                // The dirty flag means "the account is fully up to date". While a file is still
+                // owed, it stays set so the next sync retries it.
+                prefs.edit()
+                    .putBoolean("sync_dirty", pending > 0)
+                    .putLong("lastSyncAt", at)
+                    .apply()
                 account = account.copy(lastSyncAt = at)
-                if (announce) toast("Account sync complete")
+                if (announce) {
+                    toast(
+                        when {
+                            pending == 0 -> "Account sync complete"
+                            pending == 1 -> "Library synced. 1 book is still waiting to upload."
+                            else -> "Library synced. $pending books are still waiting to upload."
+                        }
+                    )
+                }
             }
         } else if (announce) {
             withContext(Dispatchers.Main) { toast("Could not sync account. Library stays on this phone.") }
@@ -1465,15 +1558,22 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     val localFile = local?.filePath?.let { File(it) }
                     val fileOk = localFile != null && localFile.exists() && localFile.length() > 0L
                     next += if (local != null) {
+                        val keptId = local.driveFileId ?: cloudBook.driveFileId
                         cloudBook.copy(
                             filePath = if (fileOk) local.filePath else null,
                             remoteCover = local.remoteCover?.takeIf { !it.startsWith("http") && File(it).exists() }
                                 ?: cloudBook.remoteCover ?: local.remoteCover,
-                            driveFileId = local.driveFileId ?: cloudBook.driveFileId,
-                            pendingUpload = false
+                            driveFileId = keptId,
+                            // Keep the confirmation only while it belongs to the id we still point
+                            // at; a stamp for a different file is not evidence about this one.
+                            backupAt = if (keptId == local.driveFileId) maxOf(local.backupAt, cloudBook.backupAt)
+                            else cloudBook.backupAt,
+                            pendingUpload = false,
+                            backupFailed = local.backupFailed && !fileOk
                         )
                     } else {
-                        cloudBook.copy(filePath = null, pendingUpload = false)
+                        // Remote-only: no file on this phone, and nothing may say there is.
+                        cloudBook.copy(filePath = null, pendingUpload = false, backupFailed = false)
                     }
                 }
                 val ordered = ArrayList<LibraryBook>(next.size)
@@ -1706,7 +1806,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     filePath, o.optString("remoteEpub").ifBlank { null }, null,
                     o.optInt("pageCount", 1), o.optInt("currentPage", 0), o.optBoolean("finished"), o.optLong("addedAt", System.currentTimeMillis()),
                     o.optLong("lastReadAt"), o.optString("category", "Library"), o.optString("synopsis"), emptyList(),
-                    o.optString("driveFileId").ifBlank { null }, o.optBoolean("pendingUpload", false)
+                    o.optString("driveFileId").ifBlank { null }, o.optBoolean("pendingUpload", false),
+                    o.optLong("backupAt", 0L), o.optBoolean("backupFailed", false)
                 )
             }
         }
@@ -1746,6 +1847,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     .put("pageCount", b.pageCount).put("currentPage", b.currentPage).put("finished", b.finished).put("addedAt", b.addedAt)
                     .put("lastReadAt", b.lastReadAt).put("category", b.category).put("synopsis", b.synopsis)
                     .put("driveFileId", b.driveFileId ?: "").put("pendingUpload", b.pendingUpload)
+                    .put("backupAt", b.backupAt).put("backupFailed", b.backupFailed)
             )
         }
         atomicWrite(booksFile, arr.toString())

@@ -20,6 +20,20 @@ enum class BookFormat { TEXT, EPUB, PDF }
 
 enum class BookOrigin { BUNDLED, DOWNLOAD, IMPORT }
 
+/**
+ * How safe a book's contents are.
+ *
+ * Kept explicit rather than inferred at each call site: the reader will eventually delete their
+ * own copies of these files, so "somewhere in the cloud" has to be a fact the app can prove, not a
+ * hope. [BACKED_UP] is only reachable after a verified upload or a verified download.
+ */
+enum class BookBackupState {
+    NOT_APPLICABLE,
+    PENDING,
+    BACKED_UP,
+    FAILED
+}
+
 enum class ReaderTheme(val label: String) { LIGHT("Light Mode"), DARK("Dark Mode") }
 
 data class Chapter(val title: String, val body: String, val href: String = "")
@@ -72,7 +86,18 @@ data class LibraryBook(
     val synopsis: String = "",
     val chapters: List<Chapter> = emptyList(),
     val driveFileId: String? = null,
-    val pendingUpload: Boolean = false
+    val pendingUpload: Boolean = false,
+    /**
+     * When the remote copy of this book's *contents* was last confirmed, in epoch millis.
+     *
+     * Zero means "no confirmed backup", and it stays zero until an upload has been verified against
+     * Drive's checksum. A book whose metadata is synced is not thereby backed up: the snapshot
+     * describes a file that may never have been uploaded, and the reader is planning to delete
+     * their own copies on the strength of that claim.
+     */
+    val backupAt: Long = 0L,
+    /** The last attempt to back this book up failed; it stays queued for retry. */
+    val backupFailed: Boolean = false
 ) {
     val localFileAvailable: Boolean
         get() {
@@ -87,6 +112,17 @@ data class LibraryBook(
             pageCount <= 0 -> 0f
             lastReadAt == 0L && currentPage == 0 -> 0f
             else -> ((currentPage + 1).toFloat() / pageCount.toFloat()).coerceIn(0f, 1f)
+        }
+
+    /** What the reader can honestly be told about this book's cloud copy. */
+    val backupState: BookBackupState
+        get() = when {
+            origin == BookOrigin.BUNDLED || format == BookFormat.TEXT -> BookBackupState.NOT_APPLICABLE
+            backupAt > 0L && !pendingUpload -> BookBackupState.BACKED_UP
+            backupFailed -> BookBackupState.FAILED
+            pendingUpload || driveFileId == null -> BookBackupState.PENDING
+            // An id without a confirmation is still unverified: it may hold an older file.
+            else -> BookBackupState.PENDING
         }
 
     val shelf: Shelf

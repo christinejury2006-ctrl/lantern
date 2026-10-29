@@ -493,15 +493,20 @@ fun ReaderScreen(
             }
             else -> key(book.id, epubUsesPager) {
                 if (epubUsesPager) {
-                    LeafPager(
-                        pageCount = pageCount,
-                        page = epubPage,
-                        onPage = { epubPage = it },
-                        enabled = !menuOpen,
-                        paper = palette.page,
-                        modifier = Modifier.fillMaxSize().onSizeChanged { pageBox = it }
-                    ) { i, interactive ->
-                        key(prefs.fontSizeSp, i) {
+                    // The pager is re-created when anything that decides where a page *breaks*
+                    // changes — the book, the font size, the measured page box — instead of being
+                    // re-fed underneath a curl in flight. A page list that shrinks during an
+                    // animation is what used to hand `PageLeaf` a null page mid-turn; now the
+                    // surface is rebuilt from a clean state and starts on the reader's page.
+                    key(prefs.fontSizeSp, pages.size) {
+                        LeafPager(
+                            pageCount = pages.size.coerceAtLeast(1),
+                            page = epubPage,
+                            onPage = { epubPage = it },
+                            enabled = !menuOpen,
+                            paper = palette.page,
+                            modifier = Modifier.fillMaxSize().onSizeChanged { pageBox = it }
+                        ) { i, interactive ->
                             PageLeaf(
                                 pages.getOrNull(i), family, prefs.fontSizeSp, ink,
                                 Modifier.fillMaxSize()
@@ -1035,36 +1040,38 @@ private fun PageLeaf(page: ReaderPage?, family: FontFamily, size: Float, ink: Co
             bottom = PagePadBottom
         )
     ) {
+        // No early return here. A page that is not available yet draws a placeholder in the same
+        // slot the text would occupy, so the page subtree has one shape from the first frame after
+        // a re-pagination to the last. Returning early is legal Kotlin, but it makes the number of
+        // composition groups depend on data that can change while a gesture is running, which is
+        // the class of thing that took the reader down.
         if (page == null) {
             Text("…", color = ink, fontFamily = family)
-            return
-        }
-        if (page.showChapterTitle) {
+        } else {
+            if (page.showChapterTitle) {
+                Text(
+                    page.chapterTitle, color = ink, fontFamily = family, fontSize = (size + 10).sp,
+                    modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center
+                )
+                Spacer(Modifier.height(PageTitleGap))
+            }
+            // A page is a block of text, not a column of lines: the paragraphs flow into one
+            // justified measure rather than each starting a new, ragged line at the left edge.
             Text(
-                page.chapterTitle, color = ink, fontFamily = family, fontSize = (size + 10).sp,
-                modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center
+                text = buildAnnotatedString {
+                    page.paragraphs.forEachIndexed { i, para ->
+                        if (i > 0) append("\n\n")
+                        append(para.trim())
+                    }
+                },
+                color = ink,
+                fontFamily = family,
+                fontSize = size.sp,
+                lineHeight = (size * 1.55f).sp,
+                textAlign = TextAlign.Justify,
+                modifier = Modifier.fillMaxWidth()
             )
-            Spacer(Modifier.height(PageTitleGap))
         }
-        // A page is a block of text, not a column of lines: the paragraphs flow into one
-        // justified measure rather than each starting a new, ragged line at the left edge. The
-        // old layout stacked every paragraph as its own Text, and on a page where the paginator
-        // had put a line or two in each, that read as one short line per paragraph — which is
-        // what the "text overflowing the page" screenshot actually was.
-        Text(
-            text = buildAnnotatedString {
-                page.paragraphs.forEachIndexed { i, para ->
-                    if (i > 0) append("\n\n")
-                    append(para.trim())
-                }
-            },
-            color = ink,
-            fontFamily = family,
-            fontSize = size.sp,
-            lineHeight = (size * 1.55f).sp,
-            textAlign = TextAlign.Justify,
-            modifier = Modifier.fillMaxWidth()
-        )
     }
 }
 

@@ -18,8 +18,8 @@ import org.junit.Test
  */
 class LeafWindowTest {
 
-    private fun window(count: Int, page: Int, turn: Float) =
-        LeafWindowMath.window(count, page, turn)
+    private fun window(pageCount: Int, page: Int, turn: Float) =
+        LeafWindowMath.window(pageCount, page, turn)
 
     @Test
     fun `an empty book still yields a valid single page`() {

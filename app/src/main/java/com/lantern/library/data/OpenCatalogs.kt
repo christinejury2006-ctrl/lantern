@@ -47,6 +47,34 @@ data class Elsewhere(
 )
 
 /**
+ * What one catalogue did on one search.
+ *
+ * Explore promised an answer from four services and reported one merged list, so "nothing found"
+ * covered three very different facts: the book is not in any catalogue, one catalogue was skipped
+ * because another had it, or a host simply did not answer. Only the first is about the book. This
+ * record is how the screen can tell the reader which one they are looking at.
+ */
+data class SourceReport(
+    val source: String,
+    /** True when the catalogue answered, including when it was deliberately skipped. */
+    val ok: Boolean,
+    val detail: String
+)
+
+/** Everything one Explore search produced, including what each source said. */
+data class SearchOutcome(
+    val editions: List<FreeEdition>,
+    val elsewhere: List<Elsewhere>,
+    val sources: List<SourceReport>
+) {
+    val anyHit: Boolean get() = editions.isNotEmpty() || elsewhere.isNotEmpty()
+    val failures: List<SourceReport> get() = sources.filterNot { it.ok }
+    /** Every catalogue that was actually asked failed: the answer is "unreachable", not "none". */
+    val everythingFailed: Boolean
+        get() = sources.isNotEmpty() && sources.none { it.ok }
+}
+
+/**
  * Explore's fetching half: find a real, legal file for a book, and — when there is no legal file —
  * the place the book can actually be borrowed or opened.
  *
@@ -105,26 +133,100 @@ object OpenCatalogs {
      * every catalogue is unreachable the caller gets an empty list rather than an exception — but
      * it is never told "no results" merely because one host was slow.
      */
-    suspend fun search(query: String): List<FreeEdition> = withContext(Dispatchers.IO) {
-        val q = query.trim()
-        if (q.length < 2) return@withContext emptyList()
+    suspend fun search(query: String): List<FreeEdition> = searchDetailed(query).editions
 
-        val gutenberg = runCatching { gutenberg(q) }.getOrDefault(emptyList())
+    /**
+     * The same search, keeping what each catalogue said.
+     *
+     * Per-source failures stay per-source: a slow Archive costs its own results and nothing else,
+     * and the caller learns which host to blame instead of being told the book does not exist.
+     */
+    suspend fun searchDetailed(query: String): SearchOutcome = withContext(Dispatchers.IO) {
+        val q = query.trim()
+        if (q.length < 2) return@withContext SearchOutcome(emptyList(), emptyList(), emptyList())
+        val reports = ArrayList<SourceReport>(6)
+
+        // Gutenberg: the one source that is public-domain by construction, so its silence is
+        // meaningful information rather than an accident.
+        val gutenberg = attempt("Project Gutenberg", reports) { gutenberg(q) }
         val exact = gutenberg.any { Recommendations.normalize(it.title) == Recommendations.normalize(q) }
+
         // The Archive is the slowest of the sources (a second request per item to find the file
         // name), so it is skipped when a catalogue has already produced an exact title match.
-        val archive = if (exact) emptyList() else runCatching { archive(q, "") }.getOrDefault(emptyList())
-        val openLibrary = if (exact || (gutenberg + archive).size >= 4) {
+        val archive = if (exact) {
+            skip("Internet Archive", reports, "an exact title match was already found")
             emptyList()
         } else {
-            runCatching { openLibraryDownloads(q) }.getOrDefault(emptyList())
+            attempt("Internet Archive", reports) { archive(q, "") }
         }
-        val openAccess = runCatching { openAlex(q) }.getOrDefault(emptyList())
+        val openLibrary = if (exact || (gutenberg + archive).size >= 4) {
+            skip("Open Library", reports, "enough editions were already found")
+            emptyList()
+        } else {
+            attempt("Open Library", reports) { openLibraryDownloads(q) }
+        }
+        val openAccess = attempt("OpenAlex", reports) { openAlex(q) }
 
-        (gutenberg + archive + openLibrary + openAccess)
-            .distinctBy { it.url }
-            .sortedByDescending { Recommendations.normalize(it.title) == Recommendations.normalize(q) }
-            .take(12)
+        // The borrow/read side, on the same terms: a failure there is reported, not swallowed.
+        val links = ArrayList<Elsewhere>()
+        attempt("Open Library (records)", reports) {
+            openLibraryElsewhere(q, links)
+            emptyList<FreeEdition>()
+        }
+        attempt("Internet Archive (lending)", reports) {
+            internetArchiveBorrow(q, links)
+            emptyList<FreeEdition>()
+        }
+
+        SearchOutcome(
+            editions = (gutenberg + archive + openLibrary + openAccess)
+                .distinctBy { it.url }
+                .sortedByDescending { Recommendations.normalize(it.title) == Recommendations.normalize(q) }
+                .take(12),
+            elsewhere = links.distinctBy { it.url }.take(8),
+            sources = reports
+        )
+    }
+
+    /**
+     * Runs one source, recording what happened.
+     *
+     * The single place a catalogue is allowed to fail. An exception becomes a line the reader can
+     * see ("Internet Archive — timed out") instead of an empty list that looks like a real answer.
+     */
+    private inline fun attempt(
+        name: String,
+        reports: MutableList<SourceReport>,
+        block: () -> List<FreeEdition>
+    ): List<FreeEdition> {
+        return try {
+            val out = block()
+            reports += SourceReport(
+                name,
+                ok = true,
+                detail = if (out.isEmpty()) "answered, nothing for this title" else "${out.size} edition(s)"
+            )
+            out
+        } catch (t: Throwable) {
+            reports += SourceReport(name, ok = false, detail = reason(t))
+            emptyList()
+        }
+    }
+
+    private fun skip(name: String, reports: MutableList<SourceReport>, why: String) {
+        reports += SourceReport(name, ok = true, detail = "skipped — $why")
+    }
+
+    /** A short, non-technical reason. Enough to tell "offline" from "blocked", no stack traces. */
+    private fun reason(t: Throwable): String {
+        val m = (t.message ?: "").lowercase()
+        return when {
+            m.contains("timeout") || m.contains("timed out") -> "timed out"
+            m.contains("unable to resolve host") || m.contains("unknownhost") -> "no connection"
+            m.contains("502") || m.contains("503") || m.contains("500") -> "the server is having trouble"
+            t is java.io.IOException -> "could not be reached"
+            else -> "did not answer"
+        }
     }
 
     /** Backwards-compatible name: the first version of this file called it `find`. */

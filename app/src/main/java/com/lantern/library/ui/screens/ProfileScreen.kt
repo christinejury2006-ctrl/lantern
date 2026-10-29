@@ -21,7 +21,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.lantern.library.data.BookBackupState
+import com.lantern.library.data.BackupAudit
 import com.lantern.library.data.BookFormat
 import com.lantern.library.data.BookOrigin
 import com.lantern.library.data.CloudAccount
@@ -66,17 +66,24 @@ fun ProfileScreen(
     onCopySyncTrace: (String) -> Unit = {},
     onClearSyncTrace: () -> Unit = {},
     /** Runs the three real Drive calls and one round trip, reporting each stage. */
-    onTestConnection: () -> Unit = {}
+    onTestConnection: () -> Unit = {},
+    /** Books with an upload in flight right now, so "Uploading" is never shown for a queued book. */
+    uploadingIds: Set<String> = emptySet(),
+    /** One line per book that is not verified: title, state, attempts and the reason. */
+    backupLines: List<String> = emptyList()
 ) {
     val palette = nookPalette(prefs.theme)
     val fileBooks = books.filter { it.origin != BookOrigin.BUNDLED && it.format != BookFormat.TEXT }
     // Counted from the confirmed state, not from "an id exists". A book whose Drive id was never
     // verified is still waiting — telling the reader it is backed up is how they end up deleting
     // the only copy that existed.
-    val backedUp = fileBooks.count { it.backupState == BookBackupState.BACKED_UP }
-    val failed = fileBooks.count { it.backupState == BookBackupState.FAILED }
-    val waiting = fileBooks.count { it.backupState == BookBackupState.PENDING && it.localFileAvailable }
-    val elsewhere = fileBooks.count { it.driveFileId.isNullOrBlank() && !it.localFileAvailable }
+    val audit = BackupAudit.counts(fileBooks, uploadingIds, online = account.driveConnected)
+    val backedUp = audit.verified
+    val failed = audit.failed
+    val waiting = audit.pending
+    val elsewhere = audit.restoreRequired
+    val localOnly = audit.localOnly
+    val notVerified = backupLines
 
     NookBackdrop(palette) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
@@ -122,8 +129,21 @@ fun ProfileScreen(
                                 palette,
                                 "Book files (EPUB and PDF)",
                                 if (fileBooks.isEmpty()) "No files to back up yet"
-                                else "$backedUp of ${fileBooks.size} backed up"
+                                else if (audit.complete) "$backedUp of ${fileBooks.size} backed up and verified"
+                                else audit.summary()
                             )
+                            if (!audit.complete && fileBooks.isNotEmpty()) {
+                                // Said out loud, in the place the reader looks for reassurance: an
+                                // incomplete backup is not a backup, and the summary above is
+                                // counted from files, not from records.
+                                Text(
+                                    "Not everything is verified yet — " + audit.summary() + ". Only " +
+                                        "verified files are safe to delete from this phone.",
+                                    color = palette.mute,
+                                    fontSize = 11.sp,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
+                            }
                             if (waiting > 0) {
                                 SyncRow(palette, "Waiting to upload", "$waiting book${if (waiting == 1) "" else "s"}")
                             }
@@ -132,6 +152,13 @@ fun ProfileScreen(
                                     palette,
                                     "Backup failed",
                                     "$failed book${if (failed == 1) "" else "s"} — will retry on the next sync"
+                                )
+                            }
+                            if (localOnly > 0) {
+                                SyncRow(
+                                    palette,
+                                    "Local only",
+                                    "$localOnly with no copy in the account yet — open one to re-import"
                                 )
                             }
                             if (elsewhere > 0) {
@@ -239,6 +266,25 @@ fun ProfileScreen(
                                     )
                                 }
                             }
+                        }
+                    }
+                    if (notVerified.isNotEmpty()) {
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            "PER BOOK",
+                            color = palette.mute, fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        // Title first: "2 failed" is not actionable, "The Hobbit · Upload failed ·
+                        // Google Drive returned HTTP 0" is.
+                        notVerified.take(12).forEach { line ->
+                            Text(
+                                line,
+                                color = palette.ink,
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(bottom = 4.dp)
+                            )
                         }
                     }
                     Spacer(Modifier.height(12.dp))

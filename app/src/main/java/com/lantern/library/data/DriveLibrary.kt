@@ -23,7 +23,65 @@ object DriveLibrary {
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(120, TimeUnit.SECONDS)
         .writeTimeout(120, TimeUnit.SECONDS)
+        // A dropped keep-alive socket is the single most common cause of a book upload failing on
+        // a phone. OkHttp can retry those itself, before the app-level retry even sees them.
+        .retryOnConnectionFailure(true)
         .build()
+
+    /** One HTTP answer, with the body kept as bytes so a media download can be hashed. */
+    internal class Raw(val code: Int, val bytes: ByteArray?) {
+        val ok: Boolean get() = code in 200..299
+        /** Decoded once, and a `val`, so call sites keep their null-check smart casts. */
+        val body: String? = bytes?.toString(Charsets.UTF_8)
+    }
+
+    /**
+     * The single place a request leaves this object.
+     *
+     * An interface, not a private method, because the upload path is the one piece of this app
+     * that cannot be tested on a phone without a phone: CI needs to drive a successful EPUB
+     * upload, a flaky one, and a retry that must not create a second Drive file, with no Google
+     * account and no network. `null` from [call] means the call never completed at all — a
+     * timeout, a dropped socket, DNS — which is the exact failure the device reported as
+     * "HTTP 0 — No response from Google Drive".
+     */
+    internal interface Transport {
+        fun call(req: Request): Raw?
+    }
+
+    private object OkHttpTransport : Transport {
+        override fun call(req: Request): Raw? = try {
+            http.newCall(req).execute().use { res -> Raw(res.code, res.body?.bytes()) }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    @Volatile internal var transport: Transport = OkHttpTransport
+
+    /** Backoff waits through this, so a retry test runs in milliseconds instead of seconds. */
+    @Volatile internal var sleeper: (Long) -> Unit = { millis ->
+        try {
+            Thread.sleep(millis)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+    }
+
+    /** Puts the real client back. Used by tests, and defensive in release. */
+    internal fun resetTransport() {
+        transport = OkHttpTransport
+        sleeper = { millis ->
+            try {
+                Thread.sleep(millis)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+        }
+        lastFailure = null
+        lastCode = 0
+        lastError = null
+    }
 
     private val folderLock = Any()
     @Volatile private var cachedFolderId: String? = null
@@ -41,13 +99,51 @@ object DriveLibrary {
     var lastError: String? = null
         private set
 
+    /** The HTTP status behind [lastError], or 0 when the call never completed. */
+    @Volatile
+    var lastCode: Int = 0
+        private set
+
+    /**
+     * The last failed transfer, in the terms a reader can act on.
+     *
+     * A count ("2 failed") is not a diagnosis, and neither is a bare status code: the reader needs
+     * to know *which book*, *what was attempted*, *why it stopped*, and *whether it will be tried
+     * again*. No token, no file contents, no personal data beyond the book's own title.
+     */
+    data class TransferFailure(
+        val bookId: String,
+        val title: String,
+        val operation: String,
+        val reason: String,
+        val retryable: Boolean
+    )
+
+    @Volatile
+    var lastFailure: TransferFailure? = null
+        private set
+
     private fun noteError(what: String, code: Int, body: String?) {
         val snippet = body.orEmpty().replace(Regex("\\s+"), " ").take(140)
+        lastCode = code
         lastError = "$what failed: HTTP $code" + if (snippet.isBlank()) "" else " — $snippet"
+    }
+
+    private fun noteBookFailure(book: LibraryBook?, what: String, code: Int, detail: String?, retryable: Boolean) {
+        val cls = RetryPolicy.classify(code)
+        lastFailure = TransferFailure(
+            bookId = book?.id.orEmpty(),
+            title = book?.title?.takeIf { it.isNotBlank() } ?: "Untitled",
+            operation = what,
+            reason = RetryPolicy.explain(cls, code, detail.orEmpty()),
+            retryable = retryable
+        )
     }
 
     fun clearError() {
         lastError = null
+        lastCode = 0
+        lastFailure = null
     }
 
     fun clearCachedFolder() {
@@ -78,58 +174,145 @@ object DriveLibrary {
     /**
      * Puts [file] in the account's Drive and returns the id of the file that now holds it.
      *
-     * The previous version queried for an existing `loreId` and returned its id immediately, on the
-     * assumption that "there is already a file" means "the right bytes are already there". That is
-     * wrong in the one case that matters: a book whose local file was repaired, re-imported or
-     * re-exported keeps its id and silently never updates its contents, so the reader restores an
-     * old or broken copy on the next phone. Now a match is an instruction to **replace the media**
-     * of that file, keeping the id and the `loreId` association, and the result is verified by
-     * comparing Drive's checksum with the local file's before success is reported.
+     * The order of operations is the whole of the fix for "0 confirmed, 2 failed of 2":
+     *
+     * 1. **Look the book up by its `loreId` first.** That makes the operation idempotent. If a
+     *    previous attempt created the file and then died before the answer arrived — the classic
+     *    case on a phone network — the retry *replaces the media of that file* instead of creating
+     *    a second copy of the same book.
+     * 2. **Send the bytes**, by `multipart` create or by `uploadType=media` replace.
+     * 3. **Prove the bytes are there** by comparing Drive's MD5 with the local file's. If Drive
+     *    reports no checksum, download it and compare that way. A 200 from the upload endpoint is
+     *    not a verified backup and is never reported as one.
+     * 4. **Retry transient failures only**, with exponential backoff: no response, a timeout, 408,
+     *    429, or a 5xx. A 401 re-authenticates; a 403 or 404 will not improve by being repeated.
+     *
+     * @param onAttempt called before each retry, with the attempt number and the reason.
      */
-    fun upload(token: String, folderId: String, book: LibraryBook, file: File): DriveOutcome<String> {
-        if (!file.exists() || file.length() <= 0L) return DriveOutcome.Failed
-        val lock = synchronized(uploadLocks) { uploadLocks.getOrPut(book.id) { Any() } }
-        synchronized(lock) {
-            val existing = when (val lookup = findByLoreId(token, book.id)) {
-                LoreLookup.Error -> return DriveOutcome.Failed
-                LoreLookup.NotFound -> null
-                is LoreLookup.Found -> lookup.id
-            }
-            val id = if (existing != null) {
-                when (val replaced = replaceMedia(token, existing, book, file)) {
-                    is DriveOutcome.Ok -> replaced.value
-                    DriveOutcome.Unauthorized -> return DriveOutcome.Unauthorized
-                    DriveOutcome.Failed -> return DriveOutcome.Failed
+    fun upload(
+        token: String,
+        folderId: String,
+        book: LibraryBook,
+        file: File,
+        onAttempt: (attempt: Int, reason: String) -> Unit = { _, _ -> }
+    ): DriveOutcome<String> {
+        if (!file.exists() || file.length() <= 0L) {
+            noteError("upload", 0, "the local file is missing or empty")
+            noteBookFailure(book, "upload", 0, "the local file is missing or empty", retryable = false)
+            return DriveOutcome.Failed
+        }
+        var attempt = 1
+        while (true) {
+            when (val once = uploadOnce(token, book, file)) {
+                is Attempt.Ok -> return DriveOutcome.Ok(once.id)
+                Attempt.Unauthorized -> return DriveOutcome.Unauthorized
+                is Attempt.Failed -> {
+                    val retry = once.retryable && RetryPolicy.shouldRetry(attempt, RetryPolicy.classify(once.code))
+                    noteBookFailure(book, "upload", once.code, once.detail, retry)
+                    if (!retry) return DriveOutcome.Failed
+                    onAttempt(attempt, RetryPolicy.explain(RetryPolicy.classify(once.code), once.code, once.detail))
+                    sleeper(RetryPolicy.delayMs(attempt))
+                    attempt++
                 }
-            } else {
-                when (val created = createFile(token, book, file)) {
-                    is DriveOutcome.Ok -> created.value
-                    DriveOutcome.Unauthorized -> return DriveOutcome.Unauthorized
-                    DriveOutcome.Failed -> return DriveOutcome.Failed
-                }
-            }
-            // Confirm the bytes are there. A 200 from the upload endpoint is not the same thing as
-            // the file being intact, and a backup that is not confirmed must not be reported.
-            when (val check = verify(token, id, file)) {
-                VerifyOutcome.Verified -> return DriveOutcome.Ok(id)
-                VerifyOutcome.Unauthorized -> return DriveOutcome.Unauthorized
-                VerifyOutcome.Mismatch -> {
-                    // One retry, because the usual cause is a transfer the service truncated.
-                    when (replaceMedia(token, id, book, file)) {
-                        is DriveOutcome.Ok -> Unit
-                        DriveOutcome.Unauthorized -> return DriveOutcome.Unauthorized
-                        DriveOutcome.Failed -> return DriveOutcome.Failed
-                    }
-                    return when (verify(token, id, file)) {
-                        VerifyOutcome.Verified -> DriveOutcome.Ok(id)
-                        VerifyOutcome.Unauthorized -> DriveOutcome.Unauthorized
-                        VerifyOutcome.Mismatch, VerifyOutcome.Unknown -> DriveOutcome.Failed
-                    }
-                }
-                // A successful HTTP upload is not enough: if Drive cannot confirm the bytes, keep the book pending.
-                VerifyOutcome.Unknown -> return DriveOutcome.Failed
             }
         }
+    }
+
+    /** One attempt, with no sleeping: the retry decision belongs to [upload]. */
+    private fun uploadOnce(token: String, book: LibraryBook, file: File): Attempt {
+        // Idempotency first: an interrupted earlier attempt may already have created this file.
+        val existing = when (val lookup = findByLoreId(token, book.id)) {
+            LoreLookup.Error -> return Attempt.Failed(lastCode, lastError.orEmpty(), true)
+            LoreLookup.NotFound -> null
+            is LoreLookup.Found -> lookup.id
+        }
+        val id = if (existing != null) {
+            when (val replaced = replaceMedia(token, existing, book, file)) {
+                is DriveOutcome.Ok -> replaced.value
+                DriveOutcome.Unauthorized -> return Attempt.Unauthorized
+                DriveOutcome.Failed -> return Attempt.Failed(lastCode, lastError.orEmpty(), true)
+            }
+        } else {
+            when (val created = createFile(token, book, file)) {
+                is DriveOutcome.Ok -> created.value
+                DriveOutcome.Unauthorized -> return Attempt.Unauthorized
+                DriveOutcome.Failed -> return Attempt.Failed(lastCode, lastError.orEmpty(), true)
+            }
+        }
+        return when (val check = verify(token, id, file)) {
+            VerifyOutcome.Verified -> Attempt.Ok(id)
+            VerifyOutcome.Unauthorized -> Attempt.Unauthorized
+            VerifyOutcome.Mismatch -> {
+                // One re-send, because the usual cause is a transfer the service truncated.
+                when (replaceMedia(token, id, book, file)) {
+                    is DriveOutcome.Ok -> Unit
+                    DriveOutcome.Unauthorized -> return Attempt.Unauthorized
+                    DriveOutcome.Failed -> return Attempt.Failed(lastCode, lastError.orEmpty(), true)
+                }
+                when (val again = verify(token, id, file)) {
+                    VerifyOutcome.Verified -> Attempt.Ok(id)
+                    VerifyOutcome.Unauthorized -> Attempt.Unauthorized
+                    VerifyOutcome.Mismatch -> Attempt.Failed(
+                        0,
+                        "the account's copy still differs from the file after two uploads",
+                        true
+                    )
+                    // Still no checksum from Drive: settle it by downloading the bytes.
+                    VerifyOutcome.Unknown -> deepVerify(token, id, file)
+                }
+            }
+            // The upload said 200 but Drive gave nothing to compare. Do not call that verified;
+            // fetch the file back and compare the bytes themselves.
+            VerifyOutcome.Unknown -> deepVerify(token, id, file)
+        }
+    }
+
+    /** Whether a verify attempt succeeded, in the shape [uploadOnce] needs. */
+    private sealed class Attempt {
+        data class Ok(val id: String) : Attempt()
+        object Unauthorized : Attempt()
+        data class Failed(val code: Int, val detail: String, val retryable: Boolean) : Attempt()
+    }
+
+    /**
+     * Downloads the file that was just uploaded and compares it byte for byte with the source.
+     *
+     * `null` means the comparison could not be made — no response, or a refusal — which is a
+     * failure, not a pass: an unprovable backup is not a backup.
+     */
+    private fun deepVerify(token: String, fileId: String, file: File): Attempt {
+        val remote = downloadBytes(token, fileId)
+            ?: return Attempt.Failed(lastCode, lastError.orEmpty().ifBlank { "could not read the uploaded file back" }, true)
+        if (remote.size.toLong() != file.length()) {
+            return Attempt.Failed(0, "read back ${remote.size} bytes, the file is ${file.length()}", true)
+        }
+        val same = java.security.MessageDigest.getInstance("MD5").run {
+            update(remote)
+            digest().contentEquals(md5BytesOf(file))
+        }
+        return if (same) Attempt.Ok(fileId) else Attempt.Failed(
+            0,
+            "the bytes in the account differ from the file on the phone",
+            true
+        )
+    }
+
+    /** The raw bytes of a file in the account, or null if they could not be read. */
+    private fun downloadBytes(token: String, fileId: String): ByteArray? {
+        val req = Request.Builder()
+            .url("$FILES/${enc(fileId)}?alt=media")
+            .header("Authorization", "Bearer $token")
+            .get()
+            .build()
+        val raw = executeRaw(req) ?: run {
+            noteError("read-back", 0, "no response")
+            return null
+        }
+        if (!raw.ok) {
+            noteError("read-back", raw.code, raw.body)
+            return null
+        }
+        return raw.bytes
     }
 
     /**
@@ -170,7 +353,10 @@ object DriveLibrary {
             .header("Authorization", "Bearer $token")
             .post(multipart)
             .build()
-        val raw = executeRaw(req) ?: return DriveOutcome.Failed.also { noteError("upload", 0, "no response") }
+        // Not retried here: a repeated create would be a second copy of the book. [upload] owns
+        // retries because it can look the book up again first.
+        val raw = executeRaw(req, retries = false)
+            ?: return DriveOutcome.Failed.also { noteError("upload", 0, "no response") }
         if (raw.code == 401) return DriveOutcome.Unauthorized
         if (!raw.ok || raw.body == null) {
             noteError("upload", raw.code, raw.body)
@@ -188,7 +374,8 @@ object DriveLibrary {
             .header("Authorization", "Bearer $token")
             .patch(file.asRequestBody(mimeFor(book).toMediaType()))
             .build()
-        val raw = executeRaw(req) ?: return DriveOutcome.Failed.also { noteError("replace", 0, "no response") }
+        val raw = executeRaw(req, retries = false)
+            ?: return DriveOutcome.Failed.also { noteError("replace", 0, "no response") }
         if (raw.code == 401) return DriveOutcome.Unauthorized
         if (!raw.ok) {
             noteError("replace", raw.code, raw.body)
@@ -247,7 +434,11 @@ object DriveLibrary {
         }.getOrDefault(VerifyOutcome.Unknown)
     }
 
-    private fun md5Of(file: File): String = java.security.MessageDigest.getInstance("MD5").let { digest ->
+    private fun md5Of(file: File): String =
+        md5BytesOf(file).joinToString("") { "%02x".format(it) }
+
+    private fun md5BytesOf(file: File): ByteArray {
+        val digest = java.security.MessageDigest.getInstance("MD5")
         file.inputStream().use { input ->
             val buffer = ByteArray(64 * 1024)
             while (true) {
@@ -256,7 +447,7 @@ object DriveLibrary {
                 digest.update(buffer, 0, read)
             }
         }
-        digest.digest().joinToString("") { "%02x".format(it) }
+        return digest.digest()
     }
 
     /**
@@ -273,33 +464,47 @@ object DriveLibrary {
             .header("Authorization", "Bearer $token")
             .get()
             .build()
+        val raw = executeRaw(req)
+        val detail: TransferFailure? = if (raw == null) {
+            noteError("download", 0, "no response")
+            TransferFailure("", "", "download", RetryPolicy.explain(TransferClass.TRANSIENT, 0, ""), true)
+        } else if (!raw.ok) {
+            noteError("download", raw.code, raw.body)
+            TransferFailure(
+                "", "", "download",
+                RetryPolicy.explain(RetryPolicy.classify(raw.code), raw.code, raw.body.orEmpty()),
+                RetryPolicy.classify(raw.code) == TransferClass.TRANSIENT
+            )
+        } else null
+        if (detail != null) lastFailure = detail
         return runCatching {
-            http.newCall(req).execute().use { res ->
-                if (res.code == 401) return@use DriveOutcome.Unauthorized
-                if (res.code == 404) return@use DriveOutcome.Failed
-                if (!res.isSuccessful) return@use DriveOutcome.Failed
-                val body = res.body ?: return@use DriveOutcome.Failed
+            run {
+                if (raw == null) return@run DriveOutcome.Failed
+                if (raw.code == 401) return@run DriveOutcome.Unauthorized
+                if (raw.code == 404) return@run DriveOutcome.Failed
+                if (!raw.ok) return@run DriveOutcome.Failed
+                val bytes = raw.bytes ?: return@run DriveOutcome.Failed
                 dest.parentFile?.mkdirs()
                 val tmp = File(dest.parentFile, dest.name + ".part")
                 try {
-                    tmp.outputStream().use { out -> body.byteStream().copyTo(out) }
+                    tmp.writeBytes(bytes)
                     if (tmp.length() < BookFiles.MIN_BYTES) {
                         tmp.delete()
-                        return@use DriveOutcome.Failed
+                        return@run DriveOutcome.Failed
                     }
                     val expected = format ?: formatFromName(dest.name)
                     if (expected != null) {
                         when (val check = BookFiles.validate(tmp, expected)) {
                             is BookFiles.Check.Invalid -> {
                                 tmp.delete()
-                                return@use DriveOutcome.Failed
+                                return@run DriveOutcome.Failed
                             }
                             BookFiles.Check.Ok -> Unit
                         }
                     }
                     if (!BookFiles.commit(tmp, dest)) {
                         tmp.delete()
-                        return@use DriveOutcome.Failed
+                        return@run DriveOutcome.Failed
                     }
                     DriveOutcome.Ok(Unit)
                 } catch (_: Exception) {
@@ -360,7 +565,7 @@ object DriveLibrary {
             .header("Authorization", "Bearer $token")
             .post(multipart)
             .build()
-        val raw = executeRaw(req) ?: return DriveOutcome.Failed
+        val raw = executeRaw(req, retries = false) ?: return DriveOutcome.Failed
         if (raw.code == 401) return DriveOutcome.Unauthorized
         if (!raw.ok || raw.body == null) return DriveOutcome.Failed
         val id = JSONObject(raw.body).optString("id").takeIf { it.isNotBlank() }
@@ -374,7 +579,7 @@ object DriveLibrary {
             .header("Authorization", "Bearer $token")
             .patch(json.toRequestBody(jsonType))
             .build()
-        val raw = executeRaw(req) ?: return DriveOutcome.Failed
+        val raw = executeRaw(req, retries = false) ?: return DriveOutcome.Failed
         if (raw.code == 401) return DriveOutcome.Unauthorized
         if (!raw.ok) return DriveOutcome.Failed
         return DriveOutcome.Ok(fileId)
@@ -478,7 +683,7 @@ object DriveLibrary {
             .header("Authorization", "Bearer $token")
             .post(multipart)
             .build()
-        val up = executeRaw(upReq)
+        val up = executeRaw(upReq, retries = false)
         val probeId = up?.let {
             if (it.ok) runCatching { JSONObject(it.body.orEmpty()).optString("id") }.getOrNull() else null
         }?.takeIf { it.isNotBlank() }
@@ -516,7 +721,7 @@ object DriveLibrary {
     data class Check(val stage: String, val ok: Boolean, val detail: String)
 
     /** Google's status code plus its own words, in one line the reader can act on. */
-    private fun describe(raw: RawHttp, what: String): String {
+    private fun describe(raw: Raw, what: String): String {
         val body = raw.body.orEmpty().replace(Regex("\\s+"), " ").take(220)
         val hint = when (raw.code) {
             401 -> " — the access token was rejected. Sign out and sign in again."
@@ -567,17 +772,30 @@ object DriveLibrary {
         return QueryOutcome.Ok(ids)
     }
 
-    private class RawHttp(val code: Int, val body: String?) {
-        val ok: Boolean get() = code in 200..299
-    }
-
-    private fun executeRaw(req: Request): RawHttp? {
-        return try {
-            http.newCall(req).execute().use { res ->
-                RawHttp(res.code, res.body?.string())
+    /**
+     * One request, with bounded retries for failures that a retry can actually fix.
+     *
+     * The device reported `0 confirmed, 2 failed of 2` with "HTTP 0 — no response". That number
+     * came from this function: the call threw, the exception was swallowed, and the book was
+     * marked failed for good. Every read-only call here is safe to repeat, so a timeout gets three
+     * more chances with 600 ms / 1.2 s / 2.4 s between them instead of one and done.
+     *
+     * Uploads are *not* retried here — they are retried in [upload], where each attempt re-looks-up
+     * the book's `loreId` first, which is what keeps a retry from creating a duplicate file.
+     */
+    private fun executeRaw(req: Request, retries: Boolean = true): Raw? {
+        var attempt = 1
+        while (true) {
+            val raw = transport.call(req)
+            if (raw == null) {
+                if (!retries || !RetryPolicy.shouldRetry(attempt, 0)) return null
+                sleeper(RetryPolicy.delayMs(attempt))
+                attempt++
+                continue
             }
-        } catch (_: Exception) {
-            null
+            if (!retries || !RetryPolicy.shouldRetry(attempt, raw.code)) return raw
+            sleeper(RetryPolicy.delayMs(attempt))
+            attempt++
         }
     }
 

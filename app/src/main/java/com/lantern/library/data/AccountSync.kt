@@ -21,11 +21,26 @@ data class AccountSnapshot(
     val libraryAppearAt: Long,
     val readerAppearAt: Long,
     val prefsAt: Long,
-    val bookOrder: List<String>
+    val bookOrder: List<String>,
+    /**
+     * Books the reader deleted on purpose, with the time of the deletion.
+     *
+     * Part of the snapshot because a deletion is a user action that has to travel between devices;
+     * without it the merge can only ever be a union, and a union puts deleted books back.
+     */
+    val deletions: List<Tombstone> = emptyList()
 )
 
 object AccountSync {
-    const val SCHEMA = 1
+    /**
+     * Snapshot format.
+     *
+     * 1 — books, bookmarks, appearance, prefs.
+     * 2 — adds `deletions` (tombstones) and a per-book `backupBytes` (the size that was verified).
+     *     Readable both ways: a v1 snapshot simply has neither, and a v2 one is read by any build
+     *     that understands the fields it cares about.
+     */
+    const val SCHEMA = 2
     const val STATE_LORE_ID = "account_state"
     const val STATE_FILE_NAME = "lore_account.json"
 
@@ -45,8 +60,13 @@ object AccountSync {
         }
         val order = JSONArray()
         snap.bookOrder.forEach { order.put(it) }
+        val deleted = JSONArray()
+        Deletions.prune(snap.deletions).forEach { t ->
+            deleted.put(JSONObject().put("id", t.bookId).put("at", t.deletedAt))
+        }
         return JSONObject()
             .put("schema", SCHEMA)
+            .put("deletions", deleted)
             .put("updatedAt", snap.updatedAt)
             .put("accountId", snap.userId)
             .put("books", books)
@@ -86,6 +106,14 @@ object AccountSync {
                 val id = orderArr.optString(i)
                 if (id.isNotBlank()) order += id
             }
+            val delArr = o.optJSONArray("deletions") ?: JSONArray()
+            val deletions = ArrayList<Tombstone>(delArr.length())
+            for (i in 0 until delArr.length()) {
+                val row = delArr.optJSONObject(i) ?: continue
+                val id = row.optString("id")
+                if (id.isBlank()) continue
+                deletions += Tombstone(id, row.optLong("at", 0L))
+            }
             val libObj = o.optJSONObject("libraryAppearance")
             val readObj = o.optJSONObject("readerAppearance")
             val prefsObj = o.optJSONObject("prefs")
@@ -102,13 +130,25 @@ object AccountSync {
                 libraryAppearAt = libObj?.optLong("updatedAt", 0L) ?: 0L,
                 readerAppearAt = readObj?.optLong("updatedAt", 0L) ?: 0L,
                 prefsAt = prefsObj?.optLong("updatedAt", 0L) ?: 0L,
-                bookOrder = order
+                bookOrder = order,
+                deletions = Deletions.prune(deletions)
             )
         }.getOrNull()
     }
 
     fun merge(local: AccountSnapshot, cloud: AccountSnapshot?): AccountSnapshot {
-        if (cloud == null) return local.copy(updatedAt = maxOf(local.updatedAt, System.currentTimeMillis()))
+        if (cloud == null) {
+            val stones = Deletions.prune(local.deletions)
+            return local.copy(
+                updatedAt = maxOf(local.updatedAt, System.currentTimeMillis()),
+                books = Deletions.alive(local.books, stones),
+                deletions = stones
+            )
+        }
+        // A deletion is a statement, not an absence. Both sides' statements are kept, the newest
+        // wins per book, and the books they name are removed from the merged library — which is
+        // how a book deleted on the phone stops coming back from the account on every sync.
+        val stones = Deletions.prune(Deletions.merge(local.deletions, cloud.deletions))
         val localById = local.books.associateBy { it.id }
         val cloudById = cloud.books.associateBy { it.id }
         val ids = LinkedHashSet<String>()
@@ -119,6 +159,9 @@ object AccountSync {
         for (id in ids) {
             val l = localById[id]
             val c = cloudById[id]
+            val deletedHere = l != null && Deletions.blocks(l, stones)
+            val deletedThere = c != null && Deletions.blocks(c, stones)
+            if (deletedHere || deletedThere) continue
             when {
                 // Remote-only: the phone has no file, so nothing may claim it does. The Drive id
                 // and the confirmed-backup stamp are what make this book restorable, so they are
@@ -135,8 +178,12 @@ object AccountSync {
                 l != null && c != null -> mergedBooks += mergeBook(l, c)
             }
         }
+        // A deleted book takes its bookmarks with it. Only books that are actually gone: a book
+        // the reader deleted and then imported again keeps its new marks.
+        val dead = Deletions.ids(stones) - mergedBooks.map { it.id }.toSet()
         val marks = LinkedHashMap<String, SavedBookmark>()
         (cloud.bookmarks + local.bookmarks).forEach { m ->
+            if (m.bookId in dead) return@forEach
             val key = "${m.bookId}\u0000${m.pageIndex}"
             val prev = marks[key]
             if (prev == null || m.updatedAt >= prev.updatedAt) marks[key] = m
@@ -155,7 +202,8 @@ object AccountSync {
             libraryAppearAt = libAt,
             readerAppearAt = readAt,
             prefsAt = prefsAt,
-            bookOrder = mergedBooks.map { it.id }
+            bookOrder = mergedBooks.map { it.id },
+            deletions = stones
         )
     }
 
@@ -223,7 +271,16 @@ object AccountSync {
             },
             pendingUpload = false,
             backupFailed = false,
-            dnf = local.dnf || cloud.dnf
+            dnf = local.dnf || cloud.dnf,
+            // The size is evidence about the same bytes as the stamp: take it from whichever side
+            // the stamp came from, never from the other one.
+            backupBytes = when {
+                keptId == null -> 0L
+                local.driveFileId == keptId && cloud.driveFileId == keptId ->
+                    if (local.backupAt >= cloud.backupAt) local.backupBytes else cloud.backupBytes
+                local.driveFileId == keptId -> local.backupBytes
+                else -> cloud.backupBytes
+            }
         )
     }
 
@@ -273,6 +330,9 @@ object AccountSync {
             // behind that id were ever confirmed, which is a different question.
             .put("driveFileId", b.driveFileId.orEmpty())
             .put("backupAt", b.backupAt)
+            // The size the confirmation was issued against, so another device can tell whether a
+            // local file is the one that was verified.
+            .put("backupBytes", b.backupBytes)
             // The reader's own decisions about a book travel with it: a book they finished or
             // gave up on should look the same on their next phone.
             .put("dnf", b.dnf)
@@ -304,7 +364,8 @@ object AccountSync {
             driveFileId = o.optString("driveFileId").ifBlank { null },
             pendingUpload = false,
             backupAt = o.optLong("backupAt", 0L),
-            dnf = o.optBoolean("dnf", false)
+            dnf = o.optBoolean("dnf", false),
+            backupBytes = o.optLong("backupBytes", 0L)
         )
     }
 

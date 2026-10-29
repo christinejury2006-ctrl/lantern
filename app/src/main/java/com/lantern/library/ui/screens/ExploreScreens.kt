@@ -47,6 +47,8 @@ import androidx.compose.ui.unit.sp
 import com.lantern.library.data.DiscoveryBook
 import com.lantern.library.data.Elsewhere
 import com.lantern.library.data.FreeEdition
+import com.lantern.library.data.SearchOutcome
+import com.lantern.library.data.SourceReport
 import com.lantern.library.data.GoogleBooks
 import com.lantern.library.data.OpenCatalogs
 import com.lantern.library.data.ReaderTheme
@@ -109,6 +111,15 @@ suspend fun fetchScrapedBooks(query: String): List<ScrapedBookItem> = withContex
     return@withContext bookList
 }
 
+/** One search's worth of results, kept together so the three answers stay distinguishable. */
+private data class SearchBundle(
+    val editions: List<FreeEdition>,
+    val elsewhere: List<Elsewhere>,
+    val google: List<com.lantern.library.data.DiscoveryBook>,
+    val sources: List<SourceReport>,
+    val everythingFailed: Boolean
+)
+
 /**
  * Explore: search the internet for a book, and take it if it can legally be taken.
  *
@@ -147,6 +158,11 @@ fun SearchScreen(
     var results by remember { mutableStateOf<List<DiscoveryBook>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var searched by remember { mutableStateOf(false) }
+    // What each catalogue said, including the ones that did not answer. An empty screen and a
+    // silent host look identical without this.
+    var reports by remember { mutableStateOf<List<SourceReport>>(emptyList()) }
+    var allFailed by remember { mutableStateOf(false) }
+    var googleDown by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("lore_search", android.content.Context.MODE_PRIVATE) }
     var history by remember {
@@ -176,17 +192,38 @@ fun SearchScreen(
         // All three lookups run off the main thread and each one is independent: a catalogue being
         // down costs its own results and nothing else.
         val found = withContext(Dispatchers.IO) {
-            val free = runCatching { OpenCatalogs.search(q) }.getOrDefault(emptyList())
-            val links = runCatching { OpenCatalogs.elsewhere(q) }.getOrDefault(emptyList())
-            val google = runCatching { GoogleBooks.volumes(q, "relevance", 12) }.getOrDefault(emptyList())
-            Triple(free, links, google)
+            val outcome = runCatching { OpenCatalogs.searchDetailed(q) }.getOrNull()
+                ?: SearchOutcome(
+                    emptyList(), emptyList(),
+                    listOf(SourceReport("Every catalogue", false, "the search could not be started"))
+                )
+            val google = runCatching { GoogleBooks.volumes(q, "relevance", 12) }
+            SearchBundle(
+                outcome.editions,
+                outcome.elsewhere,
+                google.getOrDefault(emptyList()),
+                outcome.sources +
+                    SourceReport(
+                        "Google Books",
+                        ok = google.isSuccess && google.getOrDefault(emptyList()).isNotEmpty(),
+                        detail = when {
+                            google.isFailure -> "did not answer"
+                            google.getOrDefault(emptyList()).isEmpty() -> "answered, nothing for this title"
+                            else -> "${google.getOrDefault(emptyList()).size} record(s)"
+                        }
+                    ),
+                outcome.everythingFailed
+            )
         }
-        editions = found.first
-        elsewhere = found.second
-        results = found.third
+        editions = found.editions
+        elsewhere = found.elsewhere
+        results = found.google
+        reports = found.sources
+        allFailed = found.everythingFailed
+        googleDown = found.sources.any { !it.ok && it.source == "Google Books" }
         loading = false
         searched = true
-        if (found.first.isNotEmpty() || found.second.isNotEmpty() || found.third.isNotEmpty()) {
+        if (editions.isNotEmpty() || elsewhere.isNotEmpty() || results.isNotEmpty()) {
             history = (listOf(q) + history.filterNot { it.equals(q, true) }).take(8)
             prefs.edit().putString("history", history.joinToString("\n")).apply()
         }
@@ -288,18 +325,60 @@ fun SearchScreen(
                     if (searched && !loading && editions.isEmpty() && elsewhere.isEmpty() && results.isEmpty()) {
                         Column(Modifier.padding(top = 12.dp)) {
                             Text(
-                                "Nothing found for “${query.trim()}”.",
+                                if (allFailed) "The catalogues could not be reached."
+                                else "Nothing found for “${query.trim()}”.",
                                 color = ink,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Medium
                             )
                             Text(
-                                "Try fewer words, or the author's surname. Older and public-domain books " +
-                                    "are the ones the free catalogues can usually supply.",
+                                if (allFailed) {
+                                    "This is a problem with the connection or the services, not with the " +
+                                        "book: nothing was actually searched. Try again in a moment."
+                                } else {
+                                    "Try fewer words, or the author's surname. Older and public-domain books " +
+                                        "are the ones the free catalogues can usually supply."
+                                },
                                 color = mute,
                                 fontSize = 11.sp,
                                 modifier = Modifier.padding(top = 4.dp)
                             )
+                        }
+                    }
+                    // Which services answered, and which did not. A skipped source says so too: it
+                    // was not asked, so its silence is not evidence about the book.
+                    val quiet = reports.filter { !it.ok }
+                    if (searched && !loading && quiet.isNotEmpty()) {
+                        Spacer(Modifier.height(12.dp))
+                        GlassCard(Modifier.fillMaxWidth(), dark, 16) {
+                            Column(Modifier.padding(14.dp)) {
+                                Text(
+                                    if (quiet.size == 1) "ONE SOURCE DID NOT ANSWER" else
+                                        "${quiet.size} SOURCES DID NOT ANSWER",
+                                    color = palette.accent,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.4.sp
+                                )
+                                Spacer(Modifier.height(6.dp))
+                                quiet.forEach { report ->
+                                    Row(Modifier.padding(bottom = 4.dp)) {
+                                        Text("!", color = palette.accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        Text(
+                                            "  ${report.source} — ${report.detail}",
+                                            color = ink,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                }
+                                Text(
+                                    "Results below come from the catalogues that did answer; the missing " +
+                                        "ones may hold more.",
+                                    color = mute,
+                                    fontSize = 10.sp,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
+                            }
                         }
                     }
                     if (editions.isNotEmpty()) {

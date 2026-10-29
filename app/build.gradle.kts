@@ -131,6 +131,10 @@ dependencies {
     implementation("io.github.oothp:pdfium-android:1.9.5-beta01")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
+    // The real org.json, for unit tests only. android.jar ships a stub whose methods throw when a
+    // test calls them, and the sync layer is built on JSON: without this, the upload and snapshot
+    // tests could only test the parts that do not touch the wire format.
+    testImplementation("org.json:json:20231013")
 }
 
 /** Dev: GOOGLE_BOOKS_API_KEY or google.books.api.key in local.properties (gitignored), or env/Gradle property. CI: GitHub secret GOOGLE_BOOKS_API_KEY. Never commit the key. */

@@ -305,7 +305,11 @@ internal fun LanternRoot(store: LanternStore) {
                         store.toast("Sync diagnosis copied")
                     },
                     onClearSyncTrace = { com.lantern.library.data.SyncDiag.clear() },
-                    onTestConnection = { store.testBackupConnection() }
+                    onTestConnection = { store.testBackupConnection() },
+                    uploadingIds = store.uploadingIds,
+                    // Only the books that are not verified, with their own titles: the honest
+                    // answer to "what is not safe yet?".
+                    backupLines = store.backupProblemLines()
                 )
                 is Route.Reader -> {
                     val book = store.book(r.id)

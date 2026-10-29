@@ -27,7 +27,41 @@ object BackupRules {
         if (book.pendingUpload) return true
         if (book.driveFileId.isNullOrBlank()) return true
         // An id exists but its contents were never confirmed: it may be an older or broken file.
-        return book.backupAt <= 0L
+        if (book.backupAt <= 0L) return true
+        // The file on this phone is no longer the file that was confirmed.
+        return changedSinceBackup(book, localFileExists)
+    }
+
+    /**
+     * Whether the local file differs from the one the account was told about.
+     *
+     * Only answerable when a size was recorded at confirmation time; older records have none, and
+     * they are re-confirmed by checksum on the next pass instead of being assumed correct.
+     */
+    fun changedSinceBackup(book: LibraryBook, localFileExists: Boolean): Boolean {
+        if (!eligible(book)) return false
+        if (!localFileExists) return false
+        val recorded = book.backupBytes
+        if (recorded <= 0L) return false
+        val file = book.filePath?.let { java.io.File(it) } ?: return false
+        return file.exists() && file.length() != recorded
+    }
+
+    /**
+     * What the next pass should do with this book, decided without touching the network.
+     *
+     * [UploadDecision.CONFIRM] exists so that a library which is already backed up costs one
+     * checksum read per book rather than a full re-upload — and [UploadDecision.SEND] exists so
+     * that a changed local file is never mistaken for a backed-up one.
+     */
+    fun decide(book: LibraryBook, localFileExists: Boolean): UploadDecision {
+        if (!eligible(book)) return UploadDecision.NOT_APPLICABLE
+        if (!localFileExists) return UploadDecision.NO_LOCAL_FILE
+        if (book.driveFileId.isNullOrBlank()) return UploadDecision.SEND
+        if (book.backupAt <= 0L) return UploadDecision.CONFIRM
+        if (book.backupFailed || book.pendingUpload) return UploadDecision.SEND
+        if (changedSinceBackup(book, localFileExists)) return UploadDecision.SEND
+        return UploadDecision.ALREADY_VERIFIED
     }
 
     /** True when this book can be restored onto another device. */

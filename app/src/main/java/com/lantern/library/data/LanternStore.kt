@@ -36,6 +36,19 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     private val wantFile = File(app.filesDir, "want_to_read.json")
     private val notInterestedIds = prefs.getStringSet("not_interested_volume_ids", emptySet())!!.toMutableSet()
     private val pendingDeleteFile = File(app.filesDir, "pending_deletes.json")
+    /** Books the reader deleted on purpose. The other half of the merge — see [Deletions]. */
+    private val deletionsFile = File(app.filesDir, "deletions.json")
+
+    /**
+     * The upload retry queue.
+     *
+     * A book that failed to upload is not forgotten: its id, how many attempts it has had, when it
+     * was last tried and why it failed are written to disk, so the queue survives the process
+     * being killed and the reader can be shown something true about it after a restart.
+     */
+    private val uploadQueueFile = File(app.filesDir, "upload_queue.json")
+    private val deletionsLock = Any()
+    private val queueLock = Any()
     private val libraryAppearFile = File(app.filesDir, "library_appearance.json")
     private val readerAppearFile = File(app.filesDir, "reader_appearance.json")
     private val bookmarksFile = File(app.filesDir, "bookmarks.json")
@@ -59,6 +72,19 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     var forYouFailed by mutableStateOf(false)
         private set
     var interestsChosen by mutableStateOf(false)
+        private set
+
+    /**
+     * Books with an upload running right now.
+     *
+     * Compose state, because the shelf shows "Uploading" only for these; a book that is merely
+     * queued must not claim to be in flight.
+     */
+    var uploadingIds by mutableStateOf<Set<String>>(emptySet())
+        private set
+
+    /** The last computed per-book backup audit, for the summary line and the diagnostics panel. */
+    var backupCounts by mutableStateOf(BackupAudit.Counts(0, 0, 0, 0, 0))
         private set
 
     /** The edition Explore is currently downloading, so its card can show progress honestly. */
@@ -169,9 +195,18 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             }
             hydrated = true
             StartupTrace.mark("LanternStore hydrated")
+            // The shelf and the You screen show a per-book backup state from the first frame, not
+            // after the first sync.
+            refreshBackupAudit()
             if (interestsChosen) ensureRecommendations()
             if (account.signedIn && account.provider == "google" && GoogleAuth.accountId(acc) != null) {
-                viewModelScope.launch(Dispatchers.IO) { connectDrive(quiet = true, pullAccount = true) }
+                viewModelScope.launch(Dispatchers.IO) {
+                    connectDrive(quiet = true, pullAccount = true)
+                    // Anything still queued from a previous run gets another try on launch, which
+                    // is what "retry when connectivity returns" means for an app that is not
+                    // running a foreground service.
+                    retryQueuedTransfers()
+                }
             }
         }
     }
@@ -354,13 +389,31 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Removes a book from the shelf, everywhere.
+     *
+     * The order is the fix for "deleted books come back on the other device":
+     *
+     * 1. **The deletion is recorded first** ([recordDeletion]) — before the book leaves the
+     *    library and before any network call. That record is what the sync sends, so a crash
+     *    between these lines can leave the book on the shelf, but can never lose the fact that the
+     *    reader deleted it.
+     * 2. **The book leaves this phone** — record, bookmarks, and the local file.
+     * 3. **The account's copy is scheduled for deletion**, not deleted here. It is only removed
+     *    once a snapshot carrying the tombstone has been written, so another device can never be
+     *    left holding a record whose file is already gone.
+     */
     fun remove(id: String) {
         val b = synchronized(libraryLock) {
             val found = books.firstOrNull { it.id == id } ?: return
             if (found.origin == BookOrigin.BUNDLED) return
+            found
+        }
+        // 1. The statement, before the consequences.
+        recordDeletion(b)
+        synchronized(libraryLock) {
             books.removeAll { it.id == id }
             persistBooksUnlocked()
-            found
         }
         synchronized(bookmarksLock) {
             val next = bookmarkRecords.filterNot { it.bookId == id }
@@ -371,15 +424,12 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             }
         }
         b.filePath?.let { runCatching { File(it).delete() } }
+        clearTransfer(id)
         toast("Removed from library")
         markLocalChanged()
+        // 3. The account's copy waits for the snapshot to carry the deletion first.
         val driveId = b.driveFileId
-        if (!driveId.isNullOrBlank()) {
-            viewModelScope.launch(Dispatchers.IO) {
-                val ok = withDrive { token, _ -> DriveLibrary.delete(token, driveId) } != null
-                if (!ok) addPendingDelete(driveId)
-            }
-        }
+        if (!driveId.isNullOrBlank()) addPendingDelete(driveId)
     }
     fun markRead(id: String, page: Int, pages: Int) {
         val b = book(id) ?: return
@@ -828,8 +878,11 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             is DriveTokenResult.Ok -> {
                 SyncDiag.mark("Drive token", "granted")
                 withContext(Dispatchers.Main) { setDriveConnected(true) }
-                retryPendingDeletes()
-                if (pullAccount) runAccountSync(announce = !quiet)
+                // Account-side deletions are *not* retried here on purpose: a file may only be
+                // removed once a snapshot carrying its tombstone has been written, and that
+                // happens inside [runAccountSyncInner]. Deleting first would leave another device
+                // holding a record whose file no longer exists.
+                if (pullAccount) runAccountSync(announce = !quiet) else retryPendingDeletes()
             }
             is DriveTokenResult.Recoverable -> {
                 SyncDiag.fail("Drive token", "needs the reader to grant Drive access")
@@ -967,10 +1020,16 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         }
         val updated = book.copy(
             filePath = dest.absolutePath,
+            // The download *is* the proof: these bytes came out of the account and passed the
+            // EPUB/PDF container checks, so the local copy now matches the account's.
             backupAt = maxOf(book.backupAt, System.currentTimeMillis()),
+            backupBytes = dest.length(),
             backupFailed = false
         )
-        withContext(Dispatchers.Main) { upsert(updated) }
+        withContext(Dispatchers.Main) {
+            upsert(updated)
+            refreshBackupAudit()
+        }
         maybeEvictCache(keepId = book.id)
         return updated
     }
@@ -1109,10 +1168,88 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             libraryAppearAt = libraryAppearAt,
             readerAppearAt = readerAppearAt,
             prefsAt = prefsAt,
-            bookOrder = bookList.map { it.id }
+            bookOrder = bookList.map { it.id },
+            deletions = deletions()
         )
     }
 
+
+    /**
+     * Writes a batch's outcome into the book records and the retry queue.
+     *
+     * One place, because "confirmed" must mean the same thing everywhere it is recorded: the bytes
+     * were verified against the account, the size that was verified is stored with the stamp, and
+     * the queue entry is cleared. A failure records the reason and the attempt count instead, and
+     * never clears `backupAt` into something that looks like success.
+     */
+    private suspend fun recordBatch(batch: BatchResult) {
+        val now = System.currentTimeMillis()
+        withContext(Dispatchers.Main) {
+            batch.confirmed.forEach { (bookId, verified) ->
+                val latest = book(bookId) ?: return@forEach
+                upsert(
+                    latest.copy(
+                        driveFileId = verified.first,
+                        pendingUpload = false,
+                        backupFailed = false,
+                        backupAt = now,
+                        backupBytes = verified.second
+                    )
+                )
+                clearTransfer(bookId)
+            }
+            batch.failed.forEach { (book, failure) ->
+                val latest = book(book.id) ?: return@forEach
+                upsert(latest.copy(pendingUpload = true, backupFailed = true, backupAt = 0L))
+                noteTransferFailed(latest, failure.reason, failure.retryable)
+            }
+            refreshBackupAudit()
+        }
+    }
+
+    /**
+     * Gives the retry queue another chance.
+     *
+     * This is the "retry when connectivity returns" half of the queue. The app has no foreground
+     * service, so the honest triggers are: app launch, sign-in, and any explicit sync. Each of
+     * those calls this, and a book that has been failing for a week is retried exactly as often as
+     * the reader uses the app — not once per keystroke.
+     */
+    fun retryQueuedTransfers() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val queued = pendingTransfers().filter { it.retryable }
+            if (queued.isEmpty()) return@launch
+            if (!account.signedIn || account.provider != "google") {
+                SyncDiag.mark("Retry queue", "${queued.size} book(s) waiting for a signed-in account")
+                return@launch
+            }
+            if (!networkReady()) {
+                SyncDiag.mark("Retry queue", "${queued.size} book(s) waiting for a connection")
+                return@launch
+            }
+            val books = queued.mapNotNull { transfer -> book(transfer.bookId) }.filter { candidate ->
+                val file = candidate.filePath?.let(::File)
+                BackupRules.needsUpload(candidate, file != null && file.exists() && file.length() > 0L)
+            }
+            if (books.isEmpty()) {
+                // Nothing left to send (deleted, restored, or already confirmed): forget them.
+                queued.forEach { clearTransfer(it.bookId) }
+                return@launch
+            }
+            SyncDiag.mark("Retry queue", "retrying ${books.size} book(s) from the queue")
+            val batch = uploadBatch(books)
+            batch.failed.forEach { (book, failure) ->
+                SyncDiag.fail(
+                    "Retry failed — ${book.title.ifBlank { "Untitled" }} (${book.id.take(8)})",
+                    failure.reason + if (failure.retryable) " · still queued" else " · will not retry by itself"
+                )
+            }
+            if (batch.confirmed.isNotEmpty()) {
+                SyncDiag.mark("Retry queue", "${batch.confirmed.size} recovered")
+            }
+            recordBatch(batch)
+        }
+    }
 
     /**
      * Puts every book that still owes the cloud a file into Drive, and records what happened.
@@ -1127,6 +1264,109 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
      * - **The caller learns whether the account is complete**, so a snapshot is never presented as a
      *   finished backup when some of it is missing.
      */
+    /**
+     * One batch of uploads, with the per-book outcome kept apart from the HTTP outcome.
+     *
+     * Every book ends in exactly one of two places: *confirmed* (the bytes were verified against
+     * the account) or *failed with a reason* (which is written to the retry queue and shown with
+     * the book's own title). Nothing is marked backed up on the strength of a request having been
+     * sent.
+     */
+    private suspend fun uploadBatch(todo: List<LibraryBook>): BatchResult {
+        val confirmed = LinkedHashMap<String, Pair<String, Long>>() // book id -> (drive id, verified bytes)
+        val failed = ArrayList<Pair<LibraryBook, DriveLibrary.TransferFailure>>()
+        if (todo.isEmpty()) return BatchResult(confirmed, failed)
+
+        // Say "Uploading" only while it is true.
+        withContext(Dispatchers.Main) { uploadingIds = uploadingIds + todo.map { it.id } }
+        try {
+            val outcome = withDriveOutcome { token, owner ->
+                when (val folder = DriveLibrary.ensureFolder(token, owner)) {
+                    is DriveOutcome.Ok -> {
+                        for (book in todo) {
+                            val file = book.filePath?.let { File(it) }
+                            if (file == null || !file.exists() || file.length() <= 0L) {
+                                // A book with no readable local file cannot be uploaded. It is a
+                                // restore or a re-import, not a retry.
+                                failed += book to DriveLibrary.TransferFailure(
+                                    book.id, book.title, "upload",
+                                    "no readable local file to send", false
+                                )
+                                continue
+                            }
+                            // A book that already has an id is checked before it is re-sent: if the
+                            // account holds these exact bytes, the only thing missing is the
+                            // confirmation, and moving the file again would be pointless traffic.
+                            val existing = book.driveFileId
+                            if (!existing.isNullOrBlank() && !BackupRules.changedSinceBackup(book, true) &&
+                                DriveLibrary.remoteMatches(token, existing, file) == true
+                            ) {
+                                confirmed[book.id] = existing to file.length()
+                                continue
+                            }
+                            when (val result = DriveLibrary.upload(token, folder.value, book, file)) {
+                                is DriveOutcome.Ok -> {
+                                    confirmed[book.id] = result.value to file.length()
+                                }
+                                DriveOutcome.Unauthorized -> return@withDriveOutcome DriveOutcome.Unauthorized
+                                DriveOutcome.Failed -> {
+                                    val failure = DriveLibrary.lastFailure ?: DriveLibrary.TransferFailure(
+                                        book.id, book.title, "upload",
+                                        DriveLibrary.lastError ?: "no response from Google Drive", true
+                                    )
+                                    failed += book to failure
+                                    // A refused token stops the whole batch: every later book would
+                                    // fail the same way, and each attempt costs a request.
+                                    if (RetryPolicy.classify(DriveLibrary.lastCode) == TransferClass.UNAUTHORIZED) {
+                                        return@withDriveOutcome DriveOutcome.Unauthorized
+                                    }
+                                }
+                            }
+                        }
+                        DriveOutcome.Ok(Unit)
+                    }
+                    DriveOutcome.Unauthorized -> DriveOutcome.Unauthorized
+                    DriveOutcome.Failed -> DriveOutcome.Failed
+                }
+            }
+            if (outcome == null || outcome is DriveOutcome.Failed) {
+                // No token, no answer: everything not confirmed is still owed, and none of it may
+                // be marked done.
+                todo.filter { it.id !in confirmed }.forEach { book ->
+                    if (failed.none { it.first.id == book.id }) {
+                        failed += book to DriveLibrary.TransferFailure(
+                            book.id, book.title, "upload",
+                            DriveLibrary.lastError ?: "Google Drive did not answer", true
+                        )
+                    }
+                }
+            }
+        } finally {
+            withContext(Dispatchers.Main) { uploadingIds = uploadingIds - todo.map { it.id }.toSet() }
+        }
+        return BatchResult(confirmed, failed)
+    }
+
+    /** What one batch managed to confirm (id -> bytes) and what failed, with reasons. */
+    private data class BatchResult(
+        val confirmed: Map<String, Pair<String, Long>>,
+        val failed: List<Pair<LibraryBook, DriveLibrary.TransferFailure>>
+    )
+
+    /**
+     * Puts every book that still owes the cloud a file into Drive, and records what happened.
+     *
+     * Three things changed here and each of them was a real way to lose a book:
+     *
+     * - **Stale copies are re-uploaded.** The old filter only looked at books with no Drive id, so a
+     *   book whose remote copy was older than the local file was skipped forever.
+     * - **Nothing is called backed up without confirmation.** A book only gets [LibraryBook.backupAt]
+     *   after `DriveLibrary.upload` has verified the bytes against Drive's checksum or by reading
+     *   them back. A failed upload leaves `backupFailed` set, the queue entry written, and the book
+     *   clearly labelled in the shelf and the diagnosis.
+     * - **The caller learns whether the account is complete**, so a snapshot is never presented as a
+     *   finished backup when some of it is missing.
+     */
     private suspend fun uploadAvailableBooks(): UploadSummary {
         val candidates = withContext(Dispatchers.Main) {
             synchronized(libraryLock) { books.toList() }
@@ -1134,75 +1374,27 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             val file = book.filePath?.let(::File)
             BackupRules.needsUpload(book, file != null && file.exists() && file.length() > 0L)
         }
-        if (candidates.isEmpty()) return UploadSummary(attempted = 0, confirmed = emptyList(), failed = emptyList())
-
-        val outcome = withDriveOutcome { token, owner ->
-            when (val folder = DriveLibrary.ensureFolder(token, owner)) {
-                is DriveOutcome.Ok -> {
-                    val confirmed = ArrayList<Pair<String, String>>()
-                    val failed = ArrayList<String>()
-                    for (book in candidates) {
-                        val file = book.filePath?.let(::File)
-                        if (file == null || !file.exists() || file.length() <= 0L) {
-                            failed += book.id
-                            continue
-                        }
-                        // A book that already has an id is checked before it is re-sent: if the
-                        // account already holds these exact bytes, the only thing missing is the
-                        // confirmation, and moving the file again would be pointless traffic.
-                        val existing = book.driveFileId
-                        if (!existing.isNullOrBlank() && DriveLibrary.remoteMatches(token, existing, file) == true) {
-                            confirmed += book.id to existing
-                            continue
-                        }
-                        when (val result = DriveLibrary.upload(token, folder.value, book, file)) {
-                            is DriveOutcome.Ok -> confirmed += book.id to result.value
-                            DriveOutcome.Unauthorized -> return@withDriveOutcome DriveOutcome.Unauthorized
-                            DriveOutcome.Failed -> failed += book.id
-                        }
-                    }
-                    DriveOutcome.Ok(confirmed to failed)
-                }
-                DriveOutcome.Unauthorized -> DriveOutcome.Unauthorized
-                DriveOutcome.Failed -> DriveOutcome.Failed
-            }
+        if (candidates.isEmpty()) {
+            withContext(Dispatchers.Main) { refreshBackupAudit() }
+            return UploadSummary(attempted = 0, confirmed = emptyList(), failed = emptyList())
         }
 
-        val summary = when (outcome) {
-            is DriveOutcome.Ok -> UploadSummary(candidates.size, outcome.value.first, outcome.value.second)
-            // No token, no answer: every candidate is still owed, and none may be marked done.
-            else -> UploadSummary(candidates.size, emptyList(), candidates.map { it.id })
-        }
-        if (candidates.isNotEmpty()) {
-            SyncDiag.mark(
-                "File uploads",
-                "${summary.confirmed.size} confirmed, ${summary.failed.size} failed of ${summary.attempted}"
+        val batch = uploadBatch(candidates)
+        val summary = UploadSummary(candidates.size, batch.confirmed.keys.toList(), batch.failed.map { it.first.id })
+        SyncDiag.mark(
+            "File uploads",
+            "${summary.confirmed.size} confirmed, ${summary.failed.size} failed of ${summary.attempted}"
+        )
+        // A count is not a diagnosis. Every failure names the book, what was attempted, and why —
+        // plus whether it will be tried again, so "failed" is not mistaken for "gone".
+        batch.failed.forEach { (book, failure) ->
+            SyncDiag.fail(
+                "Upload failed — ${book.title.ifBlank { "Untitled" }} (${book.id.take(8)})",
+                failure.reason + if (failure.retryable) " · queued for retry" else " · will not retry by itself"
             )
-            // A count is not a diagnosis. When something failed, the HTTP reason goes in the same
-            // list, because that is what says whether this is the Drive API being switched off,
-            // the app-data scope never granted, or a quota.
-            if (summary.failed.isNotEmpty()) {
-                SyncDiag.fail("Upload refused", DriveLibrary.lastError ?: "no response from Drive")
-            }
         }
-        val now = System.currentTimeMillis()
-        withContext(Dispatchers.Main) {
-            summary.confirmed.forEach { (bookId, fileId) ->
-                val latest = book(bookId) ?: return@forEach
-                upsert(
-                    latest.copy(
-                        driveFileId = fileId,
-                        pendingUpload = false,
-                        backupFailed = false,
-                        backupAt = now
-                    )
-                )
-            }
-            summary.failed.forEach { bookId ->
-                val latest = book(bookId) ?: return@forEach
-                upsert(latest.copy(pendingUpload = true, backupFailed = true, backupAt = 0L))
-            }
-        }
+
+        recordBatch(batch)
         return summary
     }
 
@@ -1311,42 +1503,38 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         }.take(40)
         var extraFailures = 0
         if (stillOwed.isNotEmpty()) {
-            val uploaded = withContext(Dispatchers.IO) {
-                val done = HashMap<String, String>()
-                var failed = 0
-                withDrive { token, owner ->
-                    when (val folder = DriveLibrary.ensureFolder(token, owner)) {
-                        is DriveOutcome.Ok -> {
-                            for (book in stillOwed) {
-                                val file = book.filePath?.let { File(it) } ?: continue
-                                if (!file.exists() || file.length() <= 0L) continue
-                                when (val result = DriveLibrary.upload(token, folder.value, book, file)) {
-                                    is DriveOutcome.Ok -> done[book.id] = result.value
-                                    else -> failed++
-                                }
-                            }
-                            DriveOutcome.Ok(done)
-                        }
-                        DriveOutcome.Unauthorized -> DriveOutcome.Unauthorized
-                        DriveOutcome.Failed -> DriveOutcome.Failed
-                    }
+            val batch = uploadBatch(stillOwed)
+            extraFailures = batch.failed.size
+            if (batch.failed.isNotEmpty()) {
+                SyncDiag.mark(
+                    "File uploads (after merge)",
+                    "${batch.confirmed.size} confirmed, ${batch.failed.size} failed of ${stillOwed.size}"
+                )
+                batch.failed.forEach { (book, failure) ->
+                    SyncDiag.fail(
+                        "Upload failed — ${book.title.ifBlank { "Untitled" }} (${book.id.take(8)})",
+                        failure.reason + if (failure.retryable) " · queued for retry" else " · will not retry by itself"
+                    )
                 }
-                extraFailures = failed
-                done
             }
-            if (extraFailures > 0) {
-                SyncDiag.fail("Upload refused", DriveLibrary.lastError ?: "no response from Drive")
-            }
-            if (uploaded.isNotEmpty()) {
+            if (batch.confirmed.isNotEmpty()) {
                 val at = System.currentTimeMillis()
                 merged = merged.copy(
                     books = merged.books.map { b ->
-                        uploaded[b.id]?.let {
-                            b.copy(driveFileId = it, pendingUpload = false, backupFailed = false, backupAt = at)
-                        } ?: b
+                        val verified = batch.confirmed[b.id]
+                        if (verified != null) {
+                            b.copy(
+                                driveFileId = verified.first,
+                                pendingUpload = false,
+                                backupFailed = false,
+                                backupAt = at,
+                                backupBytes = verified.second
+                            )
+                        } else b
                     }
                 )
             }
+            recordBatch(batch)
         }
         // Apply the merged library locally, always. Uploading only happens when this phone holds
         // files the account does not; on a fresh install nothing needs uploading, and that was the
@@ -1381,6 +1569,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         if (written != null) {
             if (!unchanged) lastDriveSnapshot = json
             SyncDiag.mark("Account snapshot written", if (unchanged) "unchanged — not re-sent" else "ok")
+            // The deletion is now durably in the account, so the files it names can go. This is
+            // also the point at which a retry of an earlier failed delete becomes safe.
+            retryPendingDeletes()
             withContext(Dispatchers.Main) {
                 val at = System.currentTimeMillis()
                 val pending = uploads.failed.size + extraFailures
@@ -1412,7 +1603,18 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     private fun applySnapshot(snap: AccountSnapshot) {
         applyingRemote = true
         try {
-            val incoming = snap.books.filter { it.origin != BookOrigin.BUNDLED && it.id !in BundledBooks.seedIds }
+            // Deletions first, and on their own: a tombstone that arrives with a snapshot must be
+            // written down before the books are, or an interrupted apply would resurrect exactly
+            // the book this snapshot was sent to delete.
+            val stones = Deletions.prune(snap.deletions)
+            mergeDeletions(stones)
+            val incoming = snap.books.filter {
+                it.origin != BookOrigin.BUNDLED &&
+                    it.id !in BundledBooks.seedIds &&
+                    !Deletions.blocks(it, stones)
+            }
+            // Books this device still holds that the account has deleted.
+            val blocked = synchronized(libraryLock) { books.filter { Deletions.blocks(it, stones) } }
             synchronized(libraryLock) {
                 val localById = books.associateBy { it.id }
                 val keptBundled = books.filter { it.origin == BookOrigin.BUNDLED }
@@ -1482,6 +1684,25 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 .putLong("readerAppearAt", readerAppearAt)
                 .putLong("snapshotAt", snapshotAt)
                 .apply()
+
+            // The account deleted these; this phone now does the same. Only books a tombstone
+            // names are touched — a book merely absent from a snapshot is left exactly where it
+            // is, which is the difference between "deleted elsewhere" and "never synced here".
+            if (blocked.isNotEmpty()) {
+                blocked.forEach { book ->
+                    book.filePath?.let { path -> runCatching { File(path).delete() } }
+                    val driveId = book.driveFileId
+                    if (!driveId.isNullOrBlank()) addPendingDelete(driveId)
+                }
+                synchronized(deletionsLock) {
+                    saveDeletionsUnlocked(Deletions.prune(loadDeletionsUnlocked()))
+                }
+                toast(
+                    if (blocked.size == 1) "“${blocked.first().title}” was deleted on another device"
+                    else "${blocked.size} books were deleted on another device"
+                )
+            }
+            refreshBackupAudit()
         } finally {
             applyingRemote = false
         }
@@ -1497,6 +1718,212 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 if (ok) cur.removeAll { it == id }
                 else if (id !in cur) cur += id
                 savePendingDeletesUnlocked(cur)
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Deletions (tombstones)
+    // ---------------------------------------------------------------------------------------
+
+    /** Every deletion this install knows about, newest last. Cheap: one small file. */
+    fun deletions(): List<Tombstone> = synchronized(deletionsLock) { loadDeletionsUnlocked() }
+
+    /**
+     * Records a deletion *before* anything else happens to the book.
+     *
+     * Order matters: the tombstone is the durable statement that the reader meant it. If the app
+     * dies after this line, the deletion still syncs. If it died before, the book comes back —
+     * annoying, but not data loss, and never the reverse.
+     */
+    private fun recordDeletion(book: LibraryBook) {
+        val at = System.currentTimeMillis()
+        synchronized(deletionsLock) {
+            val list = loadDeletionsUnlocked().toMutableList()
+            // Idempotent: deleting twice does not create two entries, and a repeated sync does not
+            // keep pushing the timestamp forward.
+            list.removeAll { it.bookId == book.id }
+            list += Tombstone(book.id, maxOf(at, book.addedAt))
+            saveDeletionsUnlocked(Deletions.prune(Deletions.merge(list, emptyList())))
+        }
+    }
+
+    /** Adopts deletions that arrived from the account, so this device stops re-adding those books. */
+    private fun mergeDeletions(incoming: List<Tombstone>) {
+        if (incoming.isEmpty()) return
+        synchronized(deletionsLock) {
+            val merged = Deletions.prune(Deletions.merge(loadDeletionsUnlocked(), incoming))
+            saveDeletionsUnlocked(merged)
+        }
+    }
+
+    private fun loadDeletionsUnlocked(): List<Tombstone> {
+        if (!deletionsFile.exists()) return emptyList()
+        return runCatching {
+            val o = JSONObject(deletionsFile.readText())
+            // A deletion belongs to the account it was made in. Signing into a different account
+            // must not delete that account's books.
+            val owner = o.optString("account")
+            if (owner.isNotBlank() && account.userId.isNotBlank() && owner != account.userId) {
+                emptyList()
+            } else {
+                val arr = o.optJSONArray("books") ?: JSONArray()
+                val out = ArrayList<Tombstone>(arr.length())
+                for (i in 0 until arr.length()) {
+                    val row = arr.optJSONObject(i) ?: continue
+                    val id = row.optString("id")
+                    if (id.isNotBlank()) out += Tombstone(id, row.optLong("at", 0L))
+                }
+                out
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun saveDeletionsUnlocked(list: List<Tombstone>) {
+        val arr = JSONArray()
+        list.forEach { arr.put(JSONObject().put("id", it.bookId).put("at", it.deletedAt)) }
+        runCatching {
+            atomicWrite(
+                deletionsFile,
+                JSONObject().put("account", account.userId).put("books", arr).toString()
+            )
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Transfer queue
+    // ---------------------------------------------------------------------------------------
+
+    /** One book that owes the account a file, and why it still does. */
+    data class PendingTransfer(
+        val bookId: String,
+        val title: String,
+        val attempts: Int,
+        val lastTryAt: Long,
+        val reason: String,
+        val retryable: Boolean
+    )
+
+    fun pendingTransfers(): List<PendingTransfer> = synchronized(queueLock) { loadQueueUnlocked() }
+
+    private fun noteTransferFailed(book: LibraryBook, reason: String, retryable: Boolean) {
+        synchronized(queueLock) {
+            val list = loadQueueUnlocked().toMutableList()
+            val prev = list.firstOrNull { it.bookId == book.id }
+            list.removeAll { it.bookId == book.id }
+            list += PendingTransfer(
+                bookId = book.id,
+                title = book.title,
+                attempts = (prev?.attempts ?: 0) + 1,
+                lastTryAt = System.currentTimeMillis(),
+                reason = reason,
+                retryable = retryable
+            )
+            saveQueueUnlocked(list)
+        }
+        refreshBackupAudit()
+    }
+
+    private fun clearTransfer(bookId: String) {
+        synchronized(queueLock) {
+            val list = loadQueueUnlocked()
+            if (list.none { it.bookId == bookId }) return
+            saveQueueUnlocked(list.filterNot { it.bookId == bookId })
+        }
+    }
+
+    private fun loadQueueUnlocked(): List<PendingTransfer> {
+        if (!uploadQueueFile.exists()) return emptyList()
+        return runCatching {
+            val arr = JSONArray(uploadQueueFile.readText())
+            val out = ArrayList<PendingTransfer>(arr.length())
+            for (i in 0 until arr.length()) {
+                val row = arr.optJSONObject(i) ?: continue
+                val id = row.optString("id")
+                if (id.isBlank()) continue
+                out += PendingTransfer(
+                    bookId = id,
+                    title = row.optString("title"),
+                    attempts = row.optInt("attempts", 0),
+                    lastTryAt = row.optLong("at", 0L),
+                    reason = row.optString("reason"),
+                    retryable = row.optBoolean("retryable", true)
+                )
+            }
+            out
+        }.getOrDefault(emptyList())
+    }
+
+    private fun saveQueueUnlocked(list: List<PendingTransfer>) {
+        if (list.isEmpty()) {
+            runCatching { uploadQueueFile.delete() }
+            return
+        }
+        val arr = JSONArray()
+        list.forEach { t ->
+            arr.put(
+                JSONObject()
+                    .put("id", t.bookId)
+                    .put("title", t.title)
+                    .put("attempts", t.attempts)
+                    .put("at", t.lastTryAt)
+                    .put("reason", t.reason)
+                    .put("retryable", t.retryable)
+            )
+        }
+        runCatching { atomicWrite(uploadQueueFile, arr.toString()) }
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Backup audit
+    // ---------------------------------------------------------------------------------------
+
+    /** Recomputes the counts the summary line and the diagnostics panel show. */
+    fun refreshBackupAudit() {
+        val books = synchronized(libraryLock) { books.toList() }
+            .filter { it.origin != BookOrigin.BUNDLED && it.format != BookFormat.TEXT }
+        backupCounts = BackupAudit.counts(books, uploadingIds)
+    }
+
+    /** "2 verified, 1 pending, 1 failed" — counted from files, never from metadata. */
+    fun backupSummary(): String = backupCounts.summary()
+
+    /** What to tell the reader about one book, right now. */
+    fun backupBadge(book: LibraryBook): BackupBadge =
+        BackupAudit.badge(book, book.id in uploadingIds, online = networkReady())
+
+    /**
+     * The per-book backup table for the diagnosis, one line per book that is not verified.
+     *
+     * Title first, because that is what the reader recognises; the id is a short stable handle and
+     * contains nothing personal. No tokens, no file contents, no account email.
+     */
+    fun backupAuditLines(): List<String> = backupLines(onlyProblems = false)
+
+    /** Just the books that are *not* verified — the list the You screen shows. */
+    fun backupProblemLines(): List<String> = backupLines(onlyProblems = true)
+
+    private fun backupLines(onlyProblems: Boolean): List<String> {
+        val queued = pendingTransfers().associateBy { it.bookId }
+        val books = synchronized(libraryLock) { books.toList() }
+            .filter { it.origin != BookOrigin.BUNDLED && it.format != BookFormat.TEXT }
+        return books.mapNotNull { book ->
+            val badge = BackupAudit.badge(book, book.id in uploadingIds, online = networkReady())
+            if (onlyProblems && badge == BackupBadge.VERIFIED) return@mapNotNull null
+            val queue = queued[book.id]
+            buildString {
+                append(BackupAudit.label(badge))
+                append(" · ").append(book.title.ifBlank { "Untitled" })
+                append(" · ").append(book.format.name.lowercase())
+                append(" · id=").append(book.id.take(12))
+                if (book.driveFileId != null) append(" · drive=").append(book.driveFileId.take(8))
+                if (book.backupBytes > 0L) append(" · ").append(book.backupBytes / 1024).append(" KB verified")
+                if (queue != null) {
+                    append(" · ").append(queue.attempts).append(" attempt(s), last tried ")
+                    append(android.text.format.DateFormat.format("HH:mm:ss", queue.lastTryAt))
+                    if (queue.reason.isNotBlank()) append(" — ").append(queue.reason)
+                    append(if (queue.retryable) "" else " (will not be retried automatically)")
+                }
             }
         }
     }
@@ -1681,7 +2108,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     o.optInt("pageCount", 1), o.optInt("currentPage", 0), o.optBoolean("finished"), o.optLong("addedAt", System.currentTimeMillis()),
                     o.optLong("lastReadAt"), o.optString("category", "Library"), o.optString("synopsis"), emptyList(),
                     o.optString("driveFileId").ifBlank { null }, o.optBoolean("pendingUpload", false),
-                    o.optBoolean("dnf", false), o.optLong("backupAt", 0L), o.optBoolean("backupFailed", false)
+                    o.optBoolean("dnf", false), o.optLong("backupAt", 0L), o.optBoolean("backupFailed", false),
+                    o.optLong("backupBytes", 0L)
                 )
             }
         }
@@ -1722,6 +2150,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     .put("lastReadAt", b.lastReadAt).put("category", b.category).put("synopsis", b.synopsis)
                     .put("driveFileId", b.driveFileId ?: "").put("pendingUpload", b.pendingUpload)
                     .put("backupAt", b.backupAt).put("backupFailed", b.backupFailed).put("dnf", b.dnf)
+                    .put("backupBytes", b.backupBytes)
             )
         }
         atomicWrite(booksFile, arr.toString())

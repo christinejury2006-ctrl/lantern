@@ -45,7 +45,16 @@ enum class BookBackupState {
     NOT_APPLICABLE,
     PENDING,
     BACKED_UP,
-    FAILED
+    FAILED,
+
+    /**
+     * Confirmed in the account, but this phone has no file.
+     *
+     * Not a defect: the reader keeps a large library in Drive and space on the phone. It is a
+     * distinct state so the shelf can say "Restore required" instead of "Backed up" (which would
+     * imply a local copy exists) or "Waiting" (which would imply an upload is owed).
+     */
+    RESTORE_REQUIRED
 }
 
 enum class ReaderTheme(val label: String) { LIGHT("Light Mode"), DARK("Dark Mode") }
@@ -100,7 +109,17 @@ data class LibraryBook(
      */
     val backupAt: Long = 0L,
     /** The last attempt to back this book up failed; it stays queued for retry. */
-    val backupFailed: Boolean = false
+    val backupFailed: Boolean = false,
+    /**
+     * The size of the file that was last verified against the account, in bytes.
+     *
+     * A confirmation is a statement about *specific bytes*. Without this, a book whose local file
+     * was replaced (re-exported, repaired, re-imported over itself) kept its old confirmation and
+     * was never re-uploaded, so the account quietly held a stale or broken copy. Comparing sizes
+     * costs one `File.length()` and turns "it was backed up once" into "the file *as it is now* was
+     * backed up". Zero means "not recorded" — older records simply get re-confirmed once.
+     */
+    val backupBytes: Long = 0L
 ) {
     val localFileAvailable: Boolean
         get() {
@@ -119,13 +138,20 @@ data class LibraryBook(
 
     /** What the reader can honestly be told about this book's cloud copy. */
     val backupState: BookBackupState
-        get() = when {
-            origin == BookOrigin.BUNDLED || format == BookFormat.TEXT -> BookBackupState.NOT_APPLICABLE
-            backupAt > 0L && !pendingUpload -> BookBackupState.BACKED_UP
-            backupFailed -> BookBackupState.FAILED
-            pendingUpload || driveFileId == null -> BookBackupState.PENDING
-            // An id without a confirmation is still unverified: it may hold an older file.
-            else -> BookBackupState.PENDING
+        get() {
+            // Anything that is not a file this app stores has no cloud copy to speak of.
+            if (origin == BookOrigin.BUNDLED || format == BookFormat.TEXT) {
+                return BookBackupState.NOT_APPLICABLE
+            }
+            val confirmed = backupAt > 0L && !pendingUpload && !backupFailed && !driveFileId.isNullOrBlank()
+            return when {
+                // A confirmed copy the phone does not hold: the reader needs a restore, not a backup.
+                confirmed && !localFileAvailable -> BookBackupState.RESTORE_REQUIRED
+                confirmed -> BookBackupState.BACKED_UP
+                backupFailed -> BookBackupState.FAILED
+                // Pending and an unconfirmed id are the same answer: nothing has been proven yet.
+                else -> BookBackupState.PENDING
+            }
         }
 
     /**

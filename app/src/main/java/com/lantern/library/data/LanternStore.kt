@@ -32,6 +32,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     private val prefs = app.getSharedPreferences("lantern", Context.MODE_PRIVATE)
     private val booksFile = File(app.filesDir, "library.json")
     private val wantFile = File(app.filesDir, "want_to_read.json")
+    private val notInterestedIds = prefs.getStringSet("not_interested_volume_ids", emptySet())!!.toMutableSet()
     private val pendingDeleteFile = File(app.filesDir, "pending_deletes.json")
     private val libraryAppearFile = File(app.filesDir, "library_appearance.json")
     private val readerAppearFile = File(app.filesDir, "reader_appearance.json")
@@ -137,7 +138,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             }
             StartupTrace.mark("LanternStore prefs interestsChosen=$interestsChosen n=${interests.size}")
             if (interestsChosen) {
-                forYou = disk.forYouCached
+                forYou = disk.forYouCached.filterNot { it.volumeId in notInterestedIds }
                 StartupTrace.mark("LanternStore cached forYou=${forYou.size}")
             }
             hydrated = true
@@ -397,6 +398,13 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         }
 
     fun isWantToRead(book: DiscoveryBook) = wantToRead.any { Recommendations.sameWork(it, book) }
+
+    fun markNotInterested(book: DiscoveryBook) {
+        notInterestedIds.add(book.volumeId)
+        prefs.edit().putStringSet("not_interested_volume_ids", notInterestedIds.toSet()).apply()
+        dropFromRecommendations { it.volumeId in notInterestedIds || Recommendations.sameWork(it, book) }
+        toast("Recommendation removed")
+    }
     fun addWantToRead(book: DiscoveryBook) {
         if (wantToRead.any { Recommendations.sameWork(it, book) }) return
         wantToRead.add(0, book.copy(savedAt = System.currentTimeMillis()))
@@ -451,7 +459,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             forYouFailed = false
             try {
                 val list = Recommendations.daily(getApplication(), interests, force)
-                forYou = list
+                forYou = list.filterNot { it.volumeId in notInterestedIds }
                 RecDiag.storeCount = forYou.size
                 RecDiag.log(RecDiag.summary())
                 StartupTrace.mark("ensureRecommendations done n=${list.size} failed=${list.isEmpty()}")
@@ -1766,8 +1774,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         return out
     }
     private fun dropFromRecommendations(drop: (DiscoveryBook) -> Boolean) {
-        if (forYou.any(drop)) forYou = forYou.filterNot(drop)
-        Recommendations.excludeFromCache(getApplication(), drop)
+        val excluded = { book: DiscoveryBook -> book.volumeId in notInterestedIds || drop(book) }
+        if (forYou.any(excluded)) forYou = forYou.filterNot(excluded)
+        Recommendations.excludeFromCache(getApplication(), excluded)
     }
     private fun persistWantToRead() {
         val arr = JSONArray()

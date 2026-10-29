@@ -444,7 +444,13 @@ class UploadPoolTest {
         assertNotNull("RUNNER DID NOT RETURN for test 4", holder[0])
         assertTrue("A BOOK FAILED in test 4", holder[0]!!.failed.isEmpty())
         assertTrue("A BOOK WAS SKIPPED in test 4", holder[0]!!.skipped.isEmpty())
-        assertEquals("WRONG CONFIRMED SET in test 4", setOf("a", "b"), holder[0]!!.confirmed.keys)
+        assertTrue("A BOOK WAS CANCELLED in test 4", listener.paused.isEmpty())
+        assertTrue("A WAS NEVER VERIFIED in test 4", listener.verified.containsKey("a"))
+        assertTrue("B WAS NEVER VERIFIED in test 4", listener.verified.containsKey("b"))
+        assertTrue("CONFIRMED EMPTY in test 4", holder[0]!!.confirmed.isNotEmpty())
+        assertTrue("NO A IN CONFIRMED in test 4", holder[0]!!.confirmed.containsKey("a"))
+        assertTrue("NO B IN CONFIRMED in test 4", holder[0]!!.confirmed.containsKey("b"))
+        assertTrue("EXTRA IN CONFIRMED in test 4", holder[0]!!.confirmed.size == 2)
     }
 
     // 5 -------------------------------------------------------------------------------------
@@ -564,7 +570,12 @@ class UploadPoolTest {
         assertNotNull("RUNNER DID NOT RETURN for test 8", holder[0])
         assertTrue("A BOOK FAILED in test 8", holder[0]!!.failed.isEmpty())
         assertTrue("A BOOK WAS SKIPPED in test 8", holder[0]!!.skipped.isEmpty())
-        assertEquals("WRONG CONFIRMED SET in test 8", setOf("a", "b", "c"), holder[0]!!.confirmed.keys)
+        assertTrue("A BOOK WAS CANCELLED in test 8", listener.paused.isEmpty())
+        assertTrue("A WAS NEVER VERIFIED in test 8", listener.verified.containsKey("a"))
+        assertTrue("B WAS NEVER VERIFIED in test 8", listener.verified.containsKey("b"))
+        assertTrue("C WAS NEVER VERIFIED in test 8", listener.verified.containsKey("c"))
+        assertTrue("CONFIRMED EMPTY in test 8", holder[0]!!.confirmed.isNotEmpty())
+        assertTrue("EXTRA IN CONFIRMED in test 8", holder[0]!!.confirmed.size == 3)
         assertEquals(1, drive.countFor("b"))
     }
 
@@ -710,7 +721,11 @@ class UploadPoolTest {
         runner.join(30_000)
         assertNotNull("RUNNER DID NOT RETURN for test 12", holder[0])
         assertTrue("A BOOK FAILED in test 12", holder[0]!!.failed.isEmpty())
-        assertEquals("WRONG CONFIRMED SET in test 12", setOf("a"), holder[0]!!.confirmed.keys)
+        assertTrue("A BOOK WAS SKIPPED in test 12", holder[0]!!.skipped.isEmpty())
+        assertTrue("A BOOK WAS CANCELLED in test 12", first.paused.isEmpty())
+        assertTrue("A WAS NEVER VERIFIED in test 12", first.verified.containsKey("a"))
+        assertTrue("CONFIRMED EMPTY in test 12", holder[0]!!.confirmed.isNotEmpty())
+        assertTrue("EXTRA IN CONFIRMED in test 12", holder[0]!!.confirmed.size == 1)
         assertEquals(1, drive.countFor("a"))
         assertEquals(1, drive.creates.get())
         assertFalse("the book must not stay in flight after it finishes", pool.isInFlight("a"))

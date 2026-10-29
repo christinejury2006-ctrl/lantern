@@ -127,6 +127,13 @@ object GoogleBooks {
             title = title,
             authors = authors,
             description = info.optString("description").trim(),
+            excerpt = item.optJSONObject("searchInfo")?.optString("textSnippet").orEmpty()
+                .replace(Regex("<[^>]*>"), "")
+                .replace("&nbsp;", " ")
+                .replace("&amp;", "&")
+                .replace("&quot;", "\"")
+                .replace("&#39;", "'")
+                .trim(),
             categories = categories,
             coverUrl = covers.firstOrNull(),
             coverUrls = covers,

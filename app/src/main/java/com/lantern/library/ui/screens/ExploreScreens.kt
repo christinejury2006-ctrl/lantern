@@ -144,7 +144,7 @@ fun SearchScreen(
             searched = true
             withContext(Dispatchers.IO) {
                 try {
-                    val fetchedEditions = OpenCatalogs.searchFreeEditions(q)
+                    val fetchedEditions = OpenCatalogs.search(q)
                     editions = fetchedEditions
 
                     val scrapedItems = fetchScrapedBooks(q)

@@ -402,7 +402,7 @@ fun ReaderScreen(
             closeMenus()
             return
         }
-        val page = pages.indexOfFirst { it.chapterIndex == index }
+        val page = pageList.indexOfFirst { it.chapterIndex == index }
         if (prefs.swipeMode) {
             if (page < 0) return
             go(page)

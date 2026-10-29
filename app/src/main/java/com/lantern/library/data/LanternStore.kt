@@ -1643,7 +1643,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         withContext(Dispatchers.Main) { applySnapshot(merged) }
         SyncDiag.mark(
             "Library applied",
-            "local=${local.books.size} cloud=${cloud?.books.size ?: 0} merged=${merged.books.size} books"
+            "local=${local.books.size} cloud=${cloud?.books?.size ?: 0} merged=${merged.books.size} books"
         )
         val written = withDrive { token, owner ->
             when (val folder = DriveLibrary.ensureFolder(token, owner)) {

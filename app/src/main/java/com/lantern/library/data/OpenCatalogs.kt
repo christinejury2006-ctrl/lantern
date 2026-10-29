@@ -100,7 +100,7 @@ object OpenCatalogs {
     }
 
     /** Gutenberg, via Gutendex. EPUB preferred; PDF kept as a second edition when there is one. */
-    private fun gutenberg(query: String): List<FreeEdition> {
+    private suspend fun gutenberg(query: String): List<FreeEdition> {
         val hits = Gutendex.search(query, null)
         val out = ArrayList<FreeEdition>(hits.size * 2)
         for (hit in hits.take(6)) {

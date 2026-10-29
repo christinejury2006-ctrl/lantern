@@ -156,12 +156,26 @@ class TransferProgressTest {
 
     @Test
     fun `an offline queued book is waiting, and a paused one says paused`() {
-        val b = book(pendingUpload = true)
-        assertEquals(BackupBadge.WAITING, BackupAudit.badge(b, null, online = false))
-        assertEquals(BackupBadge.WAITING, BackupAudit.badge(b, null, online = true, queued = true))
-        val paused = TransferProgress.paused(b.id, 640, 1_280, "interrupted")
-        assertEquals(BackupBadge.PAUSED, BackupAudit.badge(b, paused, online = true))
-        assertEquals(50, paused.percent)
+        val file = tempFile(1_280)
+        try {
+            // A book with a file on the phone that still owes the account one.
+            val b = book(pendingUpload = true, filePath = file.absolutePath)
+            assertEquals(BackupBadge.WAITING, BackupAudit.badge(b, null, online = false))
+            assertEquals(BackupBadge.WAITING, BackupAudit.badge(b, null, online = true, queued = true))
+            val paused = TransferProgress.paused(b.id, 640, 1_280, "interrupted")
+            assertEquals(BackupBadge.PAUSED, BackupAudit.badge(b, paused, online = true))
+            assertEquals(50, paused.percent)
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
+    fun `a record with no file anywhere is local only, not waiting`() {
+        // Metadata arrived from the account, no file in it and none on this phone: there is
+        // nothing to upload, so it must not claim to be queued.
+        val ghost = book(driveFileId = null)
+        assertEquals(BackupBadge.LOCAL_ONLY, BackupAudit.badge(ghost, null, online = false))
     }
 
     @Test

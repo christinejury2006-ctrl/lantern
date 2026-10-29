@@ -20,6 +20,7 @@ import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -74,9 +75,9 @@ class UploadPoolTest {
         /** loreId -> HTTP status to refuse its upload with. Never consumed: a permanent refusal. */
         val failUpload = ConcurrentHashMap<String, Int>()
         /** loreIds whose stored file is given a wrong checksum, as a corrupted copy would be. */
-        val corrupt = ConcurrentHashMap.newKeySet<String>()
+        val corrupt = CopyOnWriteArraySet<String>()
         /** loreIds whose first create stores the bytes but loses the response. */
-        val loseResponseOnce = ConcurrentHashMap.newKeySet<String>()
+        val loseResponseOnce = CopyOnWriteArraySet<String>()
 
         /** Every book that reached the byte-moving step, for the "both at once" assertion. */
         val uploadOrder = CopyOnWriteArrayList<String>()
@@ -200,11 +201,11 @@ class UploadPoolTest {
     private class Recorder : UploadListener {
         val started = ConcurrentHashMap<String, Long>()
         val progress = ConcurrentHashMap<String, MutableList<Pair<Long, Long>>>()
-        val verifying = ConcurrentHashMap.newKeySet<String>()
+        val verifying = CopyOnWriteArraySet<String>()
         val verified = ConcurrentHashMap<String, String>()
         val failed = ConcurrentHashMap<String, String>()
         val paused = ConcurrentHashMap<String, Int>()
-        val skipped = ConcurrentHashMap.newKeySet<String>()
+        val skipped = CopyOnWriteArraySet<String>()
         val events = ConcurrentLinkedQueue<String>()
 
         /** Tripped when a book's verification has finished. */

@@ -146,6 +146,35 @@ jobs:
           done
           if [ "$missing" -ne 0 ]; then exit 1; fi
 
+      # Printing the signer was not enough: the log is the one place nobody looks, and a build
+      # signed by the wrong key installs over nothing — Android refuses it with a signature
+      # mismatch, and Google Sign-In refuses the fingerprint. So the identity is asserted, for
+      # both APKs, against the certificate this repository expects. Override it with the
+      # repository variable LORE_EXPECTED_SIGNER_SHA1 if the key is ever rotated.
+      - name: Verify both APKs carry the persistent signing key
+        env:
+          EXPECTED_SHA1: ${{ vars.LORE_EXPECTED_SIGNER_SHA1 || '6fdf2aded560460dc2ededd1a25ba8f5c76abe3c' }}
+        run: |
+          expected=$(printf '%s' "$EXPECTED_SHA1" | tr -d ':' | tr 'A-F' 'a-f')
+          status=0
+          # Globbed, not named: Gradle's output file name is its business, and a rename here
+          # would turn this check into a no-op that always passes.
+          for apk in app/build/outputs/apk/debug/lore-debug.apk app/build/outputs/apk/release/*.apk; do
+            [ -f "$apk" ] || continue
+            actual=$("$ANDROID_HOME"/build-tools/34.0.0/apksigner verify --print-certs "$apk" \
+              | sed -n 's/^Signer #1 certificate SHA-1 digest: //p' | head -1 | tr -d ':' | tr 'A-F' 'a-f')
+            echo "$apk signer SHA-1: $actual"
+            echo "::notice title=$(basename "$apk") signer SHA-1::$actual"
+            if [ -z "$actual" ]; then
+              echo "::error title=Unsigned APK::$apk carries no signing certificate."
+              status=1
+            elif [ -n "$expected" ] && [ "$actual" != "$expected" ]; then
+              echo "::error title=Wrong signing key::$apk is signed by $actual, not $expected. It will not install over an existing Lore, and Google Sign-In will reject it."
+              status=1
+            fi
+          done
+          exit $status
+
       - name: Upload the minified release APK
         uses: actions/upload-artifact@v4
         with:

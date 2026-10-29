@@ -22,8 +22,14 @@ import java.io.RandomAccessFile
  */
 object BookFiles {
 
-    /** Small enough to reject a truncated response, large enough for a one-page book. */
-    const val MIN_BYTES = 512L
+    /**
+     * Floor for "there is a file here at all".
+     *
+     * Deliberately small: a short story EPUB compresses to a few hundred bytes, and rejecting it
+     * would be a bug, not a safety feature. Truncation is caught by the container checks below,
+     * which is a stricter test than a byte count.
+     */
+    const val MIN_BYTES = 128L
 
     sealed class Check {
         object Ok : Check()

@@ -38,7 +38,13 @@ class BookFilesTest {
             zip.write("<?xml version=\"1.0\"?><container/>".toByteArray())
             zip.closeEntry()
             zip.putNextEntry(ZipEntry("OEBPS/chapter1.xhtml"))
-            val chapter = "<html><body>" + "text ".repeat(400) + "</body></html>"
+            // Varied prose, so the archive is a realistic size rather than a highly compressible
+            // repeat that shrinks below any sane threshold.
+            val chapter = buildString {
+                append("<html><body>")
+                repeat(400) { i -> append("word").append(i * 7919 % 100_003).append(' ') }
+                append("</body></html>")
+            }
             zip.write(chapter.toByteArray())
             zip.closeEntry()
         }

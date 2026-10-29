@@ -198,7 +198,7 @@ fun NookProgress(
         if (value > 0f) {
             drawRoundRect(
                 brush = Brush.horizontalGradient(
-                    listOf(palette.aurora[0], palette.aurora[1], palette.aurora[2])
+                    listOf(Color(0xFF17151C), Color(0xFF4C267A), Color(0xFF9B6DDA))
                 ),
                 size = Size((size.width * value).coerceAtLeast(size.height), size.height),
                 cornerRadius = androidx.compose.ui.geometry.CornerRadius(r, r)

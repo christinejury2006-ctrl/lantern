@@ -50,8 +50,9 @@ class DriveMultipartTest {
             .addPart(body)
             .build()
         assertEquals(1, multipart.parts.size)
-        // No explicit header list at all, so there is nothing for OkHttp to refuse.
-        assertEquals(0, multipart.parts[0].headers.size)
+        // No explicit header list at all, so there is nothing for OkHttp to refuse. (OkHttp 4.12
+        // exposes `Part.headers` as nullable; it is null exactly when no headers were supplied.)
+        assertEquals(0, multipart.parts[0].headers?.size ?: 0)
         assertEquals("application/json", multipart.parts[0].body.contentType()?.subtype)
     }
 

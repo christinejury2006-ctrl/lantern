@@ -1357,7 +1357,12 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                                     journalDone(book.id)
                                 }
                                 DriveOutcome.Unauthorized -> {
-                                    TransferBus.failed(book.id, 0L, total, "sign in again")
+                                    TransferBus.failed(
+                                        book.id,
+                                        TransferBus.progressFor(book.id)?.sentBytes ?: 0L,
+                                        total,
+                                        "Google rejected the sign-in — sign in again"
+                                    )
                                     journalDone(book.id)
                                     return@withDriveOutcome DriveOutcome.Unauthorized
                                 }
@@ -2017,7 +2022,11 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             }
             TransferBus.paused(bookId, 0L, file.length(), "retrying")
             SyncDiag.mark("Retry", "one book by request: ${book.title}")
-            val batch = uploadBatch(listOf(book.copy(pendingUpload = true)))
+            // Same lock as a sync: a manual retry and a scheduled pass must not write the library
+            // at the same time, and the second one must see the first one's confirmation.
+            val batch = syncMutex.withLock {
+                uploadBatch(listOf(book.copy(pendingUpload = true)))
+            }
             batch.failed.forEach { (failed, failure) ->
                 SyncDiag.fail(
                     "Retry failed — ${failed.title.ifBlank { "Untitled" }} (${failed.id.take(8)})",

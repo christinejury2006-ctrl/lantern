@@ -142,6 +142,8 @@ fun ReadingNookScreen(
                             row = ordered[index],
                             palette = palette,
                             transfers = transfers,
+                            queued = queueReasons.keys,
+                            online = online,
                             onOpenBook = onOpenBook,
                             onOpenBadge = { book -> detailFor = book.id }
                         )
@@ -171,6 +173,8 @@ private fun BookRow(
     row: List<LibraryBook>,
     palette: NookPalette,
     transfers: Map<String, TransferProgress>,
+    queued: Set<String>,
+    online: Boolean,
     onOpenBook: (LibraryBook) -> Unit,
     onOpenBadge: (LibraryBook) -> Unit
 ) {
@@ -183,6 +187,8 @@ private fun BookRow(
                 book = book,
                 palette = palette,
                 transfer = transfers[book.id],
+                queued = book.id in queued,
+                online = online,
                 modifier = Modifier.weight(1f),
                 onBadge = { onOpenBadge(book) },
                 onClick = { onOpenBook(book) }
@@ -353,6 +359,8 @@ private fun ShelfTile(
     book: LibraryBook,
     palette: NookPalette,
     transfer: TransferProgress?,
+    queued: Boolean,
+    online: Boolean,
     modifier: Modifier = Modifier,
     onBadge: () -> Unit,
     onClick: () -> Unit
@@ -378,6 +386,8 @@ private fun ShelfTile(
             BackupBadgeChip(
                 book = book,
                 transfer = transfer,
+                queued = queued,
+                online = online,
                 palette = palette,
                 onTap = onBadge,
                 modifier = Modifier.align(Alignment.TopEnd).padding(5.dp)
@@ -403,11 +413,13 @@ private fun ShelfTile(
 private fun BackupBadgeChip(
     book: LibraryBook,
     transfer: TransferProgress?,
+    queued: Boolean,
+    online: Boolean,
     palette: NookPalette,
     onTap: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val state = BackupAudit.badge(book, transfer, online = true, queued = false)
+    val state = BackupAudit.badge(book, transfer, online = online, queued = queued)
     // A bundled or plain-text book has no file in the account, so it gets no badge at all.
     if (state == BackupBadge.NOT_APPLICABLE) return
     val percent = transfer?.percent

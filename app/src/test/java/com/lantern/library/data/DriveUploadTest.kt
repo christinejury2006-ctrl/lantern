@@ -396,6 +396,49 @@ class DriveUploadTest {
         assertEquals(b.id, DriveLibrary.lastFailure!!.bookId)
     }
 
+    /**
+     * The percentage on a card comes from this: bytes counted as they are written, ending exactly
+     * at the file's length and never beyond it.
+     */
+    @Test
+    fun `progress is reported for every byte of the file, and never overshoots`() {
+        val bytes = epubBytes("progress")
+        val file = write("progress.epub", bytes)
+        val b = book(BookFormat.EPUB, file)
+        val seen = ArrayList<Long>()
+        var verifyPhase = 0
+
+        val result = DriveLibrary.upload(
+            "token", "appDataFolder", b, file,
+            onProgress = { sent, total ->
+                assertEquals(file.length(), total)
+                seen += sent
+            },
+            onVerifying = { verifyPhase++ }
+        )
+
+        assertTrue(result is DriveOutcome.Ok)
+        assertTrue("progress must advance", seen.size > 1)
+        assertEquals("monotonic", seen.sorted(), seen)
+        assertEquals("the last report is the whole file", file.length(), seen.last())
+        assertTrue("no report exceeds the file", seen.max() <= file.length())
+        // Verification is reported separately from transfer: the bytes were out first.
+        assertEquals(1, verifyPhase)
+    }
+
+    @Test
+    fun `a zero byte file is rejected instead of being reported as progress`() {
+        val file = File(dir, "empty.epub").apply { createNewFile() }
+        var reported = 0
+        val result = DriveLibrary.upload(
+            "token", "appDataFolder", book(BookFormat.EPUB, file), file,
+            onProgress = { _, _ -> reported++ }
+        )
+        assertTrue(result is DriveOutcome.Failed)
+        assertEquals("nothing was sent, so nothing is reported", 0, reported)
+        assertEquals(0, drive.files.size)
+    }
+
     @Test
     fun `retry delays grow and stop at a sane cap`() {
         assertEquals(600L, RetryPolicy.delayMs(1))

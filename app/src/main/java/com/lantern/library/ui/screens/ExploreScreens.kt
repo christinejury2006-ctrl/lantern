@@ -135,11 +135,11 @@ fun SearchScreen(
             loading = true
             val scrapedItems = fetchScrapedBooks(q)
             results = scrapedItems.map { item ->
-                DiscoveryBook(
-                    title = item.title,
-                    coverUrl = item.coverUrl,
-                    detailUrl = item.detailUrl
-                )
+                            DiscoveryBook(
+                title = item.title,
+                coverUrl = item.coverUrl,
+                volumeId = item.detailUrl
+            )
             }
             loading = false
             searched = true

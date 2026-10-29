@@ -407,11 +407,10 @@ class UploadPoolTest {
             assertTrue("B must still be blocked", !listener.verified.containsKey("b"))
         }
         runner.join(30_000)
-        assertEquals(
-            "failures: ${listener.failed}",
-            setOf("a", "b"),
-            resultHolder[0]?.confirmed?.keys
-        )
+        assertNotNull("RUNNER DID NOT RETURN for test 3", resultHolder[0])
+        assertTrue("A BOOK FAILED in test 3", resultHolder[0]!!.failed.isEmpty())
+        assertTrue("A BOOK WAS SKIPPED in test 3", resultHolder[0]!!.skipped.isEmpty())
+        assertEquals("WRONG CONFIRMED SET in test 3", setOf("a", "b"), resultHolder[0]!!.confirmed.keys)
     }
 
     // 4 -------------------------------------------------------------------------------------
@@ -442,11 +441,10 @@ class UploadPoolTest {
             assertTrue("B must not be verified yet", !listener.verified.containsKey("b"))
         }
         runner.join(30_000)
-        assertEquals(
-            "failures: ${listener.failed}",
-            setOf("a", "b"),
-            holder[0]?.confirmed?.keys
-        )
+        assertNotNull("RUNNER DID NOT RETURN for test 4", holder[0])
+        assertTrue("A BOOK FAILED in test 4", holder[0]!!.failed.isEmpty())
+        assertTrue("A BOOK WAS SKIPPED in test 4", holder[0]!!.skipped.isEmpty())
+        assertEquals("WRONG CONFIRMED SET in test 4", setOf("a", "b"), holder[0]!!.confirmed.keys)
     }
 
     // 5 -------------------------------------------------------------------------------------
@@ -563,11 +561,10 @@ class UploadPoolTest {
         }
         runner.join(30_000)
         // The transfer itself still completes: refusing to move bytes would not undo the deletion.
-        assertEquals(
-            "failures: ${listener.failed}",
-            setOf("a", "b", "c"),
-            holder[0]?.confirmed?.keys
-        )
+        assertNotNull("RUNNER DID NOT RETURN for test 8", holder[0])
+        assertTrue("A BOOK FAILED in test 8", holder[0]!!.failed.isEmpty())
+        assertTrue("A BOOK WAS SKIPPED in test 8", holder[0]!!.skipped.isEmpty())
+        assertEquals("WRONG CONFIRMED SET in test 8", setOf("a", "b", "c"), holder[0]!!.confirmed.keys)
         assertEquals(1, drive.countFor("b"))
     }
 
@@ -612,11 +609,9 @@ class UploadPoolTest {
         runner.join(30_000)
         // The pass still reports what the account now holds — the file was uploaded before the
         // deletion — but nothing in the written snapshot may bring the book back.
-        assertEquals(
-            "failures: ${listener.failed}",
-            setOf("a", "b"),
-            holder[0]?.confirmed?.keys
-        )
+        assertNotNull("RUNNER DID NOT RETURN for test 9", holder[0])
+        assertTrue("A BOOK FAILED in test 9", holder[0]!!.failed.isEmpty())
+        assertEquals("WRONG CONFIRMED SET in test 9", setOf("a", "b"), holder[0]!!.confirmed.keys)
         assertTrue(written!!.books.none { it.id == "a" })
     }
 
@@ -713,7 +708,9 @@ class UploadPoolTest {
             assertEquals(0, drive.creates.get())
         }
         runner.join(30_000)
-        assertEquals("failures: ${first.failed}", setOf("a"), holder[0]?.confirmed?.keys)
+        assertNotNull("RUNNER DID NOT RETURN for test 12", holder[0])
+        assertTrue("A BOOK FAILED in test 12", holder[0]!!.failed.isEmpty())
+        assertEquals("WRONG CONFIRMED SET in test 12", setOf("a"), holder[0]!!.confirmed.keys)
         assertEquals(1, drive.countFor("a"))
         assertEquals(1, drive.creates.get())
         assertFalse("the book must not stay in flight after it finishes", pool.isInFlight("a"))

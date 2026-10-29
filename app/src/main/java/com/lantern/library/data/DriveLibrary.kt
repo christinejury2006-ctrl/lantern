@@ -107,7 +107,8 @@ object DriveLibrary {
                         VerifyOutcome.Mismatch, VerifyOutcome.Unknown -> DriveOutcome.Failed
                     }
                 }
-                VerifyOutcome.Unknown -> return DriveOutcome.Ok(id)
+                // A successful HTTP upload is not enough: if Drive cannot confirm the bytes, keep the book pending.
+                VerifyOutcome.Unknown -> return DriveOutcome.Failed
             }
         }
     }

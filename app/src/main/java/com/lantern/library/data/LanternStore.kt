@@ -1380,7 +1380,13 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         }
 
         val batch = uploadBatch(candidates)
-        val summary = UploadSummary(candidates.size, batch.confirmed.keys.toList(), batch.failed.map { it.first.id })
+        // (book id, drive id): the same pair the old summary carried, now taken from the batch that
+        // actually verified the bytes.
+        val summary = UploadSummary(
+            candidates.size,
+            batch.confirmed.map { (bookId, verified) -> bookId to verified.first },
+            batch.failed.map { it.first.id }
+        )
         SyncDiag.mark(
             "File uploads",
             "${summary.confirmed.size} confirmed, ${summary.failed.size} failed of ${summary.attempted}"

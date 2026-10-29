@@ -124,30 +124,25 @@ fun SearchScreen(
             "Frankenstein", "romance", "werewolf", "fantasy")
     }
 
-    LaunchedEffect(query) {
+        LaunchedEffect(query) {
         val q = query.trim()
         if (q.length < 2) {
             editions = emptyList()
             results = emptyList()
             loading = false
             searched = false
-            return@LaunchedEffect
-        }
-        delay(350)
-        loading = true
-        // Both lookups run off the main thread; the free-file lookup is the slower of the two
-        // because the Archive may need a second request per item to resolve a filename.
-        val free = withContext(Dispatchers.IO) { runCatching { OpenCatalogs.find(q) }.getOrDefault(emptyList()) }
-        editions = free
-        val google = withContext(Dispatchers.IO) {
-            runCatching { GoogleBooks.volumes(q, "relevance", 24) }.getOrDefault(emptyList())
-        }
-        results = google
-        loading = false
-        searched = true
-        if (free.isNotEmpty() || google.isNotEmpty()) {
-            history = (listOf(q) + history.filterNot { it.equals(q, true) }).take(8)
-            prefs.edit().putString("history", history.joinToString("\n")).apply()
+        } else {
+            loading = true
+            val scrapedItems = fetchScrapedBooks(q)
+            results = scrapedItems.map { item ->
+                DiscoveryBook(
+                    title = item.title,
+                    coverUrl = item.coverUrl,
+                    detailUrl = item.detailUrl
+                )
+            }
+            loading = false
+            searched = true
         }
     }
 

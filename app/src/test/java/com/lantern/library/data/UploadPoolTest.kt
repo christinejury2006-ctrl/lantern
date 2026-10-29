@@ -256,6 +256,14 @@ class UploadPoolTest {
 
     private lateinit var drive: GatedDrive
     private lateinit var dir: File
+    /**
+     * A pool per test.
+     *
+     * The app uses [UploadPool.shared], but a test must not inherit another test's in-flight set:
+     * a failed assertion would otherwise strand a book and make the *next* test fail for a reason
+     * that has nothing to do with it.
+     */
+    private lateinit var pool: UploadPool
 
     @Before
     fun setUp() {
@@ -263,6 +271,7 @@ class UploadPoolTest {
         dir = File.createTempFile("lore-pool", "").let { f ->
             f.delete(); f.mkdirs(); f
         }
+        pool = UploadPool()
         DriveLibrary.transport = drive
         DriveLibrary.sleeper = { }
         DriveLibrary.clearError()
@@ -294,8 +303,7 @@ class UploadPoolTest {
 
     private fun run(
         books: List<LibraryBook>,
-        listener: UploadListener = Recorder(),
-        pool: UploadPool = UploadPool.shared
+        listener: UploadListener = Recorder()
     ): UploadPool.Result = runBlocking {
         // A deadline, not a sleep: a deadlock becomes a failure with a stack, not a hung CI job.
         withTimeout(30_000L) { pool.run("token", books, listener) }
@@ -387,19 +395,23 @@ class UploadPoolTest {
         val resultHolder = arrayOfNulls<UploadPool.Result>(1)
         val runner = thread("pool") { resultHolder[0] = run(listOf(a, b), listener) }
 
-        assertTrue("B must have started transferring", bEntered.await(20, TimeUnit.SECONDS))
-        // A's verification must complete while B sits inside its create call.
-        assertTrue(
-            "A must be verified while B is still uploading",
-            listener.latchFor("a").await(20, TimeUnit.SECONDS)
-        )
-        assertTrue("A must have reached VERIFYING", "a" in listener.verifying)
-        assertNull("A must not be waiting on B", resultHolder[0])
-        assertTrue("B must still be blocked", !listener.verified.containsKey("b"))
-
-        bHold.countDown()
+        releasing(bHold) {
+            assertTrue("B must have started transferring", bEntered.await(20, TimeUnit.SECONDS))
+            // A's verification must complete while B sits inside its create call.
+            assertTrue(
+                "A must be verified while B is still uploading",
+                listener.latchFor("a").await(20, TimeUnit.SECONDS)
+            )
+            assertTrue("A must have reached VERIFYING", "a" in listener.verifying)
+            assertNull("A must not be waiting on B", resultHolder[0])
+            assertTrue("B must still be blocked", !listener.verified.containsKey("b"))
+        }
         runner.join(30_000)
-        assertEquals(setOf("a", "b"), resultHolder[0]?.confirmed?.keys)
+        assertEquals(
+            "failures: ${listener.failed}",
+            setOf("a", "b"),
+            resultHolder[0]?.confirmed?.keys
+        )
     }
 
     // 4 -------------------------------------------------------------------------------------
@@ -423,15 +435,18 @@ class UploadPoolTest {
         val holder = arrayOfNulls<UploadPool.Result>(1)
         val runner = thread("pool") { holder[0] = run(listOf(a, b), listener) }
 
-        assertTrue("A's verification must start", verifyEntered.await(20, TimeUnit.SECONDS))
-        assertTrue("B's transfer must be in progress at the same time", bEntered.await(20, TimeUnit.SECONDS))
-        assertTrue("A must be in VERIFYING, not done", "a" in listener.verifying)
-        assertTrue("B must not be verified yet", !listener.verified.containsKey("b"))
-
-        verifyHold.countDown()
-        bHold.countDown()
+        releasing(verifyHold, bHold) {
+            assertTrue("A's verification must start", verifyEntered.await(20, TimeUnit.SECONDS))
+            assertTrue("B's transfer must be in progress at the same time", bEntered.await(20, TimeUnit.SECONDS))
+            assertTrue("A must be in VERIFYING, not done", "a" in listener.verifying)
+            assertTrue("B must not be verified yet", !listener.verified.containsKey("b"))
+        }
         runner.join(30_000)
-        assertEquals(setOf("a", "b"), holder[0]?.confirmed?.keys)
+        assertEquals(
+            "failures: ${listener.failed}",
+            setOf("a", "b"),
+            holder[0]?.confirmed?.keys
+        )
     }
 
     // 5 -------------------------------------------------------------------------------------
@@ -528,26 +543,31 @@ class UploadPoolTest {
         val holder = arrayOfNulls<UploadPool.Result>(1)
         val runner = thread("pool") { holder[0] = run(listOf(a, b, c), listener) }
 
-        assertTrue("all three must be transferring", entered.await(20, TimeUnit.SECONDS))
+        releasing(gate) {
+            assertTrue("all three must be transferring", entered.await(20, TimeUnit.SECONDS))
 
-        // The reader deletes B while its file is in flight, and a merge runs against a cloud copy
-        // that still has it. The tombstone must win, in the merge and in the reconciled snapshot.
-        val stone = Tombstone("b", System.currentTimeMillis())
-        val cloud = snapshot(listOf(a, b, c), deletions = listOf(stone))
-        val local = snapshot(listOf(a, b, c))
+            // The reader deletes B while its file is in flight, and a merge runs against a cloud
+            // copy that still has it. The tombstone must win, in the merge and in the reconciled
+            // snapshot.
+            val stone = Tombstone("b", System.currentTimeMillis())
+            val cloud = snapshot(listOf(a, b, c), deletions = listOf(stone))
+            val local = snapshot(listOf(a, b, c))
 
-        repeat(4) {
-            val merged = AccountSync.merge(local, cloud)
-            assertTrue("a tombstoned book must not survive a merge", merged.books.none { it.id == "b" })
-            val written = AccountReconcile.snapshot(merged, listOf(stone))
-            assertTrue("a tombstoned book must not be written back", written.books.none { it.id == "b" })
-            assertTrue("the deletion must travel", written.deletions.any { it.bookId == "b" })
+            repeat(4) {
+                val merged = AccountSync.merge(local, cloud)
+                assertTrue("a tombstoned book must not survive a merge", merged.books.none { it.id == "b" })
+                val written = AccountReconcile.snapshot(merged, listOf(stone))
+                assertTrue("a tombstoned book must not be written back", written.books.none { it.id == "b" })
+                assertTrue("the deletion must travel", written.deletions.any { it.bookId == "b" })
+            }
         }
-
-        gate.countDown()
         runner.join(30_000)
         // The transfer itself still completes: refusing to move bytes would not undo the deletion.
-        assertEquals(setOf("a", "b", "c"), holder[0]?.confirmed?.keys)
+        assertEquals(
+            "failures: ${listener.failed}",
+            setOf("a", "b", "c"),
+            holder[0]?.confirmed?.keys
+        )
         assertEquals(1, drive.countFor("b"))
     }
 
@@ -568,24 +588,36 @@ class UploadPoolTest {
         val listener = Recorder()
         val holder = arrayOfNulls<UploadPool.Result>(1)
         val runner = thread("pool") { holder[0] = run(listOf(a, b), listener) }
-        assertTrue(entered.await(20, TimeUnit.SECONDS))
+        var written: AccountSnapshot? = null
+        releasing(gate) {
+            assertTrue(entered.await(20, TimeUnit.SECONDS))
 
-        // Delete A mid-upload. The record is gone; the tombstone is what the next sync sends.
-        val deletedAt = System.currentTimeMillis()
-        val stone = Tombstone("a", deletedAt)
-        val stalePass = snapshot(listOf(a, b)) // computed before the deletion, as a slow pass would
-        val written = AccountReconcile.snapshot(stalePass, listOf(stone))
+            // Delete A mid-upload. The record is gone; the tombstone is what the next sync sends.
+            val deletedAt = System.currentTimeMillis()
+            val stone = Tombstone("a", deletedAt)
+            val stalePass = snapshot(listOf(a, b)) // computed before the deletion, as a slow pass would
+            val reconciled = AccountReconcile.snapshot(stalePass, listOf(stone))
+            written = reconciled
 
-        assertTrue("a deleted book must not be in the snapshot this pass writes", written.books.none { it.id == "a" })
-        assertTrue("the older operation must not overwrite the deletion", written.deletions.any { it.bookId == "a" })
-        assertTrue("A must stay deleted on this device too", Deletions.alive(listOf(a), listOf(stone)).isEmpty())
-
-        gate.countDown()
+            assertTrue(
+                "a deleted book must not be in the snapshot this pass writes",
+                reconciled.books.none { it.id == "a" }
+            )
+            assertTrue(
+                "the older operation must not overwrite the deletion",
+                reconciled.deletions.any { it.bookId == "a" }
+            )
+            assertTrue("A must stay deleted on this device too", Deletions.alive(listOf(a), listOf(stone)).isEmpty())
+        }
         runner.join(30_000)
         // The pass still reports what the account now holds — the file was uploaded before the
         // deletion — but nothing in the written snapshot may bring the book back.
-        assertEquals(setOf("a", "b"), holder[0]?.confirmed?.keys)
-        assertTrue(written.books.none { it.id == "a" })
+        assertEquals(
+            "failures: ${listener.failed}",
+            setOf("a", "b"),
+            holder[0]?.confirmed?.keys
+        )
+        assertTrue(written!!.books.none { it.id == "a" })
     }
 
     // 10 ------------------------------------------------------------------------------------
@@ -666,21 +698,39 @@ class UploadPoolTest {
         val first = Recorder()
         val holder = arrayOfNulls<UploadPool.Result>(1)
         val runner = thread("pool") { holder[0] = run(listOf(a), first) }
-        assertTrue(entered.await(20, TimeUnit.SECONDS))
+        releasing(gate) {
+            assertTrue(entered.await(20, TimeUnit.SECONDS))
+            // The first transfer is inside the fake, before it has stored anything.
+            assertEquals("nothing may have been created yet", 0, drive.creates.get())
 
-        // A second caller (a manual retry, or a sync pass) asks for the same book.
-        val second = Recorder()
-        val overlapping = run(listOf(a), second)
-        assertEquals(listOf("a"), overlapping.skipped.map { it.id })
-        assertTrue(overlapping.confirmed.isEmpty())
-        assertTrue("the second caller must not touch the badge", second.verified.isEmpty())
-        assertEquals(1, drive.creates.get())
-
-        gate.countDown()
+            // A second caller (a manual retry, or a sync pass) asks for the same book.
+            val second = Recorder()
+            val overlapping = run(listOf(a), second)
+            assertEquals(listOf("a"), overlapping.skipped.map { it.id })
+            assertTrue(overlapping.confirmed.isEmpty())
+            assertTrue("the second caller must not touch the badge", second.verified.isEmpty())
+            // Skipped, so it sent nothing: still the one transfer, and no second create.
+            assertEquals(0, drive.creates.get())
+        }
         runner.join(30_000)
-        assertEquals(setOf("a"), holder[0]?.confirmed?.keys)
+        assertEquals("failures: ${first.failed}", setOf("a"), holder[0]?.confirmed?.keys)
         assertEquals(1, drive.countFor("a"))
-        assertFalse("the book must not stay in flight after it finishes", UploadPool.shared.isInFlight("a"))
+        assertEquals(1, drive.creates.get())
+        assertFalse("the book must not stay in flight after it finishes", pool.isInFlight("a"))
+    }
+
+    /**
+     * Runs [body], and opens every gate it was holding even when it fails.
+     *
+     * Without this a single failed assertion would leave the uploaded books blocked inside the fake
+     * transport, and the runner thread would still be holding them when the next test starts.
+     */
+    private fun releasing(vararg gates: CountDownLatch, body: () -> Unit) {
+        try {
+            body()
+        } finally {
+            gates.forEach { it.countDown() }
+        }
     }
 
     private fun thread(name: String, body: () -> Unit): Thread =

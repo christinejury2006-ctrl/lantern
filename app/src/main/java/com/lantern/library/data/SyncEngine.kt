@@ -241,7 +241,16 @@ object BackupAudit {
         val localOnly: Int
     ) {
         val total: Int get() = verified + pending + failed + restoreRequired + localOnly
-        val complete: Boolean get() = pending == 0 && failed == 0 && localOnly == 0
+
+        /**
+         * True only when every book is verified *and* present.
+         *
+         * A book the account holds but this phone does not is safe in the cloud, but it is not
+         * "backed up and verified" on this device: it still needs a download before it can be
+         * opened. Saying otherwise is the kind of claim this whole change exists to remove.
+         */
+        val complete: Boolean
+            get() = pending == 0 && failed == 0 && localOnly == 0 && restoreRequired == 0
 
         /**
          * The one line the reader sees. Says out loud when the answer is not "everything is safe",

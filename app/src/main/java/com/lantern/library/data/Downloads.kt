@@ -298,18 +298,19 @@ class DownloadService(private val host: DownloadHost) {
      */
     suspend fun removeDownload(bookId: String): RemoveOutcome {
         val book = host.latest(bookId) ?: return RemoveOutcome.NotFound
+
+        // The second tap on the same button: the record already says there is no local copy, and
+        // the account is still confirmed to hold one. Nothing to do, nothing to report as an error.
+        if (book.filePath == null && DownloadRules.cloudConfirmed(book)) {
+            return RemoveOutcome.AlreadyRemoved(book)
+        }
+
         val file = book.filePath?.let(::File)
         val localBytes = if (file != null && file.exists()) file.length() else 0L
-
-        if (localBytes <= 0L) {
-            // Nothing local. If the record already describes a confirmed cloud copy with no path,
-            // this is the second tap on the same button and it has nothing left to do.
-            return if (book.filePath == null && DownloadRules.cloudConfirmed(book)) {
-                RemoveOutcome.AlreadyRemoved(book)
-            } else {
-                RemoveOutcome.Refused(RemoveBlocker.NoLocalFile)
-            }
-        }
+        // A record with a path but no readable bytes has nothing to remove, and nothing may be
+        // deleted on the strength of a path alone.
+        if (localBytes <= 0L) return RemoveOutcome.Refused(RemoveBlocker.NoLocalFile)
+        val present = file ?: return RemoveOutcome.Refused(RemoveBlocker.NoLocalFile)
 
         DownloadRules.removeBlocker(book, localBytes)?.let { return RemoveOutcome.Refused(it) }
 
@@ -323,7 +324,7 @@ class DownloadService(private val host: DownloadHost) {
 
         // A checksum of the bytes being removed, so a later restore can prove it got these bytes
         // back and not a different file that happens to be the same length.
-        val md5 = BookFiles.md5(file)
+        val md5 = BookFiles.md5(present)
         val cleared = book.copy(
             filePath = null,
             backupMd5 = md5.ifBlank { book.backupMd5 }
@@ -335,7 +336,7 @@ class DownloadService(private val host: DownloadHost) {
             return RemoveOutcome.MetadataFailed
         }
 
-        val gone = host.deleteLocal(file) && !file.exists()
+        val gone = host.deleteLocal(present) && !present.exists()
         if (!gone) {
             // Reconcile: the record says "no file" but a file is still there. The record has to
             // describe the phone, so put the path back and report the truth.

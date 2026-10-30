@@ -349,7 +349,7 @@ internal fun LanternRoot(store: LanternStore) {
                 )
             }
             if (!needsOnboarding && tab !is Route.Reader && details == null) {
-                BottomBar(theme, tab, { tab = it }, Modifier.align(Alignment.BottomCenter))
+                BottomBar(theme, tab, { tab = it }, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 8.dp))
             }
             if (store.editingInterests && store.interestsChosen) {
                 InterestOnboardingScreen(

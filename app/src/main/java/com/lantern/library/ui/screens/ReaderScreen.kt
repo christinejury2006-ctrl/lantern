@@ -195,12 +195,20 @@ fun ReaderScreen(
 
     DisposableEffect(activity) {
         val window = activity.window
+        // The reader draws edge to edge, behind a transparent system bar, because a page of text
+        // should reach the edge of the screen. It is the *only* screen that does so.
         WindowCompat.setDecorFitsSystemWindows(window, false)
         val controller = WindowInsetsControllerCompat(window, window.decorView)
         controller.systemBarsBehavior =
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         onDispose {
             controller.show(WindowInsetsCompat.Type.statusBars())
+            // Put the window back. This used to be missing, and it is what made the bottom bar
+            // clash with the gesture area: after reading one book, the whole app stayed
+            // edge-to-edge, the shelf's content ran under the system bar, and the app's own bar
+            // had no inset of its own to fall back on. One reader visit was enough to break every
+            // tab until the process restarted.
+            WindowCompat.setDecorFitsSystemWindows(window, true)
         }
     }
     SideEffect {

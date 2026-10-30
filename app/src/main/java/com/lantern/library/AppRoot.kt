@@ -256,7 +256,12 @@ internal fun LanternRoot(store: LanternStore) {
                     transfers = com.lantern.library.data.TransferBus.states,
                     queueReasons = store.uploadQueueReasons,
                     online = store.account.driveConnected,
-                    onRetryBackup = { id -> store.retryBook(id) }
+                    onRetryBackup = { id -> store.retryBook(id) },
+                    onRemoveDownload = { id -> store.removeDownload(id) },
+                    onRestoreDownload = { id -> store.restoreDownload(id) },
+                    removingIds = store.removingIds,
+                    restoringIds = store.restoringIds,
+                    removalBlocker = { store.downloadRemovalBlocker(it) }
                 )
                 Route.Library -> LibraryScreen(
                     books = store.books,
@@ -275,7 +280,13 @@ internal fun LanternRoot(store: LanternStore) {
                     onOpenSaved = { pick -> details = pick },
                     onRemoveSaved = { pick -> store.removeWantToRead(pick) },
                     onDidNotFinish = { store.markDidNotFinish(it) },
-                    onBackOnShelf = { store.clearDidNotFinish(it) }
+                    onBackOnShelf = { store.clearDidNotFinish(it) },
+                    onRemoveDownload = { store.removeDownload(it) },
+                    onRestoreDownload = { store.restoreDownload(it) },
+                    removingIds = store.removingIds,
+                    restoringIds = store.restoringIds,
+                    removalBlocker = { store.downloadRemovalBlocker(it) },
+                    restoreBlocker = { store.downloadRestoreBlocker(it) }
                 )
                 Route.Search -> SearchScreen(
                     theme = theme,
@@ -349,7 +360,20 @@ internal fun LanternRoot(store: LanternStore) {
                 )
             }
             if (!needsOnboarding && tab !is Route.Reader && details == null) {
-                BottomBar(theme, tab, { tab = it }, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 8.dp))
+                // The bottom bar, with its inset story in one place (see [SystemBars]).
+                //
+                // `navigationBarsPadding()` is here because Compose is the correct owner if the
+                // window is edge-to-edge — and it resolves to zero when the window already fits
+                // system windows, which is the app's default. So the system bar's height is
+                // respected in both gesture and three-button modes, and never added twice.
+                // The 10 dp is the app's own breathing room, not an offset from the screen edge.
+                BottomBar(
+                    theme, tab, { tab = it },
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(bottom = com.lantern.library.data.SystemBars.BAR_GAP_DP.dp)
+                )
             }
             if (store.editingInterests && store.interestsChosen) {
                 InterestOnboardingScreen(

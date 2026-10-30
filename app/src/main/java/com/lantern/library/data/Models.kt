@@ -119,7 +119,18 @@ data class LibraryBook(
      * costs one `File.length()` and turns "it was backed up once" into "the file *as it is now* was
      * backed up". Zero means "not recorded" — older records simply get re-confirmed once.
      */
-    val backupBytes: Long = 0L
+    val backupBytes: Long = 0L,
+
+    /**
+     * MD5 of the bytes that were verified, when one was recorded; empty when it was not.
+     *
+     * [backupBytes] proves a *size*; this proves the *bytes*. It is written when a download is
+     * removed (the bytes being deleted are hashed first) and again when one is restored, so a
+     * later restore can tell "the file came back" from "a file of the same length came back".
+     * Empty is a normal value: records written before this existed simply do not have it, and a
+     * restore then relies on size plus the EPUB/PDF container checks.
+     */
+    val backupMd5: String = ""
 ) {
     val localFileAvailable: Boolean
         get() {

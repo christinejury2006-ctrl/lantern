@@ -1041,10 +1041,11 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
      * Fetches a book's bytes if this phone does not have them, and returns a book that points at a
      * file which is known to be a valid EPUB/PDF.
      *
-     * The download is written to `.part`, checked by [BookFiles], and only then moved into place,
-     * so an HTML error page or a half-finished transfer can never be mistaken for the reader's
-     * book. Local metadata is updated only after that succeeds — and because a completed download
-     * proves the cloud holds these bytes, it also stamps [LibraryBook.backupAt].
+     * The download lands in a `.restore` file, is checked against the recorded size and checksum
+     * and the EPUB/PDF container rules, and only then is moved into place — so an HTML error page,
+     * a half-finished transfer or a wrong file can never be mistaken for the reader's book. The
+     * record is updated only after that succeeds, and `backupAt` is left alone: this operation
+     * reads the account, it does not establish anything new about the account's copy.
      */
     private suspend fun ensureCached(book: LibraryBook): LibraryBook? {
         if (book.origin == BookOrigin.BUNDLED || book.format == BookFormat.TEXT) return book
@@ -1054,29 +1055,22 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         ) {
             return book
         }
-        val driveId = book.driveFileId ?: return null
-        val dest = File(BookIo.booksDir(getApplication()), cacheFileName(book))
-        val ok = withDrive { token, _ -> DriveLibrary.download(token, driveId, dest, book.format) }
-        if (ok == null) return null
-        if (!dest.exists() || dest.length() <= 0L) return null
-        if (BookFiles.validate(dest, book.format) !is BookFiles.Check.Ok) {
-            runCatching { dest.delete() }
-            return null
-        }
-        val updated = book.copy(
-            filePath = dest.absolutePath,
-            // The download *is* the proof: these bytes came out of the account and passed the
-            // EPUB/PDF container checks, so the local copy now matches the account's.
-            backupAt = maxOf(book.backupAt, System.currentTimeMillis()),
-            backupBytes = dest.length(),
-            backupFailed = false
-        )
-        withContext(Dispatchers.Main) {
-            upsert(updated)
-            refreshBackupAudit()
+        if (book.driveFileId.isNullOrBlank()) return null
+        // The same verified restore the Restore button runs. Opening a book whose download was
+        // removed and tapping "Restore download" must not be two different behaviours: both check
+        // the recorded size and checksum, and neither replaces a good file with a partial one.
+        withContext(Dispatchers.Main) { restoringIds = restoringIds + book.id }
+        val outcome = try {
+            downloadService.restoreDownload(book.id)
+        } finally {
+            withContext(Dispatchers.Main) { restoringIds = restoringIds - book.id }
         }
         maybeEvictCache(keepId = book.id)
-        return updated
+        return when (outcome) {
+            is RestoreOutcome.Restored -> outcome.book
+            is RestoreOutcome.AlreadyAvailable -> outcome.book
+            else -> null
+        }
     }
 
     private fun markLocalChanged() {
@@ -2136,6 +2130,182 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     }
 
     // ---------------------------------------------------------------------------------------
+    // Local downloads: remove and restore
+    // ---------------------------------------------------------------------------------------
+    //
+    // Three operations, and they must never be confused with each other:
+    //
+    //   Remove download   deletes the bytes on this phone. The library entry and the verified
+    //                     cloud copy are untouched. This is the one implemented here.
+    //   Restore download  fetches those bytes back from the account.
+    //   Remove book       [remove]: deletes the entry, writes a tombstone and queues the remote
+    //                     copy for deletion. Destructive, and deliberately a different method.
+    //
+    // Removal goes through [DownloadService], which has no way to reach the deletion code.
+
+    /** Books whose download is being fetched back from the account right now. */
+    var restoringIds by mutableStateOf<Set<String>>(emptySet())
+        private set
+
+    /** Books whose local download is being removed right now. */
+    var removingIds by mutableStateOf<Set<String>>(emptySet())
+        private set
+
+    private val downloadService = DownloadService(object : DownloadHost {
+        override fun latest(bookId: String): LibraryBook? = book(bookId)
+
+        override fun persist(book: LibraryBook): Boolean = commitDownloadRecord(book)
+
+        override val booksDir: File get() = BookIo.booksDir(getApplication())
+
+        override suspend fun accountHolds(book: LibraryBook): AccountLink {
+            val expected = book.driveFileId ?: return AccountLink.MISSING
+            if (!account.signedIn || account.provider != "google") return AccountLink.UNKNOWN
+            if (!networkReady()) return AccountLink.UNKNOWN
+            val token = driveToken() ?: return AccountLink.UNKNOWN
+            return withContext(Dispatchers.IO) {
+                when (val lookup = DriveLibrary.findByLoreId(token, book.id)) {
+                    is LoreLookup.Found -> if (lookup.id == expected) AccountLink.MATCHED else AccountLink.MISSING
+                    // The account answered, and does not have it: that is an answer, not a failure.
+                    LoreLookup.NotFound -> AccountLink.MISSING
+                    LoreLookup.Error -> AccountLink.UNKNOWN
+                }
+            }
+        }
+
+        override fun deleteLocal(file: File): Boolean =
+            runCatching { file.delete() }.getOrDefault(false)
+
+        override suspend fun fetchCloud(book: LibraryBook, dest: File): Boolean {
+            val id = book.driveFileId ?: return false
+            if (!networkReady()) return false
+            val token = driveToken() ?: return false
+            return withContext(Dispatchers.IO) {
+                DriveLibrary.download(token, id, dest, book.format) is DriveOutcome.Ok
+            }
+        }
+
+        override fun refreshAudit() {
+            // Always on the main thread: the audit feeds Compose state, and these calls arrive
+            // from an IO coroutine.
+            viewModelScope.launch(Dispatchers.Main) { refreshBackupAudit() }
+        }
+
+        override fun note(message: String) {
+            SyncDiag.mark("Download", message)
+            viewModelScope.launch(Dispatchers.Main) { toast(message) }
+        }
+    })
+
+    /**
+     * Writes one book's record and proves it landed.
+     *
+     * The read-back is the point: removal deletes the reader's bytes on the strength of this
+     * write, so "the file was probably saved" is not good enough. If the write cannot be confirmed
+     * the in-memory record is put back the way it was, so what the shelf shows and what the disk
+     * holds do not drift apart.
+     */
+    private fun commitDownloadRecord(book: LibraryBook): Boolean {
+        val previous = synchronized(libraryLock) {
+            val i = books.indexOfFirst { it.id == book.id }
+            if (i < 0) return false
+            val old = books[i]
+            books[i] = book
+            old
+        }
+        val wrote = runCatching { synchronized(libraryLock) { persistBooksList(books.toList()) } }.isSuccess
+        val confirmed = wrote && runCatching {
+            val arr = JSONArray(booksFile.readText())
+            (0 until arr.length()).any { i ->
+                val row = arr.optJSONObject(i) ?: return@any false
+                row.optString("id") == book.id &&
+                    row.optString("filePath") == book.filePath.orEmpty() &&
+                    row.optString("driveFileId") == book.driveFileId.orEmpty()
+            }
+        }.getOrDefault(false)
+        if (confirmed) {
+            markLocalChanged()
+            return true
+        }
+        // Put the record back: nothing was deleted, so nothing may claim otherwise.
+        synchronized(libraryLock) {
+            val i = books.indexOfFirst { it.id == previous.id }
+            if (i >= 0) books[i] = previous
+            runCatching { persistBooksList(books.toList()) }
+        }
+        return false
+    }
+
+    /** Why this book's download cannot be removed, or null when it can. For the UI. */
+    fun downloadRemovalBlocker(book: LibraryBook): String? {
+        val bytes = book.filePath?.let(::File)?.takeIf { it.exists() }?.length() ?: 0L
+        return DownloadRules.removeBlocker(book, bytes)?.message
+    }
+
+    /** Why this book cannot be restored from the account, or null when it can. */
+    fun downloadRestoreBlocker(book: LibraryBook): String? =
+        DownloadRules.restoreBlocker(book)?.message
+
+    /** True while a restore for this book is running, so the sheet can say "Restoring…". */
+    fun isRestoring(bookId: String): Boolean = bookId in restoringIds
+
+    /**
+     * Removes a verified book's local bytes, keeping the library entry and the cloud copy.
+     *
+     * Only ever calls [DownloadService.removeDownload]. It never calls [remove], never writes a
+     * tombstone and never queues a Drive deletion: that is the entire difference between "free up
+     * space" and "delete my book".
+     */
+    fun removeDownload(bookId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            withContext(Dispatchers.Main) { removingIds = removingIds + bookId }
+            val outcome = try {
+                downloadService.removeDownload(bookId)
+            } finally {
+                withContext(Dispatchers.Main) { removingIds = removingIds - bookId }
+            }
+            withContext(Dispatchers.Main) {
+                when (outcome) {
+                    is RemoveOutcome.Removed, is RemoveOutcome.AlreadyRemoved -> Unit
+                    is RemoveOutcome.Refused -> toast(outcome.blocker.message)
+                    RemoveOutcome.MetadataFailed ->
+                        toast("Could not update the library, so the download was kept.")
+                    is RemoveOutcome.DeleteFailed -> toast(outcome.reason)
+                    RemoveOutcome.NotFound -> toast("That book is no longer in your library.")
+                }
+                refreshBackupAudit()
+            }
+        }
+    }
+
+    /**
+     * Fetches a removed book's bytes back from the account.
+     *
+     * Verified against the recorded size and checksum before it replaces anything, so a truncated
+     * or wrong download can never take the place of a book the reader can open.
+     */
+    fun restoreDownload(bookId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            withContext(Dispatchers.Main) { restoringIds = restoringIds + bookId }
+            val outcome = try {
+                downloadService.restoreDownload(bookId)
+            } finally {
+                withContext(Dispatchers.Main) { restoringIds = restoringIds - bookId }
+            }
+            withContext(Dispatchers.Main) {
+                when (outcome) {
+                    is RestoreOutcome.Restored -> Unit
+                    is RestoreOutcome.AlreadyAvailable -> toast("This book is already on this phone.")
+                    is RestoreOutcome.Refused -> toast(outcome.blocker.message)
+                    is RestoreOutcome.Failed -> toast("Could not restore this book: ${outcome.reason}")
+                    RestoreOutcome.NotFound -> toast("That book is no longer in your library.")
+                }
+                refreshBackupAudit()
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------
     // Transfer queue
     // ---------------------------------------------------------------------------------------
 
@@ -2475,7 +2645,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     o.optLong("lastReadAt"), o.optString("category", "Library"), o.optString("synopsis"), emptyList(),
                     o.optString("driveFileId").ifBlank { null }, o.optBoolean("pendingUpload", false),
                     o.optBoolean("dnf", false), o.optLong("backupAt", 0L), o.optBoolean("backupFailed", false),
-                    o.optLong("backupBytes", 0L)
+                    o.optLong("backupBytes", 0L), backupMd5 = o.optString("backupMd5")
                 )
             }
         }
@@ -2517,6 +2687,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     .put("driveFileId", b.driveFileId ?: "").put("pendingUpload", b.pendingUpload)
                     .put("backupAt", b.backupAt).put("backupFailed", b.backupFailed).put("dnf", b.dnf)
                     .put("backupBytes", b.backupBytes)
+                    // Read back with optString, so an older library.json without this key loads
+                    // as "no checksum recorded" rather than failing.
+                    .put("backupMd5", b.backupMd5)
             )
         }
         atomicWrite(booksFile, arr.toString())

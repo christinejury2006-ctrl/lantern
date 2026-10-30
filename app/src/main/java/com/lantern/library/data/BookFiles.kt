@@ -158,6 +158,32 @@ object BookFiles {
         false
     }
 
+    /**
+     * The MD5 of a file, as lowercase hex, or "" when it cannot be read.
+     *
+     * Lore does not invent a checksum: an empty string means "not known" everywhere it is used, so
+     * a restore falls back to the size and container checks rather than silently skipping the
+     * comparison or, worse, treating "" as a match.
+     */
+    fun md5(file: File): String = try {
+        if (!file.exists() || file.length() <= 0L) {
+            ""
+        } else {
+            val digest = java.security.MessageDigest.getInstance("MD5")
+            file.inputStream().use { input ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read <= 0) break
+                    digest.update(buffer, 0, read)
+                }
+            }
+            digest.digest().joinToString("") { "%02x".format(it) }
+        }
+    } catch (_: Exception) {
+        ""
+    }
+
     /** File name used for a book's cached copy, stable across installs for the same book id. */
     fun cacheNameFor(id: String, format: BookFormat): String {
         val ext = when (format) {

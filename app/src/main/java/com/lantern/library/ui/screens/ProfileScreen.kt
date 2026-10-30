@@ -86,7 +86,12 @@ fun ProfileScreen(
     val notVerified = backupLines
 
     NookBackdrop(palette) {
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        Column(
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                // Same shared clearance as the other tabs: the last card must be able to clear
+                // the bottom bar, not disappear under it.
+                .padding(bottom = com.lantern.library.data.SystemBars.CONTENT_BOTTOM_DP.dp)
+        ) {
             Column(Modifier.padding(horizontal = 20.dp, vertical = 26.dp)) {
                 Text("You", color = palette.ink, fontFamily = Playfair, fontSize = 30.sp)
                 Text(

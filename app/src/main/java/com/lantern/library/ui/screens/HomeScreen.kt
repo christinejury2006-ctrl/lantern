@@ -50,6 +50,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import com.lantern.library.data.SystemBars
 import com.lantern.library.data.BackupAudit
 import com.lantern.library.data.BackupBadge
 import com.lantern.library.data.CloudAccount
@@ -57,6 +58,8 @@ import com.lantern.library.data.DiscoveryBook
 import com.lantern.library.data.LibraryBook
 import com.lantern.library.data.TransferPhase
 import com.lantern.library.data.TransferProgress
+import com.lantern.library.data.DownloadAction
+import com.lantern.library.data.DownloadUi
 import com.lantern.library.data.Transfers
 import com.lantern.library.ui.components.AuroraOrb
 import com.lantern.library.ui.components.CoverFace
@@ -97,7 +100,16 @@ fun ReadingNookScreen(
     queueReasons: Map<String, String> = emptyMap(),
     online: Boolean = true,
     /** Sends one book again, from the detail sheet. */
-    onRetryBackup: (String) -> Unit = {}
+    onRetryBackup: (String) -> Unit = {},
+    /** Deletes only this phone's bytes; the entry and the cloud copy stay. */
+    onRemoveDownload: (String) -> Unit = {},
+    /** Fetches those bytes back from the account. */
+    onRestoreDownload: (String) -> Unit = {},
+    /** Books being removed / restored right now. */
+    removingIds: Set<String> = emptySet(),
+    restoringIds: Set<String> = emptySet(),
+    /** Why a removal is not allowed for a book, or null when it is. The store owns the rules. */
+    removalBlocker: (LibraryBook) -> String? = { null }
 ) {
     val palette = nookPalette(theme)
     // Which book's backup detail is open. Local to Home: opening it must not touch the shelf.
@@ -113,7 +125,7 @@ fun ReadingNookScreen(
 
             LazyColumn(
                 Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 120.dp)
+                contentPadding = PaddingValues(bottom = SystemBars.CONTENT_BOTTOM_DP.dp)
             ) {
                 item { SearchPill(palette, onSearch, onLibrary) }
 
@@ -161,6 +173,11 @@ fun ReadingNookScreen(
                 online = online,
                 palette = palette,
                 onRetry = { onRetryBackup(detailBook.id) },
+                onRemoveDownload = { onRemoveDownload(detailBook.id) },
+                onRestoreDownload = { onRestoreDownload(detailBook.id) },
+                removing = detailBook.id in removingIds,
+                restoring = detailBook.id in restoringIds,
+                removalBlocker = removalBlocker(detailBook),
                 onDismiss = { detailFor = null }
             )
         }
@@ -538,6 +555,12 @@ private fun BackupDetailSheet(
     online: Boolean,
     palette: NookPalette,
     onRetry: () -> Unit,
+    onRemoveDownload: () -> Unit,
+    onRestoreDownload: () -> Unit,
+    removing: Boolean,
+    restoring: Boolean,
+    /** Non-null when the store refuses removal, with the reason to show. */
+    removalBlocker: String?,
     onDismiss: () -> Unit
 ) {
     val state = BackupAudit.badge(book, transfer, online = online, queued = queuedReason != null)
@@ -609,6 +632,48 @@ private fun BackupDetailSheet(
                     SheetButton("Try again now", palette.accent, palette.accentInk, onRetry)
                     Spacer(Modifier.height(8.dp))
                 }
+                // The two non-destructive actions. Which one appears is decided by the book's own
+                // state: a file the account has not verified is never offered for removal, and a
+                // book with no verified copy is never offered for restore.
+                val localBytes = book.filePath?.let { java.io.File(it) }?.takeIf { it.exists() }?.length() ?: 0L
+                when {
+                    removing || restoring -> {
+                        Spacer(Modifier.height(14.dp))
+                        Text(
+                            DownloadUi.busyLabel(removing, restoring) ?: "",
+                            color = palette.mute,
+                            fontSize = 12.sp
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    DownloadUi.actionFor(book, localBytes) == DownloadAction.REMOVE -> {
+                        Spacer(Modifier.height(14.dp))
+                        SheetButton("Remove download", palette.glass, palette.ink, onRemoveDownload)
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "Deletes the ${Transfers.size(localBytes)} file on this phone only. " +
+                                "The book stays in your library and can be downloaded again.",
+                            color = palette.faint,
+                            fontSize = 10.sp
+                        )
+                    }
+                    DownloadUi.actionFor(book, localBytes) == DownloadAction.RESTORE -> {
+                        Spacer(Modifier.height(14.dp))
+                        SheetButton("Restore download", palette.accent, palette.accentInk, onRestoreDownload)
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            if (online) "Fetches the verified copy from your account."
+                            else "Connect to the internet to fetch this book back.",
+                            color = palette.faint,
+                            fontSize = 10.sp
+                        )
+                    }
+                }
+                if (removalBlocker != null && localBytes > 0L) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(removalBlocker, color = palette.mute, fontSize = 10.sp)
+                }
+                Spacer(Modifier.height(14.dp))
                 SheetButton("Close", palette.glass, palette.ink, onDismiss)
                 if (state != BackupBadge.VERIFIED) {
                     Spacer(Modifier.height(10.dp))

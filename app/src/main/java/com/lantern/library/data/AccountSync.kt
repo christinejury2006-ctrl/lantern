@@ -280,6 +280,15 @@ object AccountSync {
                     if (local.backupAt >= cloud.backupAt) local.backupBytes else cloud.backupBytes
                 local.driveFileId == keptId -> local.backupBytes
                 else -> cloud.backupBytes
+            },
+            // The checksum belongs to the same bytes as the stamp it came with, so it is taken
+            // from exactly the side the size came from — never mixed.
+            backupMd5 = when {
+                keptId == null -> ""
+                local.driveFileId == keptId && cloud.driveFileId == keptId ->
+                    if (local.backupAt >= cloud.backupAt) local.backupMd5 else cloud.backupMd5
+                local.driveFileId == keptId -> local.backupMd5
+                else -> cloud.backupMd5
             }
         )
     }
@@ -333,6 +342,9 @@ object AccountSync {
             // The size the confirmation was issued against, so another device can tell whether a
             // local file is the one that was verified.
             .put("backupBytes", b.backupBytes)
+            // The checksum travels with the size it describes, for the same reason: it is evidence
+            // about one specific set of bytes, and a restore on another device can use it.
+            .put("backupMd5", b.backupMd5)
             // The reader's own decisions about a book travel with it: a book they finished or
             // gave up on should look the same on their next phone.
             .put("dnf", b.dnf)
@@ -365,7 +377,8 @@ object AccountSync {
             pendingUpload = false,
             backupAt = o.optLong("backupAt", 0L),
             dnf = o.optBoolean("dnf", false),
-            backupBytes = o.optLong("backupBytes", 0L)
+            backupBytes = o.optLong("backupBytes", 0L),
+            backupMd5 = o.optString("backupMd5")
         )
     }
 

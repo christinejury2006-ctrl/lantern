@@ -44,6 +44,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.lantern.library.data.SystemBars
 import com.lantern.library.data.DiscoveryBook
 import com.lantern.library.data.Elsewhere
 import com.lantern.library.data.FreeEdition
@@ -233,7 +234,7 @@ fun SearchScreen(
         LazyVerticalGrid(
             columns = GridCells.Fixed(2),
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(18.dp, 18.dp, 18.dp, 96.dp),
+            contentPadding = PaddingValues(18.dp, 18.dp, 18.dp, SystemBars.CONTENT_BOTTOM_DP.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {

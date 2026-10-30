@@ -50,7 +50,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.lantern.library.data.SystemBars
 import com.lantern.library.data.DiscoveryBook
+import com.lantern.library.data.DownloadAction
+import com.lantern.library.data.DownloadUi
 import com.lantern.library.data.LibraryBook
 import com.lantern.library.data.LibraryCategory
 import com.lantern.library.data.ReaderTheme
@@ -60,6 +63,7 @@ import com.lantern.library.ui.components.NookBackdrop
 import com.lantern.library.ui.components.NookLamp
 import com.lantern.library.ui.components.NookProgress
 import com.lantern.library.ui.theme.NookPalette
+import java.io.File
 import com.lantern.library.ui.theme.Playfair
 import com.lantern.library.ui.theme.nookPalette
 
@@ -71,8 +75,15 @@ import com.lantern.library.ui.theme.nookPalette
  * book there and re-reading does not take it out again — and Did not finish is a decision the
  * reader makes from the long-press menu, not something the app infers from progress.
  *
- * Long-press is the whole management surface: Remove book, and Not for me (did not finish). Both
- * ask a yes/no question first, because both are the sort of thing a finger does by accident.
+ * Long-press is the whole management surface, and it separates three things a reader means by
+ * "get rid of this book":
+ *
+ * - **Remove download** — frees the space. The book stays on the shelf and in the account.
+ * - **Restore download** — the same button, once the bytes are gone.
+ * - **Remove book** — deletes the entry and (through the tombstone path) the account's copy.
+ *
+ * Every destructive or space-freeing action asks a yes/no question first, and the question says
+ * exactly which of the three is about to happen.
  *
  * Search is local and instant: it filters titles and authors on this shelf, which is what "find a
  * particular book on that shelf" means. Searching the internet is Explore's job.
@@ -89,7 +100,18 @@ fun LibraryScreen(
     onOpenSaved: (DiscoveryBook) -> Unit = {},
     onRemoveSaved: (DiscoveryBook) -> Unit = {},
     onDidNotFinish: (String) -> Unit = {},
-    onBackOnShelf: (String) -> Unit = {}
+    onBackOnShelf: (String) -> Unit = {},
+    /** Deletes only the local bytes; the entry and the cloud copy stay. */
+    onRemoveDownload: (String) -> Unit = {},
+    /** Fetches the bytes back from the account. */
+    onRestoreDownload: (String) -> Unit = {},
+    /** Book ids whose download is being removed / restored right now. */
+    removingIds: Set<String> = emptySet(),
+    restoringIds: Set<String> = emptySet(),
+    /** Why a download cannot be removed, or null when it can. The store owns the rules. */
+    removalBlocker: (LibraryBook) -> String? = { null },
+    /** Why a book cannot be restored, or null when it can. */
+    restoreBlocker: (LibraryBook) -> String? = { null }
 ) {
     val palette = nookPalette(theme)
     var category by remember { mutableStateOf(LibraryCategory.ALL) }
@@ -98,6 +120,7 @@ fun LibraryScreen(
     var confirmRemove by remember { mutableStateOf<LibraryBook?>(null) }
     var confirmDnf by remember { mutableStateOf<LibraryBook?>(null) }
     var confirmSavedRemoval by remember { mutableStateOf<DiscoveryBook?>(null) }
+    var confirmRemoveDownload by remember { mutableStateOf<LibraryBook?>(null) }
 
     val trimmed = query.trim()
     // Computed on each recomposition rather than remembered: `books` is a mutable snapshot list
@@ -119,7 +142,11 @@ fun LibraryScreen(
         LazyVerticalGrid(
             columns = GridCells.Fixed(3),
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 130.dp),
+            contentPadding = PaddingValues(
+                start = 20.dp, end = 20.dp, top = 14.dp,
+                // One shared clearance, so the last row can always be scrolled above the bar.
+                bottom = SystemBars.CONTENT_BOTTOM_DP.dp
+            ),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -216,7 +243,9 @@ fun LibraryScreen(
                         book = book,
                         palette = palette,
                         onClick = { onOpen(book) },
-                        onLongClick = { menuFor = book }
+                        onLongClick = { menuFor = book },
+                        removing = book.id in removingIds,
+                        restoring = book.id in restoringIds
                     )
                 }
             }
@@ -242,8 +271,29 @@ fun LibraryScreen(
                             color = palette.ink
                         )
                     }
+                    // Remove download / Restore download: one row, two directions, chosen by the
+                    // book's own state. Never offered for a file the account has not verified.
+                    val localBytes = target.filePath?.let(::File)?.takeIf { it.exists() }?.length() ?: 0L
+                    when (DownloadUi.actionFor(target, localBytes)) {
+                        DownloadAction.REMOVE -> TextButton(onClick = { menuFor = null; confirmRemoveDownload = target }) {
+                            Text("Remove download", color = palette.ink)
+                        }
+                        DownloadAction.RESTORE -> TextButton(onClick = { menuFor = null; onRestoreDownload(target.id) }) {
+                            Text("Restore download", color = palette.ink)
+                        }
+                        DownloadAction.NONE -> Unit
+                    }
+                    if (target.id in removingIds || target.id in restoringIds) {
+                        Text(
+                            DownloadUi.busyLabel(target.id in removingIds, target.id in restoringIds) ?: "",
+                            color = palette.mute,
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(horizontal = 12.dp)
+                        )
+                    }
+                    // Remove book is last, and says what it does: this one takes the cloud copy too.
                     TextButton(onClick = { menuFor = null; confirmRemove = target }) {
-                        Text("Remove book", color = palette.accent)
+                        Text("Remove book from library", color = palette.accent)
                     }
                 }
             },
@@ -257,21 +307,46 @@ fun LibraryScreen(
     if (doomed != null) {
         AlertDialog(
             onDismissRequest = { confirmRemove = null },
-            title = { Text("Remove book?") },
+            title = { Text("Remove book from library?", fontFamily = Playfair) },
             text = {
+                // Deliberately blunt, because this is the destructive one: it takes the entry, the
+                // reader's bookmarks and — through the tombstone — the account's copy as well.
+                // "Free up space" is the other button, and the two must never read alike.
                 Text(
-                    "Remove \u201C${doomed.title}\u201D from this phone? " +
+                    "\u201C${doomed.title}\u201D will be deleted from this phone" +
                         if (doomed.driveFileId.isNullOrBlank())
-                            "There is no copy in your account, so this book will be gone."
-                        else "Your account keeps a copy, so you can restore it later."
+                            ". There is no copy in your account, so this book will be gone."
+                        else " and from your Google account at the next sync. This cannot be undone."
                 )
             },
             confirmButton = {
                 TextButton(onClick = { confirmRemove = null; onRemove(doomed.id) }) {
-                    Text("Yes, remove", color = palette.accent)
+                    Text("Delete from library", color = palette.accent)
                 }
             },
             dismissButton = { TextButton(onClick = { confirmRemove = null }) { Text("No") } }
+        )
+    }
+
+    val downloadDoomed = confirmRemoveDownload
+    if (downloadDoomed != null) {
+        val bytes = downloadDoomed.filePath?.let(::File)?.takeIf { it.exists() }?.length() ?: 0L
+        AlertDialog(
+            onDismissRequest = { confirmRemoveDownload = null },
+            title = { Text("Remove download?", fontFamily = Playfair) },
+            text = {
+                Text(
+                    "This deletes the ${com.lantern.library.data.Transfers.size(bytes)} file on this phone to free up space. " +
+                        "\u201C${downloadDoomed.title}\u201D stays in your library, and you can download it " +
+                        "again from your Google account at any time. Your place and bookmarks are kept."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { confirmRemoveDownload = null; onRemoveDownload(downloadDoomed.id) }) {
+                    Text("Remove download", color = palette.accent)
+                }
+            },
+            dismissButton = { TextButton(onClick = { confirmRemoveDownload = null }) { Text("Keep it", color = palette.mute) } }
         )
     }
 
@@ -351,7 +426,9 @@ private fun BookTile(
     book: LibraryBook,
     palette: NookPalette,
     onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onLongClick: () -> Unit,
+    removing: Boolean = false,
+    restoring: Boolean = false
 ) {
     Column {
         Box(
@@ -384,10 +461,15 @@ private fun BookTile(
             overflow = TextOverflow.Ellipsis
         )
         Text(
-            when (book.section) {
-                LibraryCategory.COMPLETED -> "Finished"
-                LibraryCategory.DNF -> "Did not finish"
-                LibraryCategory.READING -> "${(book.progress * 100).toInt()}% read"
+            // A download being removed or fetched back says so here, in the same place the card
+            // always reports a book's state. The card itself never disappears: the book is still
+            // in the library, it simply has no bytes on this phone for a moment.
+            DownloadUi.busyLabel(removing, restoring) ?: when {
+                !book.localFileAvailable && book.backupState == com.lantern.library.data.BookBackupState.RESTORE_REQUIRED ->
+                    DownloadUi.cloudOnlyLabel(book)
+                book.section == LibraryCategory.COMPLETED -> "Finished"
+                book.section == LibraryCategory.DNF -> "Did not finish"
+                book.section == LibraryCategory.READING -> "${(book.progress * 100).toInt()}% read"
                 else -> book.author.ifBlank { "Not started" }
             },
             color = palette.mute,

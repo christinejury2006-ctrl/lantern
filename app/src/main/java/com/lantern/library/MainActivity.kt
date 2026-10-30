@@ -6,6 +6,7 @@ import android.view.View
 import android.view.ViewTreeObserver
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.core.view.WindowCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.lantern.library.data.StartupTrace
 
@@ -23,6 +24,15 @@ class MainActivity : ComponentActivity() {
         }
         super.onCreate(savedInstanceState)
         StartupTrace.mark("super.onCreate")
+
+        // One inset owner, stated once.
+        //
+        // The app lets Android inset its content by the height of the system bars, which is the
+        // correct height for gesture navigation, three-button navigation and anything an OEM does
+        // in between. The reader screen deliberately switches to edge-to-edge while it is open and
+        // switches back when it closes; stating the default here means the shell can never start up
+        // inheriting an edge-to-edge window from a previous screen.
+        WindowCompat.setDecorFitsSystemWindows(window, true)
 
         val handoff = View(this)
         handoff.setBackgroundColor(Color.parseColor("#FFF7F1"))

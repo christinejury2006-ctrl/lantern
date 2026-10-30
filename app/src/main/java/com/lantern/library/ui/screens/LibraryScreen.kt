@@ -283,6 +283,22 @@ fun LibraryScreen(
                         }
                         DownloadAction.NONE -> Unit
                     }
+                    // When neither action is offered, say why — quietly, and only if the book is
+                    // close enough to the action for the reason to be useful.
+                    val localBytes2 = target.filePath?.let(::File)?.takeIf { it.exists() }?.length() ?: 0L
+                    val blockedReason = when {
+                        localBytes2 > 0L -> removalBlocker(target)
+                        !target.localFileAvailable -> restoreBlocker(target)
+                        else -> null
+                    }
+                    if (blockedReason != null && DownloadUi.actionFor(target, localBytes2) == DownloadAction.NONE) {
+                        Text(
+                            blockedReason,
+                            color = palette.mute,
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+                        )
+                    }
                     if (target.id in removingIds || target.id in restoringIds) {
                         Text(
                             DownloadUi.busyLabel(target.id in removingIds, target.id in restoringIds) ?: "",

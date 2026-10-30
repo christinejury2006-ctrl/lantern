@@ -2524,11 +2524,6 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun cacheFileName(book: LibraryBook): String {
-        val ext = if (book.format == BookFormat.PDF) "pdf" else "epub"
-        return "${book.id}.$ext"
-    }
-
     /**
      * The books that used to ship with the app are gone, and existing copies are cleared out.
      *

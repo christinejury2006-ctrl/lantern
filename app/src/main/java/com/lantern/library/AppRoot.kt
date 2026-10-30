@@ -54,6 +54,7 @@ import com.lantern.library.data.LanternStore
 import com.lantern.library.data.ReaderTheme
 import com.lantern.library.data.Recommendations
 import com.lantern.library.ui.components.FadeToast
+import com.lantern.library.ui.components.GlassSurface
 import com.lantern.library.ui.components.NookBottomBar
 import com.lantern.library.ui.components.NookTabs
 import com.lantern.library.ui.theme.nookPalette
@@ -383,6 +384,27 @@ internal fun LanternRoot(store: LanternStore) {
                     onContinue = { store.saveInterests(it) },
                     onCancel = { store.closeInterestEditor() }
                 )
+            }
+            // A restore is a wait the reader started by tapping a book. Say so, and say which
+            // book: "Fetching this book from your account…" used to be a toast that vanished
+            // while the download ran. This stays up for exactly as long as the work does.
+            if (store.restoringIds.isNotEmpty()) {
+                val titles = store.restoringIds.mapNotNull { id -> store.book(id)?.title }.filter { it.isNotBlank() }
+                Box(Modifier.align(Alignment.TopCenter).padding(top = 96.dp)) {
+                    GlassSurface(
+                        nookPalette(theme),
+                        Modifier,
+                        shape = RoundedCornerShape(18.dp)
+                    ) {
+                        Text(
+                            (titles.firstOrNull()?.let { "Restoring \u201C$it\u201D from your account…" }
+                                ?: "Restoring from your account…"),
+                            color = nookPalette(theme).ink,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                        )
+                    }
+                }
             }
             Box(Modifier.align(Alignment.TopCenter).padding(top = 48.dp)) { FadeToast(store.toast) }
         }

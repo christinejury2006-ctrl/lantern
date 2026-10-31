@@ -89,6 +89,8 @@ fun ReadingNookScreen(
     picksFailed: Boolean = false,
     onOpenBook: (LibraryBook) -> Unit,
     onOpenPick: (DiscoveryBook) -> Unit,
+    /** Opens the shelf: the empty nook uses it, and the bar has the same destination. */
+    onLibrary: () -> Unit,
     onRefreshPicks: () -> Unit,
     onNotifications: () -> Unit,
     /** Live upload progress, keyed by book. Read-only: the shelf never writes sync state. */

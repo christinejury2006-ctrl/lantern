@@ -787,11 +787,13 @@ class UploadPoolTest {
         // The pause lands on the first chunk of P, then the pool must carry on with the rest.
         val entered = CountDownLatch(1)
         drive.uploadEntered["p"] = entered
+        // Only the book under test is paused: a flag shared across books would pause whichever
+        // transfer reported progress first, which is exactly the bug this listener must not have.
         val listener = object : Recorder() {
             var asked = false
             override fun onProgress(book: LibraryBook, sent: Long, total: Long) {
                 super.onProgress(book, sent, total)
-                if (!asked) {
+                if (!asked && book.id == paused.id) {
                     asked = true
                     pool.pause(book.id)
                 }

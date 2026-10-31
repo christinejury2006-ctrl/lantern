@@ -1,9 +1,11 @@
 package com.lantern.library.data
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
 
 /**
  * What happened to one file.
@@ -67,7 +69,7 @@ class ImportBatch(private val worker: ImportWorker) {
     suspend fun run(
         items: List<ImportItem>,
         stopped: () -> Boolean = { false },
-        report: (ImportProgress) -> Unit
+        report: suspend (ImportProgress) -> Unit
     ): ImportSummary {
         val rows = ArrayList<ImportProgress>(items.size)
         var halted = false
@@ -95,9 +97,14 @@ class ImportBatch(private val worker: ImportWorker) {
                 currentCoroutineContext().ensureActive()
                 worker.import(item)
             } catch (cancelled: CancellationException) {
-                rows += row(ImportState.STOPPED, "Stopped before this file was imported.")
-                report(rows.last())
-                rest(items, index + 1, "Stopped before this file was imported.", rows, report)
+                // NonCancellable: the coroutine is already cancelled, so a plain `withContext` in a
+                // reporter would throw before a single stopped row was published. The bookkeeping
+                // has to happen even though the work does not.
+                withContext(NonCancellable) {
+                    rows += row(ImportState.STOPPED, "Stopped before this file was imported.")
+                    report(rows.last())
+                    rest(items, index + 1, "Stopped before this file was imported.", rows, report)
+                }
                 throw cancelled
             } catch (t: Throwable) {
                 // Every other exception is this file's problem alone. It is described in plain words
@@ -128,12 +135,12 @@ class ImportBatch(private val worker: ImportWorker) {
     }
 
     /** Reports every item from [from] onwards as stopped, without attempting it. */
-    private fun rest(
+    private suspend fun rest(
         items: List<ImportItem>,
         from: Int,
         reason: String,
         rows: MutableList<ImportProgress>,
-        report: (ImportProgress) -> Unit
+        report: suspend (ImportProgress) -> Unit
     ) {
         for (i in from until items.size) {
             val row = ImportProgress(

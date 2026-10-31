@@ -20,11 +20,15 @@ sealed class ImportOutcome {
     /** Not imported, and not a failure: a duplicate found late, or the file vanished. */
     data class Skipped(val reason: String) : ImportOutcome()
 
-    /** This file could not be imported. The rest of the batch is unaffected. */
+    /**
+     * This file could not be imported. The rest of the batch is unaffected.
+     *
+     * A phone that runs out of storage lands here too, with a message naming the file, the space it
+     * needed and the space that was free. It is deliberately *not* a batch-halting outcome: the next
+     * files may be small enough to fit, and stopping the run on the reader's behalf would lose
+     * books that could have been imported.
+     */
     data class Failed(val reason: String) : ImportOutcome()
-
-    /** The shelf has no room. The batch stops rather than failing every remaining file. */
-    data class Full(val remaining: Int) : ImportOutcome()
 }
 
 /** The per-file work of an import, injected so the batch can be tested without a device. */
@@ -59,10 +63,10 @@ class ImportBatch(private val worker: ImportWorker) {
      *
      * @param stopped polled between files; a true answer ends the batch cleanly.
      *
-     * Capacity is not re-derived here: the plan decided it before anything was copied, and the
-     * worker is the authority on it at the moment of each commit (the shelf can fill up while a
-     * batch runs). A [ImportOutcome.Full] stops the loop rather than attempting a hundred further
-     * copies the library would refuse.
+     * There is no count limit to check here, and this loop has no notion of one: a batch of a
+     * thousand books is a thousand turns of the same loop, each holding one file's metadata and one
+     * copy buffer. A file that does not fit on the phone is a [ImportOutcome.Failed] with its own
+     * message, and the loop carries on with the next file.
      * @param report called for every state change of every row, on the batch's own thread.
      * @return the counts the sheet's summary line shows.
      */
@@ -117,13 +121,6 @@ class ImportBatch(private val worker: ImportWorker) {
                 ImportOutcome.Added -> row(ImportState.ADDED, "Added to your library")
                 is ImportOutcome.Skipped -> row(ImportState.SKIPPED, outcome.reason)
                 is ImportOutcome.Failed -> row(ImportState.FAILED, outcome.reason)
-                is ImportOutcome.Full -> {
-                    halted = true
-                    haltReason = if (outcome.remaining <= 0)
-                        "Not imported: your library is at its limit."
-                    else "Not imported: only ${outcome.remaining} more books fit."
-                    row(ImportState.FAILED, haltReason)
-                }
             }
             rows += settled
             report(settled)

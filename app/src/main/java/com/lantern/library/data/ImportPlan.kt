@@ -17,9 +17,10 @@ package com.lantern.library.data
  * 3. **It is not a duplicate of another file in the same selection**, which is the case that used to
  *    slip through because each import ran in isolation.
  *
- * And one more, learned from a two-hundred-book batch: **it must fit on the shelf.** The library has
- * a maximum size; discovering that *after* copying 200 files is a waste of the reader's battery and
- * storage, so capacity is decided in the plan, before anything is copied.
+ * There is deliberately **no fourth rule about how many books fit**. The library has no ceiling: the
+ * only real limits are the phone's free space and the reader's account quota, and both are reported
+ * per file while copying rather than as a verdict here. A planner that knew a maximum number of
+ * books would also be the place where that maximum was quietly reintroduced.
  *
  * Everything in here is pure and cheap. It holds metadata only — a URI, a name, a format, a
  * fingerprint — never file contents, and the selection's total memory is a few hundred bytes per
@@ -63,14 +64,6 @@ sealed class ImportVerdict {
 
     /** Could not be opened or measured: a revoked permission, a vanished file, an empty one. */
     data class Unreadable(val reason: String) : ImportVerdict()
-
-    /**
-     * The shelf is full.
-     *
-     * [remaining] is how many books still fit, so the sheet can say "3 of these will not fit"
-     * before a single byte is copied, instead of failing file after file at the end of a long run.
-     */
-    data class LibraryFull(val remaining: Int) : ImportVerdict()
 }
 
 /** One row of the review sheet. */
@@ -87,9 +80,6 @@ data class ImportItem(
         is ImportVerdict.DuplicateInLibrary -> "Already in your library: \u201C${v.title}\u201D"
         is ImportVerdict.Unsupported -> v.reason
         is ImportVerdict.Unreadable -> v.reason
-        is ImportVerdict.LibraryFull ->
-            if (v.remaining <= 0) "Not imported: your library is at its limit."
-            else "Not imported: only ${v.remaining} more books fit."
     }
 }
 
@@ -106,7 +96,6 @@ data class ImportPlan(val items: List<ImportItem>) {
         get() = items.count {
             it.verdict is ImportVerdict.Unsupported || it.verdict is ImportVerdict.Unreadable
         }
-    val overflowCount: Int get() = items.count { it.verdict is ImportVerdict.LibraryFull }
 
     /** "3 of 5 ready" — the summary line above the list. */
     fun summary(): String = when {
@@ -127,42 +116,52 @@ object ImportPlanner {
     /**
      * Decides every item in [selection].
      *
-     * @param capacity how many more user books the shelf can hold. `Int.MAX_VALUE` for "no limit".
      * @param findInLibrary asks the library whether these exact bytes are already there. Injected
      *   rather than passed as a list so the store can compare only the books whose size collides,
      *   instead of hashing two hundred files every time the picker closes.
+     * @param sameContent confirms that two candidates whose fingerprints agree really are the same
+     *   book, by streaming both and comparing their full contents. The store always passes it, so
+     *   the app never refuses a book on the sampled windows alone: two different files that share a
+     *   length, a first 64 KiB and a last 64 KiB are both offered. `null` means "this caller cannot
+     *   read bytes" (tests) and keeps the pre-8.1 behaviour of trusting the fingerprint, which is
+     *   what makes this planner pure.
      */
     fun plan(
         selection: List<ImportCandidate>,
-        capacity: Int = Int.MAX_VALUE,
-        findInLibrary: (ImportCandidate) -> LibraryBook? = { null }
+        findInLibrary: (ImportCandidate) -> LibraryBook? = { null },
+        sameContent: ((ImportCandidate, ImportCandidate) -> Boolean)? = null
     ): ImportPlan {
         val items = ArrayList<ImportItem>(selection.size)
         val seenUris = HashMap<String, String>()
-        val seenContent = HashMap<String, String>()
-        var remaining = capacity.coerceAtLeast(0)
+        // Fingerprint key -> the candidates already accepted under that key. A key can cover more
+        // than one file once full-content confirmation says they differ.
+        val seenContent = HashMap<String, MutableList<ImportCandidate>>()
 
         selection.forEach { candidate ->
+            val earlier = candidate.contentKey.takeIf { it.isNotBlank() }?.let(seenContent::get)
             val verdict: ImportVerdict = when {
                 candidate.bytes <= 0L -> ImportVerdict.Unreadable("The file is empty.")
                 !candidate.supported -> ImportVerdict.Unsupported("Only EPUB and PDF books can be imported.")
                 !candidate.fingerprint.readable -> ImportVerdict.Unreadable("The file could not be read.")
                 seenUris.containsKey(candidate.uri) ->
                     ImportVerdict.DuplicateInSelection(seenUris.getValue(candidate.uri))
-                // A fingerprint that cannot prove two files identical is not used as evidence, so a
-                // book is never refused because of a length the provider would not confirm.
-                candidate.contentKey.isNotBlank() && seenContent.containsKey(candidate.contentKey) ->
-                    ImportVerdict.DuplicateInSelection(seenContent.getValue(candidate.contentKey))
+                // The fingerprint match is confirmed against the full contents before it refuses
+                // anything; two different books that happen to share their length, their first
+                // 64 KiB and their last 64 KiB stay separate books. With no confirmer (tests only)
+                // the match stands, which is the pure, pre-8.1 behaviour.
+                earlier != null && (sameContent == null ||
+                    earlier.firstOrNull { sameContent(it, candidate) } != null) ->
+                    ImportVerdict.DuplicateInSelection(earlier.first().name)
                 else -> findInLibrary(candidate)?.let { ImportVerdict.DuplicateInLibrary(it.title) }
-                    ?: if (remaining > 0) ImportVerdict.Ready else ImportVerdict.LibraryFull(remaining)
+                    ?: ImportVerdict.Ready
             }
-            // Only a file that is going to be imported claims its identity and a place on the
-            // shelf, so removing the first copy of a duplicate pair promotes the second one instead
-            // of losing both.
+            // Only a file that is going to be imported claims its identity, so removing the first
+            // copy of a duplicate pair promotes the second one instead of losing both.
             if (verdict is ImportVerdict.Ready) {
                 seenUris[candidate.uri] = candidate.name
-                if (candidate.contentKey.isNotBlank()) seenContent[candidate.contentKey] = candidate.name
-                remaining--
+                if (candidate.contentKey.isNotBlank()) {
+                    seenContent.getOrPut(candidate.contentKey) { ArrayList(1) } += candidate
+                }
             }
             items += ImportItem(candidate, verdict)
         }
@@ -170,10 +169,12 @@ object ImportPlanner {
     }
 
     /**
-     * Re-decides an already-built plan, keeping library and capacity verdicts as they were.
+     * Re-decides an already-built plan, keeping the library verdicts as they were.
      *
-     * Removing a row must not turn "already on the shelf" into "ready" (that is a fact about the
-     * library, not about the selection), and must not invent capacity that the shelf does not have.
+     * Used when the reader removes a row: a duplicate may now be the only copy left in the
+     * selection, so it becomes ready. "Already on the shelf" is a fact about the library, not about
+     * the selection, and survives the edit. Same-fingerprint matches are taken as duplicates here
+     * because they were confirmed with full contents before the sheet was built.
      */
     fun planOf(items: List<ImportItem>): ImportPlan {
         val seenUris = HashMap<String, String>()
@@ -188,9 +189,8 @@ object ImportPlanner {
                 seenUris.containsKey(c.uri) -> ImportVerdict.DuplicateInSelection(seenUris.getValue(c.uri))
                 c.contentKey.isNotBlank() && seenContent.containsKey(c.contentKey) ->
                     ImportVerdict.DuplicateInSelection(seenContent.getValue(c.contentKey))
-                // Facts about the shelf and about its capacity survive a row being removed.
+                // A fact about the shelf survives a row being removed.
                 item.verdict is ImportVerdict.DuplicateInLibrary -> item.verdict
-                item.verdict is ImportVerdict.LibraryFull -> item.verdict
                 else -> ImportVerdict.Ready
             }
             if (verdict is ImportVerdict.Ready) {

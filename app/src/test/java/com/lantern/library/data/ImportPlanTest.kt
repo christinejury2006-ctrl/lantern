@@ -2,7 +2,6 @@ package com.lantern.library.data
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -12,8 +11,8 @@ import org.junit.Test
  * The point of these tests is that identity is decided by *content*, not by filename: the same file
  * picked from two folders is one book, a renamed copy is one book, and the same bytes already on
  * the shelf are no book at all. Also that removing a row from the review sheet promotes its
- * duplicate twin instead of losing both, and that the shelf's capacity is decided here rather than
- * discovered file by file at the end of a long run.
+ * duplicate twin instead of losing both, and - since round 8.1 - that there is no shelf capacity at
+ * all: two hundred and fifty chosen books are two hundred and fifty books.
  *
  * Nothing here copies a file or touches a URI: [ImportPlanner] is pure, and the store is the only
  * thing that reads bytes.
@@ -87,7 +86,10 @@ class ImportPlanTest {
 
     @Test
     fun `a file already on the shelf is a library duplicate`() {
-        val plan = ImportPlanner.plan(listOf(candidate("a.epub"))) { inLibrary("A Book") }
+        val plan = ImportPlanner.plan(
+            selection = listOf(candidate("a.epub")),
+            findInLibrary = { inLibrary("A Book") }
+        )
         assertEquals(0, plan.readyCount)
         assertEquals(1, plan.duplicateCount)
         val verdict = plan.items[0].verdict
@@ -177,17 +179,22 @@ class ImportPlanTest {
     // 9 -------------------------------------------------------------------------------------
 
     @Test
-    fun `a selection larger than the shelf keeps only what fits`() {
+    fun `two hundred and fifty books are all ready because there is no shelf limit`() {
+        // This replaces the old "a selection larger than the shelf keeps only what fits" test. That
+        // one asserted the two-hundred-book cap - a product rule nobody asked for. The cap is gone,
+        // so this asserts its absence: every chosen book is importable, with no refusal row at all.
         val selection = (1..250).map { i -> candidate("book$i.epub", bytes = 1000L + i) }
-        val plan = ImportPlanner.plan(selection, capacity = 200)
+        val plan = ImportPlanner.plan(selection)
 
         assertEquals(250, plan.total)
-        assertEquals("exactly the room available is taken", 200, plan.readyCount)
-        assertEquals("the rest are refused with a reason, not silently dropped", 50, plan.overflowCount)
-        assertTrue(plan.items.last().verdict is ImportVerdict.LibraryFull)
+        assertEquals("every chosen book is importable", 250, plan.readyCount)
+        assertEquals(0, plan.duplicateCount)
+        assertEquals("250 ready to import", plan.summary())
         assertTrue(
-            "the refusal must explain itself: ${plan.items.last().note()}",
-            plan.items.last().note().contains("library")
+            "no row may mention a limit: " + plan.items.map { it.note() }.distinct().filter {
+                it.contains("limit", ignoreCase = true) || it.contains("full", ignoreCase = true)
+            },
+            plan.items.none { it.note().contains("limit", ignoreCase = true) }
         )
     }
 
@@ -200,23 +207,37 @@ class ImportPlanTest {
             candidate("a2.epub", head = "h", tail = "t"), // duplicate of a1
             candidate("b.epub", head = "h2", tail = "t2")
         )
-        val plan = ImportPlanner.plan(selection, capacity = 2)
-        assertEquals("two distinct books fit in two places", 2, plan.readyCount)
+        val plan = ImportPlanner.plan(selection)
+        assertEquals("both distinct books are ready", 2, plan.readyCount)
         assertEquals(1, plan.duplicateCount)
-        assertEquals(0, plan.overflowCount)
     }
 
     // 11 ------------------------------------------------------------------------------------
 
     @Test
-    fun `a shelf with no room imports nothing and says why`() {
-        val plan = ImportPlanner.plan(listOf(candidate("a.epub"), candidate("b.epub")), capacity = 0)
-        assertEquals(0, plan.readyCount)
-        assertEquals(2, plan.overflowCount)
-        plan.items.forEach { item ->
-            assertTrue("each row must carry the reason", item.verdict is ImportVerdict.LibraryFull)
-            assertNotNull(item.note())
-        }
+    fun `matching fingerprints are only a candidate - the full-content check decides`() {
+        // Two different books can share a length and both sampled windows: a re-exported PDF, or a
+        // provider that pads a header. The fingerprint narrows the field; the streamed full-content
+        // hash has the final say, and when it says "different" both books are imported.
+        val a = candidate("a.epub", head = "same", tail = "same")
+        val b = candidate("b.epub", head = "same", tail = "same")
+
+        var asked = 0
+        val differ = ImportPlanner.plan(
+            selection = listOf(a, b),
+            sameContent = { _, _ ->
+                asked++
+                false
+            }
+        )
+        assertEquals("both books are offered when the bodies differ", 2, differ.readyCount)
+        assertEquals(0, differ.duplicateCount)
+        assertEquals("the planner really did ask for confirmation", 1, asked)
+
+        val confirmed = ImportPlanner.plan(selection = listOf(a, b), sameContent = { _, _ -> true })
+        assertEquals("a confirmed match is still one book", 1, confirmed.readyCount)
+        assertEquals(1, confirmed.duplicateCount)
+        assertTrue(confirmed.items[1].verdict is ImportVerdict.DuplicateInSelection)
     }
 
     // 12 ------------------------------------------------------------------------------------

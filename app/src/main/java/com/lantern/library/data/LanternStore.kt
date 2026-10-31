@@ -27,9 +27,18 @@ import org.json.JSONObject
 import java.io.File
 
 class LanternStore(app: Application) : AndroidViewModel(app) {
-    companion object {
-        const val MAX_USER_BOOKS = 200
-    }
+
+    /**
+     * There is deliberately no maximum book count.
+     *
+     * A personal library has no shelf that runs out of room: the only limits that exist are the
+     * phone's free storage, the reader's account quota and what the reader chooses to keep. An
+     * earlier round carried a constant cap of two hundred books here, which refused the two
+     * hundred and first import with a "library is full" message - a product rule that was never
+     * asked for, and one that a single large batch could hit. It is gone; the import path reports
+     * real resource failures instead, and `ImportLimitsTest` fails if a fixed book-count cap is
+     * reintroduced anywhere in this path.
+     */
 
     private val prefs = app.getSharedPreferences("lantern", Context.MODE_PRIVATE)
     private val booksFile = File(app.filesDir, "library.json")
@@ -320,16 +329,6 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         )
     }
 
-    fun userBookCount(): Int = synchronized(libraryLock) { userBookCountUnlocked() }
-
-    fun libraryFull(): Boolean = userBookCount() >= MAX_USER_BOOKS
-
-    private fun userBookCountUnlocked(): Int =
-        books.count { it.origin == BookOrigin.IMPORT || it.origin == BookOrigin.DOWNLOAD }
-
-    private fun isUserBook(book: LibraryBook): Boolean =
-        book.origin == BookOrigin.IMPORT || book.origin == BookOrigin.DOWNLOAD
-
     fun setPrefs(next: ReadingPrefs) {
         val clean = next.copy(
             theme = if (next.theme == ReaderTheme.DARK) ReaderTheme.DARK else ReaderTheme.LIGHT,
@@ -389,8 +388,6 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             val i = books.indexOfFirst { it.id == book.id }
             if (i >= 0) {
                 books[i] = book
-            } else if (isUserBook(book) && userBookCountUnlocked() >= MAX_USER_BOOKS) {
-                return
             } else {
                 books.add(0, book)
             }
@@ -400,7 +397,14 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         markLocalChanged()
     }
 
-    private enum class CommitUserBookResult { ACCEPTED, LIBRARY_FULL, PERSIST_FAILED }
+    /**
+     * What a commit did.
+     *
+     * There is no "full" outcome: the only ways a book fails to land are a write that could not be
+     * confirmed, and a phone with no room left for it — both of which name a real problem the
+     * reader can act on.
+     */
+    private enum class CommitUserBookResult { ACCEPTED, PERSIST_FAILED, NO_STORAGE }
 
     private fun commitNewUserBook(book: LibraryBook): CommitUserBookResult {
         var discardCopiedFile = false
@@ -412,17 +416,18 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     persistBooksUnlocked()
                     CommitUserBookResult.ACCEPTED
                 }
-                isUserBook(book) && userBookCountUnlocked() >= MAX_USER_BOOKS ->
-                    CommitUserBookResult.LIBRARY_FULL
                 else -> {
                     books.add(0, book)
                     try {
                         persistBooksUnlocked()
                         CommitUserBookResult.ACCEPTED
-                    } catch (_: Exception) {
+                    } catch (t: Exception) {
                         books.removeAll { it.id == book.id }
                         discardCopiedFile = true
-                        CommitUserBookResult.PERSIST_FAILED
+                        // A library record that cannot be written is usually a full disk, and the
+                        // reader is told which of the two it was instead of "could not add".
+                        if (isStorageFailure(t)) CommitUserBookResult.NO_STORAGE
+                        else CommitUserBookResult.PERSIST_FAILED
                     }
                 }
             }
@@ -434,6 +439,16 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         }
         return result
     }
+
+    /**
+     * Whether a write failed because the phone is out of room.
+     *
+     * The distinction matters: "the library could not be saved" is a bug, "there is no space left"
+     * is something the reader can fix in ten seconds. Android surfaces it as an `IOException`
+     * whose message carries `ENOSPC`, and a few file systems phrase it differently, so both are
+     * looked for.
+     */
+    private fun isStorageFailure(t: Throwable): Boolean = BookIo.isOutOfSpace(t)
 
     private fun discardOrphan(book: LibraryBook) {
         book.filePath?.let { runCatching { File(it).delete() } }
@@ -645,9 +660,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 CommitUserBookResult.ACCEPTED -> {
                     toast("Added to Library")
                 }
-                CommitUserBookResult.LIBRARY_FULL -> {
+                CommitUserBookResult.NO_STORAGE -> {
                     withContext(Dispatchers.IO) { discardOrphan(incoming) }
-                    toast("Library is full (200 books)")
+                    toast("No room left on this phone for that book. Free some space and try again.")
                 }
                 CommitUserBookResult.PERSIST_FAILED -> toast("Could not add that file")
             }
@@ -733,7 +748,6 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     }
                 }
             }
-            val capacity = withContext(Dispatchers.Main) { remainingUserBookCapacity() }
             val measured = ArrayList<ImportCandidate>(unique.size)
             withContext(Dispatchers.IO) {
                 unique.forEach { uri ->
@@ -748,7 +762,14 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             }
             if (gen != importGeneration) return@launch
             val plan = withContext(Dispatchers.IO) {
-                ImportPlanner.plan(measured, capacity) { candidate -> findImportDuplicate(candidate) }
+                ImportPlanner.plan(
+                    selection = measured,
+                    findInLibrary = { candidate -> findImportDuplicate(candidate) },
+                    // Fingerprints are a filter, never a verdict. Two candidates that match on
+                    // length and on both sampled windows are confirmed by streaming their whole
+                    // contents before the second is called a duplicate.
+                    sameContent = { a, b -> sameDocumentContent(a, b) }
+                )
             }
             importBusy = false
             importRows = emptyList()
@@ -756,7 +777,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             SyncDiag.mark(
                 "Import review",
                 "${plan.total} chosen, ${plan.readyCount} ready, ${plan.duplicateCount} already here, " +
-                    "${plan.overflowCount} over the limit"
+                    "${plan.problemCount} not readable as a book"
             )
         }
     }
@@ -771,6 +792,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
      */
     private fun findImportDuplicate(candidate: ImportCandidate): LibraryBook? {
         if (candidate.contentKey.isBlank()) return null
+        // Stage 1 - a cheap filter. Length first (one `length()` per book), then the sampled
+        // fingerprint of the shelf copy. This narrows the field; it never decides.
         val sameSize = synchronized(libraryLock) {
             books.filter { b ->
                 b.origin != BookOrigin.BUNDLED &&
@@ -778,10 +801,35 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     b.filePath?.let { File(it) }?.takeIf { it.exists() }?.length() == candidate.bytes
             }
         }
-        return sameSize.firstOrNull { b ->
-            val file = b.filePath?.let(::File) ?: return@firstOrNull false
+        val suspects = sameSize.filter { b ->
+            val file = b.filePath?.let(::File) ?: return@filter false
             BookIo.fingerprintOf(file).key == candidate.contentKey
         }
+        if (suspects.isEmpty()) return null
+
+        // Stage 2 - confirmation. A book is only refused as a duplicate when the *whole* of both
+        // files hashes the same. The fingerprint reads 128 KiB; two books that agree there and
+        // nowhere else are two books, and the reader gets both.
+        val candidateHash = BookIo.fullMd5OfDocument(getApplication(), Uri.parse(candidate.uri))
+            ?: return null
+        return suspects.firstOrNull { b ->
+            val file = b.filePath?.let(::File) ?: return@firstOrNull false
+            BookIo.fullMd5OfFile(file) == candidateHash
+        }
+    }
+
+    /**
+     * Whether two chosen documents are the same book, decided on their full contents.
+     *
+     * Called only when their fingerprints already agree, so this is at most one full read of each
+     * document - streamed through a fixed buffer, never held in memory - and only for the files
+     * that collided.
+     */
+    private fun sameDocumentContent(a: ImportCandidate, b: ImportCandidate): Boolean {
+        if (a.uri == b.uri) return true
+        val first = BookIo.fullMd5OfDocument(getApplication(), Uri.parse(a.uri)) ?: return false
+        val second = BookIo.fullMd5OfDocument(getApplication(), Uri.parse(b.uri)) ?: return false
+        return first == second
     }
 
     /** Removes one row from the review sheet. Its duplicate twin becomes importable again. */
@@ -871,30 +919,41 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
      * Imports one file: copy, validate, deduplicate, commit.
      *
      * Each step can fail, and each failure is returned rather than thrown where it is a normal
-     * outcome (a duplicate, a full shelf). Anything else is left to [ImportBatch], which records it
-     * against this file and carries on with the next one.
+     * outcome (a duplicate, a document that vanished). Anything else is left to [ImportBatch],
+     * which records it against this file and carries on with the next one. Storage exhaustion is
+     * reported per file, with the size needed and the space actually free.
      */
     private val importWorker = object : ImportWorker {
         override suspend fun import(item: ImportItem): ImportOutcome {
             val candidate = item.candidate
             val id = importIdFor(candidate)
-            // Room is checked again at commit time, not only when the sheet was built: the shelf
-            // can fill up while a two-hundred-file batch is running.
-            val room = withContext(Dispatchers.Main) { remainingUserBookCapacity() }
-            if (room <= 0) return ImportOutcome.Full(0)
-
-            val book = withContext(Dispatchers.IO) {
+            // No count limit is checked here, because there is none. The only limit is the phone's
+            // free space, and [BookIo.importFile] reports that per file with the amount needed.
+            val imported = withContext(Dispatchers.IO) {
                 runCatching {
-                    BookIo.importUri(getApplication(), Uri.parse(candidate.uri), id) {
-                        importStopRequested
+                    BookIo.importFile(
+                        context = getApplication(),
+                        uri = Uri.parse(candidate.uri),
+                        id = id,
+                        expectedBytes = candidate.bytes,
+                        cancelled = { importStopRequested }
+                    )
+                }.getOrDefault(BookIo.ImportedFile.Failed("The file could not be read."))
+            }
+            val book = when (imported) {
+                is BookIo.ImportedFile.Ok -> imported.book
+                is BookIo.ImportedFile.Failed -> {
+                    withContext(Dispatchers.IO) { discardPartialImport(candidate) }
+                    return when {
+                        importStopRequested ->
+                            ImportOutcome.Skipped("Stopped before this file was imported.")
+                        imported.outOfSpace -> ImportOutcome.Failed(
+                            "No room for this book: it needs ${Transfers.size(imported.neededBytes)} " +
+                                "and the phone has ${Transfers.size(imported.freeBytes)} free. " +
+                                "Free some space, then tap Retry."
+                        )
+                        else -> ImportOutcome.Failed(imported.reason)
                     }
-                }.getOrNull()
-            } ?: run {
-                withContext(Dispatchers.IO) { discardPartialImport(candidate) }
-                return if (importStopRequested) {
-                    ImportOutcome.Skipped("Stopped before this file was imported.")
-                } else {
-                    ImportOutcome.Failed("The file could not be read, or it is not a valid book.")
                 }
             }
 
@@ -915,9 +974,11 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     }
                     ImportOutcome.Added
                 }
-                CommitUserBookResult.LIBRARY_FULL -> {
+                CommitUserBookResult.NO_STORAGE -> {
                     withContext(Dispatchers.IO) { discardOrphan(book) }
-                    ImportOutcome.Full(0)
+                    ImportOutcome.Failed(
+                        "No room left to record this book. Free some space, then tap Retry."
+                    )
                 }
                 CommitUserBookResult.PERSIST_FAILED -> {
                     withContext(Dispatchers.IO) { discardOrphan(book) }
@@ -943,11 +1004,6 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 current + row
             }
         }
-    }
-
-    /** How many more user books fit, for the planner and for the commit-time check. */
-    private fun remainingUserBookCapacity(): Int = synchronized(libraryLock) {
-        (MAX_USER_BOOKS - userBookCountUnlocked()).coerceAtLeast(0)
     }
 
     /** Retries one failed row. The rest of the sheet — and the library — stays as it is. */
@@ -1019,9 +1075,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     toast("Saved ${book.title}")
                     then?.invoke(incoming)
                 }
-                CommitUserBookResult.LIBRARY_FULL -> {
+                CommitUserBookResult.NO_STORAGE -> {
                     withContext(Dispatchers.IO) { discardOrphan(incoming) }
-                    toast("Library is full (200 books)")
+                    toast("No room left on this phone for that book. Free some space and try again.")
                 }
                 CommitUserBookResult.PERSIST_FAILED -> toast("Download failed")
             }
@@ -1063,9 +1119,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     toast("Added ${book.title}")
                     then?.invoke(book)
                 }
-                CommitUserBookResult.LIBRARY_FULL -> {
+                CommitUserBookResult.NO_STORAGE -> {
                     withContext(Dispatchers.IO) { discardOrphan(book) }
-                    toast("Library is full (${MAX_USER_BOOKS} books)")
+                    toast("No room left on this phone for that book. Free some space and try again.")
                 }
                 CommitUserBookResult.PERSIST_FAILED -> {
                     withContext(Dispatchers.IO) { discardOrphan(book) }

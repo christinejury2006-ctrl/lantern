@@ -6,7 +6,6 @@ import android.graphics.BitmapFactory
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.ParcelFileDescriptor
-import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.util.Xml
 import org.xmlpull.v1.XmlPullParser
@@ -18,6 +17,15 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 
 object BookIo {
+
+    /**
+     * The one buffer size used for every streaming read in this file.
+     *
+     * Fixed on purpose: a two-hundred-book batch with a hundred-megabyte book costs this much
+     * memory per open stream and no more, because nothing here ever reads a whole document into a
+     * byte array.
+     */
+    const val COPY_BUFFER_BYTES = 256 * 1024
 
     fun booksDir(context: Context): File =
         File(context.getExternalFilesDir(null), "books").apply { mkdirs() }
@@ -71,6 +79,63 @@ object BookIo {
     }.getOrDefault(-1L)
 
     /**
+     * MD5 of a document's *entire* contents, streamed through a fixed buffer.
+     *
+     * This is the confirmation half of duplicate detection. The length and the two sampled windows
+     * in [ImportFingerprint] are a cheap filter - they are compared first, because they cost 128 KiB
+     * per book - but they are not proof: two editions of the same book can share a length and a
+     * boilerplate header, and, more importantly, a provider may return the same bytes for the
+     * windows while the bodies differ. Nothing is called a duplicate on the filter alone; this hash
+     * has to agree as well.
+     *
+     * Returns null when the document cannot be read, which the caller treats as "not the same
+     * book" - refusing a book the reader asked for is the worse error.
+     */
+    fun fullMd5OfDocument(context: Context, uri: Uri): String? = runCatching {
+        context.contentResolver.openInputStream(uri)?.use { input -> md5OfStream(input) }
+    }.getOrNull()
+
+    /** MD5 of a file already on the shelf. Same buffer, same rules as [fullMd5OfDocument]. */
+    fun fullMd5OfFile(file: File): String? = runCatching {
+        if (!file.exists() || file.length() <= 0L) return@runCatching null
+        file.inputStream().use { input -> md5OfStream(input) }
+    }.getOrNull()
+
+    private fun md5OfStream(input: java.io.InputStream): String {
+        val digest = java.security.MessageDigest.getInstance("MD5")
+        val buffer = ByteArray(64 * 1024)
+        while (true) {
+            val read = input.read(buffer)
+            if (read <= 0) break
+            digest.update(buffer, 0, read)
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    /**
+     * Whether an exception means "the phone is out of space", as opposed to any other write error.
+     *
+     * Android does not give storage exhaustion its own exception type; it arrives as an
+     * `IOException` carrying `ENOSPC`, which is why the message is inspected. Kept next to the
+     * copies that can raise it so the wording and the check stay together.
+     */
+    fun isOutOfSpace(t: Throwable): Boolean {
+        var cause: Throwable? = t
+        var depth = 0
+        while (cause != null && depth < 4) {
+            val text = cause.message.orEmpty().lowercase()
+            if (text.contains("enospc") || text.contains("no space left") ||
+                text.contains("not enough space") || text.contains("disk full")
+            ) {
+                return true
+            }
+            cause = cause.cause
+            depth++
+        }
+        return false
+    }
+
+    /**
      * A fast, non-cryptographic fingerprint of a file already on this phone.
      *
      * Used only to confirm that a candidate which matches a shelf book by size really is that
@@ -86,6 +151,27 @@ object BookIo {
     }.getOrDefault(ImportFingerprint.UNREADABLE)
 
     /**
+     * What copying one chosen document produced.
+     *
+     * A nullable `LibraryBook?` would have covered "worked" and "did not", and the reader would be
+     * told "could not add that file" whether the document was revoked, not a book, or there was no
+     * room left on the phone. The three are different problems with different fixes, so they are
+     * different answers.
+     */
+    sealed class ImportedFile {
+        data class Ok(val book: LibraryBook) : ImportedFile()
+
+        data class Failed(
+            /** What to tell the reader, in their words. */
+            val reason: String,
+            /** True when the phone ran out of storage, so the message can name sizes. */
+            val outOfSpace: Boolean = false,
+            val neededBytes: Long = 0L,
+            val freeBytes: Long = 0L
+        ) : ImportedFile()
+    }
+
+    /**
      * Copies one chosen document into the library.
      *
      * @param id the id the caller decided on. A batch import passes its own so two files chosen in
@@ -96,61 +182,126 @@ object BookIo {
         uri: Uri,
         id: String? = null,
         cancelled: () -> Boolean = { false }
-    ): LibraryBook? {
-        val name = displayName(context, uri) ?: return null
+    ): LibraryBook? = when (val result = importFile(context, uri, id, 0L, cancelled)) {
+        is ImportedFile.Ok -> result.book
+        is ImportedFile.Failed -> null
+    }
+
+    /**
+     * Copies one chosen document into the library, and says exactly what went wrong if it did not.
+     *
+     * @param expectedBytes the size measured for this document, or 0 when it is unknown. Used only
+     *   to give a storage failure a real number: "needs 42.1 MB, 3.4 MB free" instead of "failed".
+     */
+    fun importFile(
+        context: Context,
+        uri: Uri,
+        id: String? = null,
+        expectedBytes: Long = 0L,
+        cancelled: () -> Boolean = { false }
+    ): ImportedFile {
+        val name = displayName(context, uri)
+            ?: uri.lastPathSegment.orEmpty().ifBlank { "Untitled" }
         val lower = name.lowercase()
         val format = when {
             lower.endsWith(".epub") -> BookFormat.EPUB
             lower.endsWith(".pdf") -> BookFormat.PDF
-            else -> return null
-        }
+            else -> ImportMeasure.formatOf(name, ByteArray(0))
+        } ?: return ImportedFile.Failed(
+            "This file is not an EPUB or a PDF, so it cannot be added to the library."
+        )
         val bookId = id ?: "imp_${System.currentTimeMillis()}_${name.hashCode().toUInt()}"
-        return importInto(context, uri, name, format, bookId, cancelled)
+        return importInto(context, uri, name, format, bookId, expectedBytes, cancelled)
     }
 
-    /** The copying half of [importUri], with the identity already decided. */
+    /** The copying half of [importFile], with the identity already decided. */
     private fun importInto(
         context: Context,
         uri: Uri,
         name: String,
         format: BookFormat,
         id: String,
+        expectedBytes: Long = 0L,
         cancelled: () -> Boolean = { false }
-    ): LibraryBook? {
-        val dest = File(booksDir(context), "$id.${if (format == BookFormat.EPUB) "epub" else "pdf"}")
+    ): ImportedFile {
+        val dir = booksDir(context)
+        val dest = File(dir, "$id.${if (format == BookFormat.EPUB) "epub" else "pdf"}")
+        // The only capacity this app recognises: the phone's free space. Checked *before* the copy
+        // so a full disk costs one `usableSpace` call instead of a half-written 300 MB file, and
+        // reported with the two numbers the reader needs to act on.
+        if (expectedBytes > 0L) {
+            val free = runCatching { dir.usableSpace }.getOrDefault(0L)
+            // A little headroom: the file itself plus the library record and a cover.
+            // `usableSpace` answers 0 when it cannot tell, which must not be read as "full".
+            if (free > 0L && free < expectedBytes + (1L shl 20)) {
+                return ImportedFile.Failed(
+                    reason = "Not enough room on this phone for this book.",
+                    outOfSpace = true,
+                    neededBytes = expectedBytes,
+                    freeBytes = free
+                )
+            }
+        }
         // Copy to a temporary first and move it into place only once the whole file is here. An
         // import interrupted halfway then leaves nothing that looks like a book, which is the
         // difference between "try again" and "this book is broken forever".
-        val incoming = File(dest.parentFile, dest.name + ".incoming")
+        val incoming = File(dir, dest.name + ".incoming")
         // Copy in bounded chunks, checking for cancellation between them. `copyTo` would be just
         // as memory-tight, but it cannot be stopped: a reader who cancels a 200-book batch must not
         // wait for the current 300 MB file to finish copying first.
-        val copied = runCatching {
-            context.contentResolver.openInputStream(uri)?.use { input ->
+        val failure = try {
+            val stream = context.contentResolver.openInputStream(uri)
+                ?: return ImportedFile.Failed("The file could not be opened. It may have been moved.")
+            stream.use { input ->
                 FileOutputStream(incoming).use { output ->
-                    val buffer = ByteArray(256 * 1024)
+                    val buffer = ByteArray(COPY_BUFFER_BYTES)
+                    var copied = 0L
                     while (true) {
                         if (cancelled()) throw java.io.InterruptedIOException("import cancelled")
                         val read = input.read(buffer)
                         if (read <= 0) break
                         output.write(buffer, 0, read)
+                        copied += read
                     }
                     output.flush()
+                    if (copied <= 0L) return ImportedFile.Failed("The file is empty.")
                 }
-            } ?: return null
-        }.isSuccess
-        if (!copied || !incoming.exists() || incoming.length() <= 0L) {
+            }
+            null
+        } catch (_: java.io.InterruptedIOException) {
             runCatching { incoming.delete() }
-            return null
+            return ImportedFile.Failed("The import was stopped before this file was copied.")
+        } catch (t: Throwable) {
+            runCatching { incoming.delete() }
+            if (isOutOfSpace(t)) {
+                return ImportedFile.Failed(
+                    reason = "The phone ran out of room while copying this book.",
+                    outOfSpace = true,
+                    neededBytes = maxOf(expectedBytes, 0L),
+                    freeBytes = runCatching { dir.usableSpace }.getOrDefault(0L)
+                )
+            }
+            t
+        }
+        if (failure != null) {
+            return ImportedFile.Failed(
+                "The file could not be read (${failure.javaClass.simpleName})."
+            )
+        }
+        if (!incoming.exists() || incoming.length() <= 0L) {
+            runCatching { incoming.delete() }
+            return ImportedFile.Failed("The file is empty.")
         }
         // The container check runs on the copied bytes, not on the picker's word for them.
         if (BookFiles.validate(incoming, format) !is BookFiles.Check.Ok) {
             runCatching { incoming.delete() }
-            return null
+            return ImportedFile.Failed(
+                "The file is not a valid ${if (format == BookFormat.PDF) "PDF" else "EPUB"} book."
+            )
         }
         if (!BookFiles.commit(incoming, dest)) {
             runCatching { incoming.delete() }
-            return null
+            return ImportedFile.Failed("The copied book could not be moved into place.")
         }
         val coverFile = File(coversDir(context), "$id.jpg")
         val coverOk = if (format == BookFormat.EPUB) extractEpubCover(dest, coverFile) else extractPdfCover(dest, coverFile)
@@ -172,60 +323,6 @@ object BookIo {
             category = "Imported",
             synopsis = "Imported from this phone."
         )
-    }
-
-    fun importTree(context: Context, tree: Uri, limit: Int = 400): List<LibraryBook> {
-        val out = mutableListOf<LibraryBook>()
-        val cr = context.contentResolver
-        val children = DocumentsContract.buildChildDocumentsUriUsingTree(
-            tree,
-            DocumentsContract.getTreeDocumentId(tree)
-        )
-        walkTree(context, tree, children, out, limit)
-        return out
-    }
-
-    private fun walkTree(
-        context: Context,
-        tree: Uri,
-        children: Uri,
-        out: MutableList<LibraryBook>,
-        limit: Int
-    ) {
-        if (out.size >= limit) return
-        val cr = context.contentResolver
-        val cursor = try {
-            cr.query(
-                children,
-                arrayOf(
-                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                    DocumentsContract.Document.COLUMN_MIME_TYPE
-                ),
-                null, null, null
-            )
-        } catch (_: Exception) {
-            null
-        } ?: return
-        cursor.use {
-            while (it.moveToNext() && out.size < limit) {
-                val docId = it.getString(0) ?: continue
-                val name = it.getString(1) ?: ""
-                val mime = it.getString(2) ?: ""
-                if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
-                    val child = DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId)
-                    walkTree(context, tree, child, out, limit)
-                } else {
-                    val lower = name.lowercase()
-                    if (lower.endsWith(".epub") || lower.endsWith(".pdf") ||
-                        mime.contains("epub") || mime == "application/pdf"
-                    ) {
-                        val uri = DocumentsContract.buildDocumentUriUsingTree(tree, docId)
-                        importUri(context, uri)?.let { book -> out += book }
-                    }
-                }
-            }
-        }
     }
 
     fun downloadCatalog(context: Context, remote: CatalogBook, preferPdf: Boolean): LibraryBook? {

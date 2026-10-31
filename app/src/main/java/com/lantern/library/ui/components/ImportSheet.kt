@@ -86,16 +86,6 @@ fun ImportReviewSheet(
                     fontSize = 12.sp,
                     modifier = Modifier.padding(top = 4.dp)
                 )
-                if (!busy && plan.overflowCount > 0) {
-                    // Named before the first byte is copied, not discovered at the end of the run.
-                    Text(
-                        "${plan.overflowCount} of these will not fit — your library holds " +
-                            "200 imported books.",
-                        color = palette.accent,
-                        fontSize = 11.sp,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-                }
 
                 Spacer(Modifier.height(14.dp))
                 LazyColumn(

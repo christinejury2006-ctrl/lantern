@@ -16,8 +16,10 @@ import java.util.concurrent.atomic.AtomicInteger
  *
  * These tests drive the production [ImportBatch] against workers that fail on purpose, so what they
  * prove is the orchestration the app actually uses: a failed file becomes one row and the loop
- * continues, a stop request ends the batch without losing what has already been added, a full shelf
- * halts instead of failing a hundred more files, and retrying a batch never duplicates a book.
+ * continues, a stop request ends the batch without losing what has already been added, a phone with
+ * no space left fails exactly the file that did not fit, and retrying a batch never duplicates a
+ * book. There is no shelf limit anywhere in these tests because the app has none: five hundred and a
+ * thousand files are just longer runs of the same loop.
  *
  * What they do not prove: the Android copy itself. The copy is `BookIo` + [BookFiles], and the parts
  * that can be exercised without a device — validate, atomic commit, and the fact that an
@@ -30,13 +32,18 @@ class ImportBatchTest {
     // ---------------------------------------------------------------------------------------
 
     private class FakeWorker(
-        /** How many more books fit. Decremented as books are added, like the real shelf. */
-        var room: Int = Int.MAX_VALUE,
         /** Files whose import must throw. */
         val throwFor: MutableSet<String> = mutableSetOf(),
         /** Files that turn out to be a duplicate of something already on the shelf. */
-        val duplicateFor: MutableSet<String> = mutableSetOf()
+        val duplicateFor: MutableSet<String> = mutableSetOf(),
+        /**
+         * Files that do not fit on the phone. The message is the one the store really produces:
+         * the file's size and the space that was free, never a word about a library limit.
+         */
+        val noRoomFor: MutableMap<String, String> = mutableMapOf()
     ) : ImportWorker {
+        /** High-water mark of concurrently imported files; must stay at 1. */
+        val peakConcurrency = AtomicInteger()
         /** The shelf: content key -> title. A duplicate would show up here as a second entry. */
         val shelf = LinkedHashMap<String, String>()
         val addedOrder = CopyOnWriteArrayList<String>()
@@ -47,7 +54,9 @@ class ImportBatchTest {
             val key = item.candidate.contentKey
             attempts += item.candidate.name
             // Never more than one file in flight: the claim is bounded work, not just bounded memory.
-            assertEquals("only one file may be imported at a time", 1, live.incrementAndGet())
+            val now = live.incrementAndGet()
+            peakConcurrency.updateAndGet { previous -> maxOf(previous, now) }
+            assertEquals("only one file may be imported at a time", 1, now)
             try {
                 if (item.candidate.name in throwFor) {
                     throw IllegalStateException("simulated copy failure")
@@ -55,8 +64,7 @@ class ImportBatchTest {
                 if (shelf.containsKey(key) || item.candidate.name in duplicateFor) {
                     return ImportOutcome.Skipped("Already in your library")
                 }
-                if (room <= 0) return ImportOutcome.Full(0)
-                room--
+                noRoomFor[item.candidate.name]?.let { return ImportOutcome.Failed(it) }
                 shelf[key] = item.candidate.name
                 addedOrder += key
                 return ImportOutcome.Added
@@ -208,20 +216,75 @@ class ImportBatchTest {
     // 5 -------------------------------------------------------------------------------------
 
     @Test
-    fun `a full shelf stops the batch instead of failing every remaining file`() {
-        val worker = FakeWorker(room = 3)
+    fun `a phone with no space fails only the file that did not fit`() {
+        // This replaces the old "a full shelf stops the batch" test. Storage exhaustion is a real
+        // constraint and it is per file: the small books after a big one still fit. The batch must
+        // therefore carry on, name the file, and never call this a library limit.
+        val outOfSpace = "No room for this book: it needs 42.0 MB and the phone has 3.4 MB free. " +
+            "Free some space, then tap Retry."
+        val worker = FakeWorker(
+            noRoomFor = mutableMapOf("book11.epub" to outOfSpace, "book12.epub" to outOfSpace)
+        )
         val batch = ImportBatch(worker)
 
         val (summary, rows) = run(batch, items(50))
 
-        assertEquals("only three books fit", 3, summary.added)
-        assertEquals(1, summary.failed)
-        assertEquals(46, summary.stopped)
-        assertEquals("the shelf must not be over-filled", 3, worker.shelf.size)
-        assertTrue(
-            "the refusal must say why",
-            rows.first { it.state == ImportState.FAILED }.message.contains("library")
+        assertEquals("the other forty-eight books are imported", 48, summary.added)
+        assertEquals(2, summary.failed)
+        assertEquals("nothing is left unattempted", 0, summary.stopped)
+        assertEquals(48, worker.shelf.size)
+        val failed = rows.filter { it.state == ImportState.FAILED }
+        assertEquals(setOf("book11.epub", "book12.epub"), failed.map { it.name }.toSet())
+        val message = failed.first().message
+        assertTrue("the row must say what is needed: $message", message.contains("needs"))
+        assertTrue("and what is free: $message", message.contains("free"))
+        assertFalse(
+            "a storage failure must never be reported as a library limit: $message",
+            message.contains("library", ignoreCase = true) ||
+                message.contains("limit", ignoreCase = true) ||
+                message.contains("full shelf", ignoreCase = true)
         )
+        // And the files after the failures were attempted: no halt.
+        assertTrue(worker.attempts.contains("book13.epub"))
+        assertTrue(worker.attempts.contains("book50.epub"))
+    }
+
+    // 5b ------------------------------------------------------------------------------------
+
+    @Test
+    fun `five hundred and one thousand files run through the same bounded loop`() {
+        // A simulated long run: the fake worker stands in for the copy, so this proves the batch's
+        // bookkeeping - order, one-at-a-time, a row per file, no drift in the counters - and not
+        // that a phone can store a thousand books. Memory is bounded by construction: at most one
+        // file is in flight, and nothing here holds file contents at all.
+        for (size in listOf(500, 1000)) {
+            val worker = FakeWorker()
+            val batch = ImportBatch(worker)
+            val selection = items(size)
+
+            val (summary, rows) = run(batch, selection)
+
+            assertEquals("$size files, all imported", size, summary.added)
+            assertEquals(0, summary.failed)
+            assertEquals(0, summary.stopped)
+            assertTrue(summary.complete)
+            assertEquals("$size books on the shelf", size, worker.shelf.size)
+            assertEquals(
+                "$size files in the chosen order",
+                selection.map { it.candidate.contentKey },
+                worker.addedOrder.toList()
+            )
+            assertEquals(
+                "the loop never had two files open at once",
+                1,
+                worker.peakConcurrency.get()
+            )
+            assertEquals(
+                "one settled row per file, with the sheet's index",
+                (0 until size).toList(),
+                rows.filter { it.state == ImportState.ADDED }.map { it.index }
+            )
+        }
     }
 
     // 6 -------------------------------------------------------------------------------------

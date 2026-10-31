@@ -22,7 +22,7 @@ import java.io.File
 class CloudPanelTest {
 
     private companion object {
-        const val LOCAL_BYTES = 64
+        const val LOCAL_BYTES = 64L
     }
 
     /** A real directory, because "has a local file" is a fact about the file system. */
@@ -42,7 +42,7 @@ class CloudPanelTest {
 
     /** Writes a small file and returns its path: the book genuinely has bytes on this phone. */
     private fun localPath(id: String): String =
-        File(dir, "$id.epub").apply { writeBytes(ByteArray(LOCAL_BYTES) { 1 }) }.absolutePath
+        File(dir, "$id.epub").apply { writeBytes(ByteArray(LOCAL_BYTES.toInt()) { 1 }) }.absolutePath
 
     private fun book(
         id: String,

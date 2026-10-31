@@ -54,6 +54,15 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
      * "Paused" after a restart instead of "Failed" — or, worse, nothing at all.
      */
     private val uploadJournalFile = File(app.filesDir, "upload_journal.json")
+    /**
+     * Restores that were interrupted, and how far each got.
+     *
+     * Separate from the upload journal because it answers a different question: the upload journal
+     * is "bytes still owed to the account", this one is "bytes already on disk that the account
+     * can continue from". Mixing them would let a half-downloaded book look like a pending upload.
+     */
+    private val restoreJournalFile = File(app.filesDir, "restore_journal.json")
+    private val restoreLock = Any()
     private val journalLock = Any()
     /** Per-book throttle, so one book's journal write cannot suppress another's. */
     private val journalFlushedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
@@ -238,7 +247,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             // The shelf and the You screen show a per-book backup state from the first frame, not
             // after the first sync.
             reconcileVerifications()
+            pausedUploads = loadPausedUploads()
             reconcileInterruptedUploads()
+            reconcileInterruptedRestores()
             refreshBackupAudit()
             if (interestsChosen) ensureRecommendations()
             if (account.signedIn && account.provider == "google" && GoogleAuth.accountId(acc) != null) {
@@ -641,6 +652,205 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 CommitUserBookResult.PERSIST_FAILED -> toast("Could not add that file")
             }
         }
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Multi-select import
+    // ---------------------------------------------------------------------------------------
+    //
+    // The picker can return a list; the shop floor used to handle exactly one file. Importing is
+    // now: measure everything (no copying), show the review sheet with duplicates already marked,
+    // then copy each file independently so one bad file cannot take the others down with it.
+
+    /** The selection, decided but not yet imported. Null when the review sheet is closed. */
+    var importPlan by mutableStateOf<ImportPlan?>(null)
+        private set
+
+    /** Per-file progress while the confirmed import runs. */
+    var importRows by mutableStateOf<List<ImportProgress>>(emptyList())
+        private set
+
+    /** True while the selection is being measured — the picker just closed. */
+    var importBusy by mutableStateOf(false)
+        private set
+
+    /** Measuring can be cancelled: the reader changed their mind before anything was copied. */
+    private var importGeneration = 0
+
+    private val importRunning = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** Measures [uris] and opens the review sheet. Nothing is copied yet. */
+    fun beginImport(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        val gen = ++importGeneration
+        viewModelScope.launch {
+            importBusy = true
+            val measured = withContext(Dispatchers.IO) {
+                uris.map { uri -> runCatching { BookIo.measure(getApplication(), uri) }.getOrNull() }
+                    .filterNotNull()
+            }
+            if (gen != importGeneration) return@launch
+            val plan = withContext(Dispatchers.IO) {
+                ImportPlanner.plan(measured) { candidate -> findImportDuplicate(candidate) }
+            }
+            importBusy = false
+            importRows = emptyList()
+            importPlan = plan
+            SyncDiag.mark(
+                "Import review",
+                "${plan.total} chosen, ${plan.readyCount} ready, ${plan.duplicateCount} already here"
+            )
+        }
+    }
+
+    /**
+     * A book already on the shelf with the same bytes.
+     *
+     * Size first, hash second: comparing two hundred lengths is free, hashing two hundred files is
+     * not, and a size collision is rare enough that the extra read almost never happens.
+     */
+    private fun findImportDuplicate(candidate: ImportCandidate): LibraryBook? {
+        if (candidate.bytes <= 0L || candidate.headHash.isBlank()) return null
+        val sameSize = synchronized(libraryLock) {
+            books.filter { b ->
+                b.origin != BookOrigin.BUNDLED &&
+                    b.format == candidate.format &&
+                    b.filePath?.let { File(it) }?.takeIf { it.exists() }?.length() == candidate.bytes
+            }
+        }
+        return sameSize.firstOrNull { b ->
+            val file = b.filePath?.let(::File) ?: return@firstOrNull false
+            BookFiles.headMd5(file) == candidate.headHash
+        }
+    }
+
+    /** Removes one row from the review sheet. Its duplicate twin becomes importable again. */
+    fun removeImportRow(uri: String) {
+        importPlan = importPlan?.without(uri)
+    }
+
+    /** Closes the review sheet without importing anything. */
+    fun cancelImport() {
+        importGeneration++
+        importPlan = null
+        importRows = emptyList()
+        importBusy = false
+    }
+
+    /**
+     * Imports every ready file in the plan, one at a time, each independent of the others.
+     *
+     * A failure is recorded against its own row with a Retry action; the rest carry on. Nothing
+     * here uploads: an imported file is a *local* book, and the existing queue takes it from there
+     * under the same three-upload limit — a copy onto the phone is not a backup.
+     */
+    fun confirmImport() {
+        val plan = importPlan ?: return
+        if (!importRunning.compareAndSet(false, true)) return
+        val ready = plan.items.filter { it.importable }
+        importRows = ready.map { ImportProgress(it.candidate.uri, it.candidate.name, ImportState.WAITING) }
+        viewModelScope.launch {
+            try {
+                ready.forEachIndexed { index, item ->
+                    runImport(item, index, ready.size)
+                }
+                withContext(Dispatchers.Main) {
+                    val summary = ImportSummary.of(importRows, total = plan.total)
+                    if (summary.added > 0) {
+                        toast(if (summary.added == 1) "1 book imported" else "${summary.added} books imported")
+                    }
+                    if (summary.failed > 0) {
+                        toast("${summary.failed} file${if (summary.failed == 1) "" else "s"} could not be imported")
+                    }
+                    refreshBackupAudit()
+                }
+            } finally {
+                importRunning.set(false)
+                // Leave the sheet open with the per-file results: the reader needs to see which
+                // one failed and why, and the sheet is where the Retry button lives.
+            }
+        }
+    }
+
+    /** Retries one failed row. The rest of the sheet is untouched. */
+    fun retryImport(uri: String) {
+        val item = importPlan?.items?.firstOrNull { it.candidate.uri == uri && it.importable } ?: return
+        if (!importRunning.compareAndSet(false, true)) return
+        viewModelScope.launch {
+            try {
+                val index = importRows.indexOfFirst { it.uri == uri }
+                runImport(item, if (index >= 0) index else 0, importRows.size)
+            } finally {
+                importRunning.set(false)
+            }
+        }
+    }
+
+    private suspend fun runImport(item: ImportItem, index: Int, total: Int) {
+        val candidate = item.candidate
+        setImportRow(ImportProgress(candidate.uri, candidate.name, ImportState.COPYING))
+        val book = withContext(Dispatchers.IO) {
+            runCatching { BookIo.importUri(getApplication(), Uri.parse(candidate.uri), id = importIdFor(candidate)) }.getOrNull()
+        }
+        if (book == null) {
+            withContext(Dispatchers.IO) { discardPartialImport(candidate) }
+            setImportRow(ImportProgress(candidate.uri, candidate.name, ImportState.FAILED, "The file could not be read or is not a book."))
+            SyncDiag.fail("Import failed — ${candidate.name}", "copy or container check failed")
+            return
+        }
+        // A book the reader imported twice under different names is still one book: the content
+        // check runs again here, because the sheet may have been open for minutes.
+        val duplicate = findImportDuplicate(candidate)
+        if (duplicate != null && duplicate.id != book.id) {
+            withContext(Dispatchers.IO) { discardOrphan(book) }
+            setImportRow(ImportProgress(candidate.uri, candidate.name, ImportState.SKIPPED, "Already in your library: \u201C${duplicate.title}\u201D"))
+            return
+        }
+        when (val result = withContext(Dispatchers.Main) { commitNewUserBook(book.copy(pendingUpload = false)) }) {
+            CommitUserBookResult.ACCEPTED -> {
+                setImportRow(ImportProgress(candidate.uri, candidate.name, ImportState.ADDED, "Added to your library"))
+                SyncDiag.mark("Imported — ${book.title}", "${(index + 1)} of $total")
+            }
+            CommitUserBookResult.LIBRARY_FULL -> {
+                withContext(Dispatchers.IO) { discardOrphan(book) }
+                setImportRow(ImportProgress(candidate.uri, candidate.name, ImportState.FAILED, "Your library is full (200 books)."))
+            }
+            CommitUserBookResult.PERSIST_FAILED -> {
+                withContext(Dispatchers.IO) { discardOrphan(book) }
+                setImportRow(ImportProgress(candidate.uri, candidate.name, ImportState.FAILED, "The library could not be saved."))
+            }
+        }
+    }
+
+    private suspend fun setImportRow(row: ImportProgress) {
+        withContext(Dispatchers.Main) {
+            importRows = importRows.map { if (it.uri == row.uri) row else it }
+                .let { rows -> if (rows.any { it.uri == row.uri }) rows else rows + row }
+        }
+    }
+
+    /**
+     * A stable id for a chosen document.
+     *
+     * Derived from the document identity, not from the clock: importing the same document twice in
+     * one batch therefore targets the same file name and the same record rather than creating two
+     * libraries' worth of "Book (1)".
+     */
+    private fun importIdFor(candidate: ImportCandidate): String {
+        val seed = candidate.uri + ":" + candidate.bytes
+        val hash = java.security.MessageDigest.getInstance("MD5")
+            .digest(seed.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+            .take(16)
+        return "imp_$hash"
+    }
+
+    /** Removes the copied file of an import that failed after the copy but before the record. */
+    private fun discardPartialImport(candidate: ImportCandidate) {
+        val id = importIdFor(candidate)
+        val ext = if (candidate.format == BookFormat.PDF) "pdf" else "epub"
+        runCatching { File(BookIo.booksDir(getApplication()), "$id.$ext").delete() }
+        runCatching { File(BookIo.coversDir(getApplication()), "$id.jpg").delete() }
     }
 
     // Studio used to live here: its import workshop, its chapter crawler and its compiled-book
@@ -1279,7 +1489,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             }
             val books = queued.mapNotNull { transfer -> book(transfer.bookId) }.filter { candidate ->
                 val file = candidate.filePath?.let(::File)
-                BackupRules.needsUpload(candidate, file != null && file.exists() && file.length() > 0L)
+                // Paused by the reader: not "waiting for a connection", and not to be retried
+                // behind their back.
+                candidate.id !in pausedUploads &&
+                    BackupRules.needsUpload(candidate, file != null && file.exists() && file.length() > 0L)
             }
             if (books.isEmpty()) {
                 // Nothing left to send (deleted, restored, or already confirmed): forget them.
@@ -1469,6 +1682,15 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             journalDone(book.id)
         }
 
+        override fun onPausedByReader(book: LibraryBook, sent: Long, total: Long) {
+            TransferBus.paused(book.id, sent, total, "paused by you")
+            // The bytes are still owed, so the journal keeps its entry and the queue keeps the
+            // book: resume is a re-send, not a restart of anything the reader has to arrange.
+            journalProgress(book.id, sent, total, force = true)
+            pausedUploads = pausedUploads + book.id
+            persistPausedUploads()
+        }
+
         override fun onPaused(book: LibraryBook, sent: Long, total: Long, reason: String) {
             // Interrupted, not failed: the bytes already sent and the size are kept so the card can
             // say how far it got and the journal can resume it.
@@ -1530,7 +1752,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             synchronized(libraryLock) { books.toList() }
         }.filter { book ->
             val file = book.filePath?.let(::File)
-            BackupRules.needsUpload(book, file != null && file.exists() && file.length() > 0L)
+            // A paused book is deliberately left alone by every automatic pass. Only the reader's
+            // own Resume puts it back in the queue.
+            book.id !in pausedUploads &&
+                BackupRules.needsUpload(book, file != null && file.exists() && file.length() > 0L)
         }
         if (candidates.isEmpty()) {
             withContext(Dispatchers.Main) { refreshBackupAudit() }
@@ -2045,11 +2270,22 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     TransferBus.clear(entry.bookId)
                 }
                 ResumeDecision.RESEND, ResumeDecision.RETRY -> {
-                    // Truthful state: interrupted, not failed, and still owed.
-                    TransferBus.paused(entry.bookId, entry.sentBytes, entry.totalBytes, "interrupted")
+                    // Truthful state: interrupted, not failed, and still owed. If the reader had
+                    // paused it before the app closed, it stays paused rather than restarting on
+                    // its own.
+                    val pausedByReader = entry.bookId in pausedUploads
+                    TransferBus.paused(
+                        entry.bookId,
+                        entry.sentBytes,
+                        entry.totalBytes,
+                        if (pausedByReader) "paused by you" else "interrupted"
+                    )
                     if (book != null) {
                         upsert(book.copy(pendingUpload = true))
-                        noteTransferFailed(book, "upload was interrupted last time", retryable = true)
+                        // A paused book is not a failure and must not be described as one.
+                        if (!pausedByReader) {
+                            noteTransferFailed(book, "upload was interrupted last time", retryable = true)
+                        }
                     }
                 }
             }
@@ -2147,6 +2383,24 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     var restoringIds by mutableStateOf<Set<String>>(emptySet())
         private set
 
+    /**
+     * Uploads the reader paused.
+     *
+     * Persisted, because a pause is a decision, not a transient: an app restart must not quietly
+     * help itself to the bandwidth the reader took back. Stored as ids in the same preferences
+     * file the rest of the small state uses.
+     */
+    var pausedUploads by mutableStateOf<Set<String>>(emptySet())
+
+    /**
+     * Books the upload journal still owes that are not moving and not paused by the reader.
+     *
+     * Kept as state, not computed on demand: computing it reads a JSON file, and a Compose
+     * function must not do I/O on every frame.
+     */
+    var queuedUploadIds by mutableStateOf<Set<String>>(emptySet())
+        private set
+
     /** Books whose local download is being removed right now. */
     var removingIds by mutableStateOf<Set<String>>(emptySet())
         private set
@@ -2182,6 +2436,46 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             val token = driveToken() ?: return false
             return withContext(Dispatchers.IO) {
                 DriveLibrary.download(token, id, dest, book.format) is DriveOutcome.Ok
+            }
+        }
+
+        override suspend fun streamCloud(
+            book: LibraryBook,
+            dest: File,
+            from: Long,
+            control: RestoreControl,
+            onBytes: (received: Long, total: Long) -> Unit
+        ): StreamReport {
+            val id = book.driveFileId ?: return StreamReport(0L, -1L, false, false, false, "this book has no file in your account")
+            if (!networkReady()) return StreamReport(0L, -1L, false, false, true, "no connection")
+            val token = driveToken() ?: return StreamReport(0L, -1L, false, false, true, "Drive access is not available right now")
+            return withContext(Dispatchers.IO) {
+                DriveLibrary.streamDownload(token, book.id, id, dest, from, control, onBytes)
+            }
+        }
+
+        override fun resumeOffset(bookId: String): Long = restoreJournal()[bookId]?.received ?: 0L
+
+        override fun noteRestore(bookId: String, received: Long, total: Long) {
+            noteRestoreCheckpoint(bookId, received, total)
+        }
+
+        override fun clearRestore(bookId: String) {
+            clearRestoreCheckpoint(bookId)
+        }
+
+        override fun noteRestoreProgress(bookId: String, received: Long, total: Long, phase: TransferPhase) {
+            // TransferBus publishes inside its own snapshot, so this is safe from a worker thread.
+            when (phase) {
+                TransferPhase.PREPARING -> TransferBus.restorePreparing(bookId, total.coerceAtLeast(0L))
+                TransferPhase.UPLOADING -> TransferBus.restoring(bookId, received, total.coerceAtLeast(0L))
+                TransferPhase.VERIFYING -> TransferBus.restoreVerifying(bookId, total.coerceAtLeast(0L))
+                TransferPhase.PAUSED -> TransferBus.paused(
+                    bookId, received, total.coerceAtLeast(0L), "paused by you", restore = true
+                )
+                TransferPhase.FAILED -> TransferBus.failed(
+                    bookId, received, total.coerceAtLeast(0L), "the restore failed"
+                )
             }
         }
 
@@ -2250,6 +2544,69 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     fun isRestoring(bookId: String): Boolean = bookId in restoringIds
 
     /**
+     * Stops this book's upload, now.
+     *
+     * Two cases, and both are real pauses:
+     *
+     * - **In flight.** [UploadPool.pause] aborts the request and cancels the job, so the socket
+     *   closes, the pool's permit is released and the book stops occupying one of the three slots.
+     *   The journal already records how far it got.
+     * - **Queued.** Nothing is transmitting, so there is nothing to abort; the id is remembered so
+     *   the book does not start when its turn comes.
+     *
+     * Drive's simple upload endpoint has no resumable session, so resuming re-sends the file. That
+     * is safe: every attempt looks the book up by `loreId` first and replaces its media instead of
+     * creating a second file — which the upload tests cover.
+     */
+    fun pauseUpload(bookId: String) {
+        UploadPool.shared.pause(bookId)
+        DriveLibrary.abortTransfer(bookId)
+        pausedUploads = pausedUploads + bookId
+        persistPausedUploads()
+        val progress = TransferBus.progressFor(bookId)
+        TransferBus.paused(
+            bookId,
+            progress?.sentBytes ?: 0L,
+            progress?.totalBytes ?: 0L,
+            "paused by you"
+        )
+        // The bytes on disk are still owed to the account, so the journal keeps its entry.
+        journalProgress(bookId, progress?.sentBytes ?: 0L, progress?.totalBytes ?: 0L, force = true)
+        SyncDiag.mark("Upload paused", book(bookId)?.title.orEmpty())
+        refreshBackupAudit()
+    }
+
+    /** Lets a paused book be sent again, and starts it right away. */
+    fun resumeUpload(bookId: String) {
+        UploadPool.shared.resume(bookId)
+        pausedUploads = pausedUploads - bookId
+        persistPausedUploads()
+        TransferBus.clear(bookId)
+        refreshBackupAudit()
+        val book = book(bookId)
+        if (book == null) return
+        if (!book.localFileAvailable) {
+            toast("This book has no file on this phone to upload.")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val batch = uploadBatch(listOf(book.copy(pendingUpload = true)))
+            recordBatch(batch)
+            withContext(Dispatchers.Main) { refreshBackupAudit() }
+        }
+    }
+
+    /** True when the reader has paused this book's upload. */
+    fun isUploadPaused(bookId: String): Boolean = bookId in pausedUploads
+
+    private fun persistPausedUploads() {
+        prefs.edit().putStringSet("paused_uploads", pausedUploads).apply()
+    }
+
+    private fun loadPausedUploads(): Set<String> =
+        prefs.getStringSet("paused_uploads", emptySet())?.toSet() ?: emptySet()
+
+    /**
      * Removes a verified book's local bytes, keeping the library entry and the cloud copy.
      *
      * Only ever calls [DownloadService.removeDownload]. It never calls [remove], never writes a
@@ -2286,6 +2643,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
      */
     fun restoreDownload(bookId: String) {
         viewModelScope.launch(Dispatchers.IO) {
+            // A second tap while the first is running must not open a second transfer.
+            if (downloadService.isRestoring(bookId)) return@launch
+            downloadService.resume(bookId)
             withContext(Dispatchers.Main) { restoringIds = restoringIds + bookId }
             val outcome = try {
                 downloadService.restoreDownload(bookId)
@@ -2298,11 +2658,128 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     is RestoreOutcome.AlreadyAvailable -> toast("This book is already on this phone.")
                     is RestoreOutcome.Refused -> toast(outcome.blocker.message)
                     is RestoreOutcome.Failed -> toast("Could not restore this book: ${outcome.reason}")
+                    is RestoreOutcome.Paused -> toast(
+                        if (outcome.resumable) "Restore paused — tap Resume to continue."
+                        else "Restore paused."
+                    )
+                    RestoreOutcome.Busy -> Unit
                     RestoreOutcome.NotFound -> toast("That book is no longer in your library.")
                 }
                 refreshBackupAudit()
             }
         }
+    }
+
+    /**
+     * Stops a restore where it is, keeping the bytes already received.
+     *
+     * The transfer closes its connection at the next chunk boundary; what is on disk stays as a
+     * checkpoint and the journal records how far it got, so resuming continues from there instead
+     * of starting a 40 MB download again.
+     */
+    fun pauseRestore(bookId: String) {
+        downloadService.pause(bookId)
+        // Abort the live request: a blocking read only notices the flag between chunks, and a
+        // pause the reader asked for should stop now.
+        DriveLibrary.abortTransfer(bookId)
+        val progress = TransferBus.progressFor(bookId)
+        TransferBus.paused(
+            bookId,
+            progress?.sentBytes ?: 0L,
+            progress?.totalBytes ?: 0L,
+            "paused by you",
+            restore = true
+        )
+    }
+
+    /** Continues a paused restore from its checkpoint. */
+    fun resumeRestore(bookId: String) {
+        restoreDownload(bookId)
+    }
+
+    /** True while this book's restore is running. */
+    fun isRestoringNow(bookId: String): Boolean = downloadService.isRestoring(bookId)
+
+    // ---------------------------------------------------------------------------------------
+    // Restore checkpoints
+    // ---------------------------------------------------------------------------------------
+
+    /** One interrupted restore: which book, how many bytes are on disk, and the expected size. */
+    data class RestoreCheckpoint(val bookId: String, val received: Long, val total: Long)
+
+    private fun restoreJournal(): Map<String, RestoreCheckpoint> = synchronized(restoreLock) {
+        if (!restoreJournalFile.exists()) return emptyMap()
+        runCatching {
+            val arr = JSONArray(restoreJournalFile.readText())
+            val out = HashMap<String, RestoreCheckpoint>(arr.length())
+            for (i in 0 until arr.length()) {
+                val row = arr.optJSONObject(i) ?: continue
+                val id = row.optString("id")
+                if (id.isBlank()) continue
+                out[id] = RestoreCheckpoint(id, row.optLong("received", 0L), row.optLong("total", 0L))
+            }
+            out
+        }.getOrDefault(emptyMap())
+    }
+
+    private fun writeRestoreJournal(entries: Map<String, RestoreCheckpoint>) {
+        synchronized(restoreLock) {
+            runCatching {
+                if (entries.isEmpty()) {
+                    restoreJournalFile.delete()
+                } else {
+                    val arr = JSONArray()
+                    entries.values.forEach { e ->
+                        arr.put(JSONObject().put("id", e.bookId).put("received", e.received).put("total", e.total))
+                    }
+                    atomicWrite(restoreJournalFile, arr.toString())
+                }
+            }
+        }
+    }
+
+    private fun noteRestoreCheckpoint(bookId: String, received: Long, total: Long) {
+        val now = restoreJournal().toMutableMap()
+        now[bookId] = RestoreCheckpoint(bookId, received, total)
+        writeRestoreJournal(now)
+    }
+
+    private fun clearRestoreCheckpoint(bookId: String) {
+        val journal = restoreJournal()
+        if (!journal.containsKey(bookId)) return
+        writeRestoreJournal(journal - bookId)
+    }
+
+    /**
+     * Settles what a previous run left half-downloaded, before the shelf is drawn.
+     *
+     * A `.restore` file whose journal entry is missing or disagrees with its length is not a
+     * checkpoint — it is debris from an interrupted write, and continuing from it would append the
+     * wrong bytes to the wrong prefix. It is removed. What survives is shown as paused, with the
+     * byte count that is genuinely on disk, and the reader can resume it.
+     */
+    private fun reconcileInterruptedRestores() {
+        val journal = restoreJournal()
+        val dir = BookIo.booksDir(getApplication())
+        var shown = 0
+        journal.forEach { (bookId, entry) ->
+            val book = book(bookId)
+            val temp = book?.let { File(dir, BookFiles.cacheNameFor(it.id, it.format) + ".restore") }
+            val onDisk = temp?.takeIf { it.exists() }?.length() ?: 0L
+            if (book == null || onDisk <= 0L || onDisk != entry.received) {
+                runCatching { temp?.delete() }
+                clearRestoreCheckpoint(bookId)
+                return@forEach
+            }
+            TransferBus.paused(bookId, onDisk, entry.total, "interrupted — tap resume", restore = true)
+            shown++
+        }
+        // Debris from a restore whose journal was already cleared.
+        dir.listFiles()?.filter { it.name.endsWith(".restore") }?.forEach { leftover ->
+            val id = leftover.name.removeSuffix(".restore").substringBeforeLast('.')
+            if (book(id) == null || !journal.containsKey(id)) runCatching { leftover.delete() }
+        }
+        if (shown > 0) SyncDiag.mark("Interrupted restores", "$shown half-downloaded, kept as paused")
     }
 
     // ---------------------------------------------------------------------------------------
@@ -2403,6 +2880,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     /** Recomputes the counts the summary line and the diagnostics panel show. */
     fun refreshBackupAudit() {
         if (uploadQueueReasons.isEmpty() && pendingTransfers().isNotEmpty()) refreshQueueReasons()
+        // The panel needs to name what is *waiting* without touching the journal from a
+        // composition. Published here, where the queue is already being read.
+        queuedUploadIds = pendingTransfers().map { it.bookId }.toSet() -
+            TransferBus.activeIds() - pausedUploads
         val books = synchronized(libraryLock) { books.toList() }
             .filter { it.origin != BookOrigin.BUNDLED && it.format != BookFormat.TEXT }
         // Live transfers (including paused ones) come from the bus; the batch flag is only a hint.

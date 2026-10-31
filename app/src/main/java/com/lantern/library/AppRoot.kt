@@ -101,9 +101,19 @@ internal fun LanternRoot(store: LanternStore) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val activity = context as Activity
+    // Multi-select: the picker can return several documents at once, and they are grouped by
+    // intent's ClipData, which is the only place Android puts more than one of them.
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
-        val uri = res.data?.data
-        if (res.resultCode == Activity.RESULT_OK && uri != null) store.importUri(uri)
+        if (res.resultCode == Activity.RESULT_OK) {
+            val data = res.data
+            val uris = ArrayList<Uri>()
+            data?.clipData?.let { clip ->
+                for (i in 0 until clip.itemCount) clip.getItemAt(i)?.uri?.let { uris.add(it) }
+            }
+            // A single choice arrives in `data`, not in the clip: read both, and never twice.
+            data?.data?.let { single -> if (uris.isEmpty()) uris.add(single) }
+            if (uris.isNotEmpty()) store.beginImport(uris)
+        }
     }
     // Every failure of Google sign-in that lives in the Firebase console — not in this code —
     // lands in this one dialog, with the package and SHA-1 of the running build, because the
@@ -134,6 +144,23 @@ internal fun LanternRoot(store: LanternStore) {
         } else {
             googleSignIn.launch(GoogleAuth.signInIntent(activity))
         }
+    }
+    // The review sheet: measured, deduplicated, and only then copied.
+    store.importPlan?.let { plan ->
+        com.lantern.library.ui.components.ImportReviewSheet(
+            plan = plan,
+            rows = store.importRows,
+            busy = store.importBusy,
+            running = store.importRows.any {
+                it.state == com.lantern.library.data.ImportState.COPYING ||
+                    it.state == com.lantern.library.data.ImportState.WAITING
+            },
+            palette = com.lantern.library.ui.theme.nookPalette(theme),
+            onRemove = { uri -> store.removeImportRow(uri) },
+            onRetry = { uri -> store.retryImport(uri) },
+            onConfirm = { store.confirmImport() },
+            onDismiss = { store.cancelImport() }
+        )
     }
     setupHint?.let { hint ->
         val (title, body) = when (hint) {
@@ -170,8 +197,14 @@ internal fun LanternRoot(store: LanternStore) {
     fun importFile() {
         picker.launch(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
+            // Several files in one go: importing a shelf one file at a time is why the shop floor
+            // used to take ten pickers for ten books.
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
             type = "*/*"
-            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/epub+zip", "application/pdf", "application/octet-stream"))
+            putExtra(
+                Intent.EXTRA_MIME_TYPES,
+                arrayOf("application/epub+zip", "application/pdf", "application/octet-stream")
+            )
         })
     }
     /**
@@ -248,7 +281,6 @@ internal fun LanternRoot(store: LanternStore) {
                         }
                     },
                     onOpenPick = { pick -> details = pick },
-                    onSearch = { tab = Route.Search },
                     onLibrary = { tab = Route.Library },
                     onRefreshPicks = { store.refreshForYou() },
                     onNotifications = { tab = Route.Profile },
@@ -287,7 +319,13 @@ internal fun LanternRoot(store: LanternStore) {
                     removingIds = store.removingIds,
                     restoringIds = store.restoringIds,
                     removalBlocker = { store.downloadRemovalBlocker(it) },
-                    restoreBlocker = { store.downloadRestoreBlocker(it) }
+                    restoreBlocker = { store.downloadRestoreBlocker(it) },
+                    transfers = com.lantern.library.data.TransferBus.states,
+                    pausedUploads = store.pausedUploads,
+                    onPauseRestore = { store.pauseRestore(it) },
+                    onResumeRestore = { store.resumeRestore(it) },
+                    onPauseUpload = { store.pauseUpload(it) },
+                    onResumeUpload = { store.resumeUpload(it) }
                 )
                 Route.Search -> SearchScreen(
                     theme = theme,
@@ -317,17 +355,11 @@ internal fun LanternRoot(store: LanternStore) {
                     { store.requestDriveConnect() },
                     { store.openInterestEditor() },
                     { store.syncNow() },
-                    syncTrace = com.lantern.library.data.SyncDiag.lines,
-                    onCopySyncTrace = { report ->
-                        clipboard.setText(AnnotatedString(report))
-                        store.toast("Sync diagnosis copied")
-                    },
-                    onClearSyncTrace = { com.lantern.library.data.SyncDiag.clear() },
-                    onTestConnection = { store.testBackupConnection() },
-                    uploadingIds = store.uploadingIds,
-                    // Only the books that are not verified, with their own titles: the honest
-                    // answer to "what is not safe yet?".
-                    backupLines = store.backupProblemLines()
+                    // Four numbers from one function. The diagnosis UI is gone; the functions it
+                    // called are still here, still logging, still used by the sync itself.
+                    transfers = com.lantern.library.data.TransferBus.states,
+                    queuedIds = store.queuedUploadIds,
+                    pausedUploads = store.pausedUploads
                 )
                 is Route.Reader -> {
                     val book = store.book(r.id)

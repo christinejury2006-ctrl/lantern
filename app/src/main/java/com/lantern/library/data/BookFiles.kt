@@ -159,6 +159,34 @@ object BookFiles {
     }
 
     /**
+     * MD5 of the first [count] bytes of a file, as lowercase hex, or "" when unreadable.
+     *
+     * An import fingerprint, not a verification: two different 1.4 MB EPUBs are common, two
+     * different files with the same first 64 KiB and length are not. Cheap enough to run on every
+     * file the reader selects before importing anything.
+     */
+    fun headMd5(file: java.io.File, count: Int = 64 * 1024): String = try {
+        if (!file.exists() || file.length() <= 0L) {
+            ""
+        } else {
+            val digest = java.security.MessageDigest.getInstance("MD5")
+            file.inputStream().use { input ->
+                val buffer = ByteArray(count)
+                var read = 0
+                while (read < count) {
+                    val n = input.read(buffer, read, count - read)
+                    if (n <= 0) break
+                    read += n
+                }
+                if (read > 0) digest.update(buffer, 0, read)
+            }
+            digest.digest().joinToString("") { "%02x".format(it) }
+        }
+    } catch (_: Exception) {
+        ""
+    }
+
+    /**
      * The MD5 of a file, as lowercase hex, or "" when it cannot be read.
      *
      * Lore does not invent a checksum: an empty string means "not known" everywhere it is used, so

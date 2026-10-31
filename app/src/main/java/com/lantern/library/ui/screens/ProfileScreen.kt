@@ -18,17 +18,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.lantern.library.data.BackupAudit
-import com.lantern.library.data.BookFormat
-import com.lantern.library.data.BookOrigin
 import com.lantern.library.data.CloudAccount
 import com.lantern.library.data.LibraryBook
 import com.lantern.library.data.ReaderTheme
 import com.lantern.library.data.ReadingPrefs
-import com.lantern.library.data.SyncDiag
+import com.lantern.library.data.CloudPanel
+import com.lantern.library.data.TransferProgress
 import com.lantern.library.ui.components.AuroraOrb
 import com.lantern.library.ui.components.GlassSurface
 import com.lantern.library.ui.components.NookBackdrop
@@ -40,15 +37,13 @@ import java.text.DateFormat
 import java.util.Date
 
 /**
- * The reader's own page: who they are, what sync is doing, and every setting.
+ * The reader's own page: who they are, what the account holds, and every setting.
  *
- * The account card describes exactly what leaves the phone and where it goes, because the
- * previous copy said "Book files stay on this phone" while the app was uploading EPUBs and PDFs
- * to Google Drive. Both halves are stated now: meaning, and file.
- *
- * The sync rows are counts of the library itself — books with a cloud copy, books still waiting
- * for one — rather than a single "Synced" tick. A tick that covers forty books and one file is
- * the kind of reassurance that turns out to be wrong.
+ * The cloud panel is four numbers and one line of honest remainder text. It used to be a wall of
+ * diagnosis — stage logs, a "test connection" button, a per-book dump — which answered questions
+ * nobody asks and left the real one ("is my library safe?") buried. The functionality behind it is
+ * untouched; only the shop window changed. The arithmetic itself lives in [CloudPanel], where it
+ * is tested, rather than being re-derived in a composable.
  */
 @Composable
 fun ProfileScreen(
@@ -61,29 +56,22 @@ fun ProfileScreen(
     onConnectDrive: () -> Unit = {},
     onEditInterests: () -> Unit = {},
     onSyncNow: () -> Unit = {},
-    /** Every stage the last syncs went through. Shown as a list, never uploaded. */
-    syncTrace: List<SyncDiag.Line> = emptyList(),
-    onCopySyncTrace: (String) -> Unit = {},
-    onClearSyncTrace: () -> Unit = {},
-    /** Runs the three real Drive calls and one round trip, reporting each stage. */
-    onTestConnection: () -> Unit = {},
-    /** Books with an upload in flight right now, so "Uploading" is never shown for a queued book. */
-    uploadingIds: Set<String> = emptySet(),
-    /** One line per book that is not verified: title, state, attempts and the reason. */
-    backupLines: List<String> = emptyList()
+    /** Live transfers, so "still uploading" means bytes are moving, not that a queue is long. */
+    transfers: Map<String, TransferProgress> = emptyMap(),
+    /** Books the upload journal still owes, minus what is moving and what the reader paused. */
+    queuedIds: Set<String> = emptySet(),
+    /** Uploads the reader paused: reported separately, never counted as uploading. */
+    pausedUploads: Set<String> = emptySet()
 ) {
     val palette = nookPalette(prefs.theme)
-    val fileBooks = books.filter { it.origin != BookOrigin.BUNDLED && it.format != BookFormat.TEXT }
-    // Counted from the confirmed state, not from "an id exists". A book whose Drive id was never
-    // verified is still waiting — telling the reader it is backed up is how they end up deleting
-    // the only copy that existed.
-    val audit = BackupAudit.counts(fileBooks, uploadingIds, online = account.driveConnected)
-    val backedUp = audit.verified
-    val failed = audit.failed
-    val waiting = audit.pending
-    val elsewhere = audit.restoreRequired
-    val localOnly = audit.localOnly
-    val notVerified = backupLines
+    // Every number on the panel comes from the same function, so they add up by construction.
+    val metrics = CloudPanel.metrics(
+        books = books,
+        transfers = transfers,
+        queuedIds = queuedIds,
+        pausedUploads = pausedUploads,
+        online = account.driveConnected
+    )
 
     NookBackdrop(palette) {
         Column(
@@ -125,71 +113,12 @@ fun ProfileScreen(
                         Spacer(Modifier.height(14.dp))
 
                         if (account.provider == "google" && account.driveConnected) {
-                            SyncRow(
-                                palette,
-                                "Library, progress, bookmarks and settings",
-                                "Synced to your account"
-                            )
-                            SyncRow(
-                                palette,
-                                "Book files (EPUB and PDF)",
-                                if (fileBooks.isEmpty()) "No files to back up yet"
-                                else if (audit.complete) "$backedUp of ${fileBooks.size} backed up and verified"
-                                else audit.summary()
-                            )
-                            if (!audit.complete && fileBooks.isNotEmpty()) {
-                                // Said out loud, in the place the reader looks for reassurance: an
-                                // incomplete backup is not a backup, and the summary above is
-                                // counted from files, not from records.
-                                Text(
-                                    "Not everything is verified yet — " + audit.summary() + ". Only " +
-                                        "verified files are safe to delete from this phone.",
-                                    color = palette.mute,
-                                    fontSize = 11.sp,
-                                    modifier = Modifier.padding(top = 4.dp)
-                                )
-                            }
-                            if (waiting > 0) {
-                                SyncRow(palette, "Waiting to upload", "$waiting book${if (waiting == 1) "" else "s"}")
-                            }
-                            if (failed > 0) {
-                                SyncRow(
-                                    palette,
-                                    "Backup failed",
-                                    "$failed book${if (failed == 1) "" else "s"} — will retry on the next sync"
-                                )
-                            }
-                            if (localOnly > 0) {
-                                SyncRow(
-                                    palette,
-                                    "Local only",
-                                    "$localOnly with no copy in the account yet — open one to re-import"
-                                )
-                            }
-                            if (elsewhere > 0) {
-                                SyncRow(palette, "Not on this phone", "$elsewhere available from your account")
-                            }
                             Text(
-                                "Book files are stored in Lore's private application folder in your " +
-                                    "Google Drive. They do not appear in My Drive, and no other app can " +
-                                    "read them. Removing a book here does not delete the copy in your " +
-                                    "account unless you choose to.",
+                                "Your library, reading progress, bookmarks and settings are in your " +
+                                    "account. The panel below says what has actually arrived there.",
                                 color = palette.mute,
-                                fontSize = 11.sp,
-                                modifier = Modifier.padding(top = 12.dp)
+                                fontSize = 12.sp
                             )
-                            Text(
-                                if (account.lastSyncAt > 0L)
-                                    "Last sync " + DateFormat.getDateTimeInstance(
-                                        DateFormat.MEDIUM, DateFormat.SHORT
-                                    ).format(Date(account.lastSyncAt))
-                                else "Not synced yet",
-                                color = palette.faint,
-                                fontSize = 11.sp,
-                                modifier = Modifier.padding(top = 6.dp)
-                            )
-                            Spacer(Modifier.height(12.dp))
-                            NookButton(palette, "Sync now", onSyncNow, filled = true)
                         } else {
                             Text(
                                 "Signing in keeps your library, reading progress, bookmarks and settings " +
@@ -221,91 +150,69 @@ fun ProfileScreen(
                 }
             }
 
-            Spacer(Modifier.height(22.dp))
-            NookSectionTitle("Sync diagnosis", palette)
-            Spacer(Modifier.height(10.dp))
-            GlassSurface(
-                palette,
-                Modifier.fillMaxWidth().padding(horizontal = 20.dp),
-                shape = RoundedCornerShape(22.dp)
-            ) {
-                Column(Modifier.padding(18.dp)) {
-                    Text(
-                        "Sync fails silently by nature: a token that never arrives and a snapshot " +
-                            "that is never applied both look like nothing happening. This is the " +
-                            "stage-by-stage record of the last attempts, newest first.",
-                        color = palette.mute,
-                        fontSize = 11.sp
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    if (syncTrace.isEmpty()) {
-                        Text(
-                            "No sync has run on this install yet. Run the connection test below to " +
-                                "check backup end to end.",
-                            color = palette.faint,
-                            fontSize = 11.sp
-                        )
-                    } else {
-                        syncTrace.take(14).forEach { line ->
-                            Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                                Text(
-                                    if (line.ok) "·" else "!",
-                                    color = if (line.ok) palette.mute else palette.accent,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(end = 6.dp)
-                                )
-                                Text(
-                                    line.stage,
-                                    color = palette.ink,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                                if (line.detail.isNotBlank()) {
-                                    Text(
-                                        "  " + line.detail,
-                                        color = palette.mute,
-                                        fontSize = 11.sp,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    if (notVerified.isNotEmpty()) {
-                        Spacer(Modifier.height(12.dp))
-                        Text(
-                            "PER BOOK",
-                            color = palette.mute, fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        // Title first: "2 failed" is not actionable, "The Hobbit · Upload failed ·
-                        // Google Drive returned HTTP 0" is.
-                        notVerified.take(12).forEach { line ->
-                            Text(
-                                line,
-                                color = palette.ink,
-                                fontSize = 11.sp,
-                                modifier = Modifier.padding(bottom = 4.dp)
+            // The four numbers, and nothing else. Whatever is not in the first two is named on the
+            // remainder line, so the reader can add them up and get the shelf total.
+            if (account.signedIn && account.driveConnected) {
+                Spacer(Modifier.height(22.dp))
+                NookSectionTitle("Your cloud library", palette)
+                Spacer(Modifier.height(10.dp))
+                GlassSurface(
+                    palette,
+                    Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                    shape = RoundedCornerShape(22.dp)
+                ) {
+                    Column(Modifier.padding(18.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            CloudStat(palette, metrics.total.toString(), "On the shelf", Modifier.weight(1f))
+                            CloudStat(
+                                palette,
+                                metrics.verified.toString(),
+                                "Uploaded & verified",
+                                Modifier.weight(1f),
+                                emphasise = metrics.verified > 0
                             )
                         }
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    // The decisive button: it performs the same calls a backup does and says which
-                    // one Google refused, if any.
-                    NookButton(palette, "Test backup connection", onTestConnection, filled = true)
-                    if (syncTrace.isNotEmpty()) {
-                        Spacer(Modifier.height(6.dp))
-                        NookButton(
-                            palette,
-                            "Copy diagnosis",
-                            { onCopySyncTrace(SyncDiag.report()) },
-                            filled = false
+                        Spacer(Modifier.height(12.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            CloudStat(palette, metrics.failed.toString(), "Failed", Modifier.weight(1f))
+                            CloudStat(
+                                palette,
+                                metrics.uploading.toString(),
+                                if (metrics.paused > 0) "Still uploading · ${metrics.paused} paused"
+                                else "Still uploading",
+                                Modifier.weight(1f)
+                            )
+                        }
+                        val rest = metrics.remainder()
+                        if (rest.isNotEmpty()) {
+                            Spacer(Modifier.height(14.dp))
+                            rest.forEach { (label, count) ->
+                                SyncRow(palette, label, "$count book${if (count == 1) "" else "s"}")
+                            }
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            if (metrics.verified > 0)
+                                "Only a book that is uploaded and verified can be removed from this " +
+                                    "phone and restored later. Removing it here never deletes the copy " +
+                                    "in your account."
+                            else "Nothing is verified yet. Removing a book from this phone right now " +
+                                "would lose the only copy you have.",
+                            color = palette.mute,
+                            fontSize = 11.sp
                         )
-                        Spacer(Modifier.height(6.dp))
-                        NookButton(palette, "Clear", onClearSyncTrace, filled = false)
+                        if (account.lastSyncAt > 0L) {
+                            Text(
+                                "Last sync " + DateFormat.getDateTimeInstance(
+                                    DateFormat.MEDIUM, DateFormat.SHORT
+                                ).format(Date(account.lastSyncAt)),
+                                color = palette.faint,
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(top = 6.dp)
+                            )
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        NookButton(palette, "Sync now", onSyncNow, filled = true)
                     }
                 }
             }
@@ -350,6 +257,38 @@ fun ProfileScreen(
                 }
             }
             Spacer(Modifier.height(120.dp))
+        }
+    }
+}
+
+/**
+ * One of the four numbers, as a tile.
+ *
+ * Value on top in the display face, label underneath: at a glance the reader gets "what" and
+ * "how many", without a legend or a tooltip.
+ */
+@Composable
+private fun CloudStat(
+    palette: NookPalette,
+    value: String,
+    label: String,
+    modifier: Modifier = Modifier,
+    emphasise: Boolean = false
+) {
+    GlassSurface(
+        palette,
+        modifier,
+        shape = RoundedCornerShape(16.dp),
+        fill = if (emphasise) palette.accent.copy(alpha = 0.16f) else palette.glass
+    ) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+            Text(
+                value,
+                color = if (emphasise) palette.accent else palette.ink,
+                fontFamily = Playfair,
+                fontSize = 24.sp
+            )
+            Text(label, color = palette.mute, fontSize = 11.sp, maxLines = 2)
         }
     }
 }

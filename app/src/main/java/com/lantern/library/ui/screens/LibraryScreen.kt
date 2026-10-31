@@ -55,6 +55,8 @@ import com.lantern.library.data.DiscoveryBook
 import com.lantern.library.data.DownloadAction
 import com.lantern.library.data.DownloadUi
 import com.lantern.library.data.LibraryBook
+import com.lantern.library.data.TransferPhase
+import com.lantern.library.data.TransferProgress
 import com.lantern.library.data.LibraryCategory
 import com.lantern.library.data.ReaderTheme
 import com.lantern.library.ui.components.CoverFace
@@ -111,7 +113,17 @@ fun LibraryScreen(
     /** Why a download cannot be removed, or null when it can. The store owns the rules. */
     removalBlocker: (LibraryBook) -> String? = { null },
     /** Why a book cannot be restored, or null when it can. */
-    restoreBlocker: (LibraryBook) -> String? = { null }
+    restoreBlocker: (LibraryBook) -> String? = { null },
+    /** Live transfers, so the menu can offer Pause exactly when something is actually moving. */
+    transfers: Map<String, TransferProgress> = emptyMap(),
+    /** Uploads the reader paused. */
+    pausedUploads: Set<String> = emptySet(),
+    /** Stops / continues a restore at the transport, keeping its checkpoint. */
+    onPauseRestore: (String) -> Unit = {},
+    onResumeRestore: (String) -> Unit = {},
+    /** Stops / continues an upload. */
+    onPauseUpload: (String) -> Unit = {},
+    onResumeUpload: (String) -> Unit = {}
 ) {
     val palette = nookPalette(theme)
     var category by remember { mutableStateOf(LibraryCategory.ALL) }
@@ -155,7 +167,7 @@ fun LibraryScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         // The nook's lamp, in the corner where the room is: a small, slow piece of
                         // life so the shelf does not feel like a spreadsheet.
-                        NookLamp(palette, Modifier.padding(end = 10.dp), size = 44.dp)
+                        NookLamp(palette, Modifier.padding(end = 14.dp), size = 104.dp)
                         Column(Modifier.weight(1f)) {
                             Text("Library", color = palette.ink, fontFamily = Playfair, fontSize = 28.sp)
                             Text(
@@ -274,6 +286,31 @@ fun LibraryScreen(
                     // Remove download / Restore download: one row, two directions, chosen by the
                     // book's own state. Never offered for a file the account has not verified.
                     val localBytes = target.filePath?.let(::File)?.takeIf { it.exists() }?.length() ?: 0L
+                    // Pause and resume, offered only where they mean something: a transfer that is
+                    // really running (or really paused), not a badge that merely says so.
+                    val live = transfers[target.id]
+                    when {
+                        live != null && live.restore && live.phase != TransferPhase.FAILED -> TextButton(
+                            onClick = {
+                                menuFor = null
+                                if (live.phase == TransferPhase.PAUSED) onResumeRestore(target.id)
+                                else onPauseRestore(target.id)
+                            }
+                        ) {
+                            Text(
+                                if (live.phase == TransferPhase.PAUSED) "Resume download" else "Pause download",
+                                color = palette.ink
+                            )
+                        }
+                        live != null && !live.restore && live.phase in listOf(
+                            TransferPhase.PREPARING, TransferPhase.UPLOADING, TransferPhase.VERIFYING
+                        ) -> TextButton(onClick = { menuFor = null; onPauseUpload(target.id) }) {
+                            Text("Pause upload", color = palette.ink)
+                        }
+                        target.id in pausedUploads -> TextButton(onClick = { menuFor = null; onResumeUpload(target.id) }) {
+                            Text("Resume upload", color = palette.ink)
+                        }
+                    }
                     when (DownloadUi.actionFor(target, localBytes)) {
                         DownloadAction.REMOVE -> TextButton(onClick = { menuFor = null; confirmRemoveDownload = target }) {
                             Text("Remove download", color = palette.ink)

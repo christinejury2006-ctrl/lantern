@@ -23,7 +23,7 @@ android {
         // CI passes LORE_VERSION_CODE (base + run number) so every build is newer than the
         // last one and Android accepts it as an in-place update. Local builds fall back here.
         versionCode = resolveVersionCode()
-        versionName = "3.5.1"
+        versionName = "3.6.0"
         vectorDrawables.useSupportLibrary = true
         // Only the two ABIs phones actually use. The native renderer ships for both;
         // emulator ABIs would triple the download for nobody's benefit.

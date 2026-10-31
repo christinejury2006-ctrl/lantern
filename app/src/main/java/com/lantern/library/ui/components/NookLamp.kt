@@ -9,161 +9,249 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.State
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.lantern.library.ui.theme.NookPalette
-import kotlin.math.PI
-import kotlin.math.cos
 import kotlin.math.sin
 
 /**
- * The nook's little light: a lamp that breathes, and a butterfly that keeps coming back to it.
+ * The nook's floor lamp: shade, arm, joints, base, and a pool of warm light on the floor.
  *
- * Pure decoration, and deliberately small — it sits in the top-left corner of the library and does
- * nothing but reassure the reader that the app is awake. Everything is drawn on one canvas from a
- * single infinite transition, so it costs two animated floats per frame and allocates nothing:
+ * This is a small piece of scenery, not an icon. It is drawn as a standing lamp seen slightly from
+ * above, because a lamp lying flat on a page reads as a glyph while one standing on a floor with
+ * its own light beneath it reads as a room.
  *
- * - the glow is a radial gradient whose alpha and radius follow a slow sine, which reads as a lamp
- *   being turned up and down rather than a blinking dot;
- * - the butterfly flies a lissajous loop around the shade — never the same path twice in a reader's
- *   glance, but bounded, so it never wanders across the covers;
- * - its wings flap by scaling the two halves vertically about the body, and it turns to face the
- *   direction it is travelling, which is what makes it look like a butterfly rather than a sprite.
+ * Parts, bottom to top:
+ *
+ * - **a pool of light** on the floor — an ellipse of warm radial gradient whose radius and
+ *   brightness follow a slow breathing curve, clipped to the floor so it never floats;
+ * - **the base** — a flat ellipse with a lighter top edge, which is what makes it look like it is
+ *   sitting on something rather than pasted on;
+ * - **the arm** — a tapered pole with two visible joints, so it reads as a mechanism instead of a
+ *   line;
+ * - **the shade** — a trapezoid with a vertical gradient: lit on the inside, shaded on the
+ *   outside, with a rim highlight along the top edge;
+ * - **the bulb** — a small, very bright disc under the shade, whose glow spills down the arm.
+ *
+ * Efficiency: the animated values stay as [State] objects and are read **inside** the draw lambda.
+ * Reading them in the composable body would recompose the whole lamp on every frame of the
+ * flicker; reading them in `Canvas`' draw scope only re-runs the drawing, which is three gradients
+ * and a handful of paths. Nothing here allocates a bitmap, and there are no per-frame objects
+ * beyond the gradients Compose already caches.
  */
 @Composable
 fun NookLamp(
     palette: NookPalette,
     modifier: Modifier = Modifier,
-    size: Dp = 46.dp
+    size: Dp = 96.dp
 ) {
     val transition = rememberInfiniteTransition(label = "lamp")
-    val glow by transition.animateFloat(
+    // The filament: a slow, slight variation, like a real bulb that is warm rather than steady.
+    val flicker: State<Float> = transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 2600, easing = LinearEasing),
+            animation = tween(durationMillis = 3200, easing = LinearEasing),
             repeatMode = RepeatMode.Reverse
         ),
-        label = "glow"
+        label = "flicker"
     )
-    val flight by transition.animateFloat(
+    // The pool on the floor breathes on a different period, so the two never beat in step and the
+    // light looks alive instead of looping.
+    val pool: State<Float> = transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 9400, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "flight"
-    )
-    val flap by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 190, easing = LinearEasing),
+            animation = tween(durationMillis = 4600, easing = LinearEasing),
             repeatMode = RepeatMode.Reverse
         ),
-        label = "flap"
+        label = "pool"
     )
 
     Canvas(modifier.size(size)) {
-        val w = this.size.width
-        val h = this.size.height
-        val shade = Offset(w * 0.42f, h * 0.30f)
-        // Warm lamplight, tinted with the palette's accent so it belongs to the room.
-        val light = if (palette.dark) palette.aurora[3] else palette.aurora[0]
-        val warm = lerp(light, palette.accent, 0.45f)
+        drawLamp(palette, flicker.value, pool.value)
+    }
+}
 
-        // The glow: two stops, breathing between a soft pool and a brighter one.
-        val radius = w * (0.34f + 0.20f * glow)
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(
-                    warm.copy(alpha = (if (palette.dark) 0.55f else 0.42f) * (0.55f + 0.45f * glow)),
-                    Color.Transparent
-                ),
-                center = shade,
-                radius = radius
+/** All of the lamp, in one pass. Kept out of the composable so nothing here touches composition. */
+private fun DrawScope.drawLamp(palette: NookPalette, glow: Float, pool: Float) {
+    val w = size.width
+    val h = size.height
+    // The floor is a little above the bottom edge, so the light has somewhere to land and the
+    // base has room for its own thickness.
+    val floorY = h * 0.90f
+    val shadowY = h * 0.93f
+
+    // ---- palette -------------------------------------------------------------------------
+    // Warm light is always warmer than the room: the shade tints it, the palette supplies the
+    // warmth, so day and night differ in what the *room* is made of, not in whether the lamp works.
+    val warmBase = if (palette.dark) palette.aurora.getOrElse(3) { palette.accent } else palette.aurora.getOrElse(1) { palette.accent }
+    val warm = lerp(warmBase, palette.accent, 0.55f)
+    val glowStrength = 0.62f + 0.38f * glow
+    val metal = palette.ink
+    val metalLit = lerp(metal, warm, 0.35f)
+
+    // ---- the pool of light on the floor ----------------------------------------------------
+    val poolRadiusX = w * (0.40f + 0.10f * pool)
+    val poolRadiusY = w * (0.11f + 0.03f * pool)
+    val poolCentre = Offset(w * 0.50f, floorY)
+    drawOval(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                warm.copy(alpha = (if (palette.dark) 0.50f else 0.34f) * glowStrength),
+                warm.copy(alpha = 0.10f * glowStrength),
+                Color.Transparent
             ),
-            radius = radius,
-            center = shade
-        )
-
-        // The lamp itself: a stem, a bell, and a bright filament bulb under it.
-        val stem = palette.ink.copy(alpha = 0.55f)
-        drawLine(stem, Offset(shade.x, h * 0.06f), Offset(shade.x, shade.y - h * 0.10f), strokeWidth = w * 0.035f)
-        val bell = Path().apply {
-            moveTo(shade.x - w * 0.15f, shade.y + h * 0.02f)
-            lineTo(shade.x + w * 0.15f, shade.y + h * 0.02f)
-            lineTo(shade.x + w * 0.06f, shade.y - h * 0.12f)
-            lineTo(shade.x - w * 0.06f, shade.y - h * 0.12f)
-            close()
-        }
-        drawPath(bell, palette.ink.copy(alpha = 0.75f))
-        drawCircle(
-            color = warm.copy(alpha = 0.85f + 0.15f * glow),
-            radius = w * 0.055f,
-            center = Offset(shade.x, shade.y + h * 0.05f)
-        )
-
-        // The butterfly: a bounded loop around the shade, drifting with the flight phase.
-        val angle = flight * 2f * PI.toFloat()
-        val bx = shade.x + cos(angle) * w * 0.30f
-        val by = shade.y + sin(angle * 2f) * h * 0.16f + h * 0.04f
-        // Heading from the derivative of the loop, so the wings tilt the way it is moving.
-        val heading = -sin(angle) * 0.6f + cos(angle * 2f) * 0.4f
-        drawButterfly(
-            centre = Offset(bx, by),
-            wingSpan = w * 0.11f,
-            flap = flap,
-            tilt = heading,
-            colour = if (palette.dark) palette.aurora[1] else palette.accent.copy(alpha = 0.9f)
-        )
-    }
-}
-
-private fun DrawScope.drawButterfly(
-    centre: Offset,
-    wingSpan: Float,
-    flap: Float,
-    tilt: Float,
-    colour: Color
-) {
-    // The body: a short, dark line along the direction of travel.
-    val dx = tilt * wingSpan * 0.5f
-    drawLine(
-        colour.copy(alpha = 0.95f),
-        Offset(centre.x - dx * 0.4f, centre.y),
-        Offset(centre.x + dx * 0.4f, centre.y),
-        strokeWidth = wingSpan * 0.22f
+            center = poolCentre,
+            radius = poolRadiusX
+        ),
+        topLeft = Offset(poolCentre.x - poolRadiusX, poolCentre.y - poolRadiusY),
+        size = Size(poolRadiusX * 2f, poolRadiusY * 2f)
     )
-    // Wings: scale with the flap, so they close to a sliver and open wide.
-    val openness = 0.25f + 0.75f * flap
-    for (side in listOf(-1f, 1f)) {
-        val wing = Path().apply {
-            moveTo(centre.x, centre.y)
-            quadraticBezierTo(
-                centre.x + side * wingSpan * 1.25f,
-                centre.y - wingSpan * 0.95f * openness + dx,
-                centre.x + side * wingSpan * 0.55f,
-                centre.y + wingSpan * 0.10f
-            )
-            quadraticBezierTo(
-                centre.x + side * wingSpan * 0.90f,
-                centre.y + wingSpan * 0.85f * openness,
-                centre.x,
-                centre.y
-            )
-            close()
-        }
-        drawPath(wing, colour.copy(alpha = 0.55f + 0.45f * flap))
-    }
-}
+    // A soft contact shadow under the base, so the lamp is standing on the floor rather than
+    // hovering above it.
+    drawOval(
+        color = Color.Black.copy(alpha = if (palette.dark) 0.32f else 0.12f),
+        topLeft = Offset(w * 0.36f, shadowY - h * 0.020f),
+        size = Size(w * 0.28f, h * 0.030f)
+    )
 
+    // ---- the base --------------------------------------------------------------------------
+    val baseLeft = w * 0.34f
+    val baseWidth = w * 0.32f
+    drawOval(
+        brush = Brush.verticalGradient(
+            colors = listOf(metalLit.copy(alpha = 0.95f), metal.copy(alpha = 0.75f)),
+            startY = floorY - h * 0.045f,
+            endY = floorY + h * 0.005f
+        ),
+        topLeft = Offset(baseLeft, floorY - h * 0.045f),
+        size = Size(baseWidth, h * 0.055f)
+    )
+    // The top edge catches the light: a thin, brighter ellipse on the leading half.
+    drawOval(
+        color = metalLit.copy(alpha = 0.55f),
+        topLeft = Offset(baseLeft + baseWidth * 0.08f, floorY - h * 0.049f),
+        size = Size(baseWidth * 0.70f, h * 0.022f)
+    )
+
+    // ---- the arm ---------------------------------------------------------------------------
+    val poleX = w * 0.50f
+    val poleBottom = floorY - h * 0.030f
+    val poleTop = h * 0.30f
+    // Tapered: thicker at the base than at the shade, drawn as a filled path rather than a stroked
+    // line so the taper and the highlight are both possible.
+    val arm = Path().apply {
+        moveTo(poleX - w * 0.020f, poleBottom)
+        lineTo(poleX - w * 0.012f, poleTop)
+        lineTo(poleX + w * 0.012f, poleTop)
+        lineTo(poleX + w * 0.020f, poleBottom)
+        close()
+    }
+    drawPath(
+        arm,
+        brush = Brush.horizontalGradient(
+            colors = listOf(metal.copy(alpha = 0.55f), metalLit.copy(alpha = 0.95f), metal.copy(alpha = 0.60f)),
+            startX = poleX - w * 0.02f,
+            endX = poleX + w * 0.02f
+        )
+    )
+    // Two joints: small discs where a real lamp folds, each with a lit top edge.
+    listOf(poleBottom - h * 0.045f, h * 0.55f).forEach { y ->
+        drawCircle(metal.copy(alpha = 0.85f), radius = w * 0.026f, center = Offset(poleX, y))
+        drawCircle(metalLit.copy(alpha = 0.65f), radius = w * 0.014f, center = Offset(poleX, y - h * 0.006f))
+    }
+
+    // ---- the shade -------------------------------------------------------------------------
+    val shadeTop = h * 0.12f
+    val shadeBottom = h * 0.34f
+    val shadeTopHalf = w * 0.115f
+    val shadeBottomHalf = w * 0.215f
+    val shade = Path().apply {
+        moveTo(poleX - shadeTopHalf, shadeTop)
+        lineTo(poleX + shadeTopHalf, shadeTop)
+        lineTo(poleX + shadeBottomHalf, shadeBottom)
+        lineTo(poleX - shadeBottomHalf, shadeBottom)
+        close()
+    }
+    drawPath(
+        shade,
+        brush = Brush.verticalGradient(
+            colors = listOf(
+                lerp(palette.ink, Color.Black, 0.15f).copy(alpha = 0.92f),
+                warm.copy(alpha = 0.88f)
+            ),
+            startY = shadeTop,
+            endY = shadeBottom
+        )
+    )
+    // The inside of the shade, seen along its lower edge: a warm crescent that makes the shade a
+    // vessel rather than a silhouette.
+    drawOval(
+        color = warm.copy(alpha = 0.55f + 0.30f * glow),
+        topLeft = Offset(poleX - shadeBottomHalf, shadeBottom - h * 0.020f),
+        size = Size(shadeBottomHalf * 2f, h * 0.030f)
+    )
+    // Rim highlight across the top.
+    drawLine(
+        color = metalLit.copy(alpha = 0.75f),
+        start = Offset(poleX - shadeTopHalf, shadeTop),
+        end = Offset(poleX + shadeTopHalf, shadeTop),
+        strokeWidth = w * 0.010f
+    )
+
+    // ---- the bulb, and the light it throws --------------------------------------------------
+    val bulb = Offset(poleX, shadeBottom - h * 0.004f)
+    val bulbRadius = w * (0.055f + 0.012f * glow)
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                Color.White.copy(alpha = 0.92f * glowStrength),
+                warm.copy(alpha = 0.55f * glowStrength),
+                Color.Transparent
+            ),
+            center = bulb,
+            radius = bulbRadius * 2.6f
+        ),
+        radius = bulbRadius * 2.6f,
+        center = bulb
+    )
+    drawCircle(Color(0xFFFFF4DC), radius = bulbRadius * 0.55f, center = bulb)
+    // A cone of light falling from the shade onto the pool: two soft triangles, the nearer one
+    // brighter, so the light has direction.
+    val cone = Path().apply {
+        moveTo(poleX - shadeBottomHalf, shadeBottom)
+        lineTo(poleX + shadeBottomHalf, shadeBottom)
+        lineTo(poolCentre.x + poolRadiusX * 0.85f, floorY)
+        lineTo(poolCentre.x - poolRadiusX * 0.85f, floorY)
+        close()
+    }
+    drawPath(
+        cone,
+        brush = Brush.verticalGradient(
+            colors = listOf(
+                warm.copy(alpha = 0.16f * glowStrength),
+                warm.copy(alpha = 0.04f * glowStrength)
+            ),
+            startY = shadeBottom,
+            endY = floorY
+        )
+    )
+    // A single thin filament line, drifting with the glow: the smallest honest sign of life.
+    val drift = sin(glow * Math.PI).toFloat()
+    drawLine(
+        color = Color.White.copy(alpha = 0.55f),
+        start = Offset(bulb.x - w * 0.02f, bulb.y - h * 0.012f * drift - h * 0.004f),
+        end = Offset(bulb.x + w * 0.02f, bulb.y - h * 0.012f * drift - h * 0.004f),
+        strokeWidth = w * 0.008f
+    )
+}

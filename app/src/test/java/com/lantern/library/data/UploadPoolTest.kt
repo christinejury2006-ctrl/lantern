@@ -205,6 +205,8 @@ class UploadPoolTest {
         val verified = ConcurrentHashMap<String, String>()
         val failed = ConcurrentHashMap<String, String>()
         val paused = ConcurrentHashMap<String, Int>()
+        /** Pauses the reader asked for, as distinct from interruptions. */
+        val pausedByReader = ConcurrentHashMap<String, Int>()
         val skipped = CopyOnWriteArraySet<String>()
         val events = ConcurrentLinkedQueue<String>()
 
@@ -242,6 +244,11 @@ class UploadPoolTest {
         override fun onPaused(book: LibraryBook, sent: Long, total: Long, reason: String) {
             paused[book.id] = (paused[book.id] ?: 0) + 1
             events += "paused:${book.id}"
+        }
+
+        override fun onPausedByReader(book: LibraryBook, sent: Long, total: Long) {
+            pausedByReader[book.id] = (pausedByReader[book.id] ?: 0) + 1
+            events += "pausedByReader:${book.id}"
         }
 
         override fun onSkipped(book: LibraryBook, reason: String) {
@@ -716,6 +723,158 @@ class UploadPoolTest {
         assertFalse("it must not be left in flight", pool.isInFlight("a"))
         assertEquals(1, drive.countFor("a"))
         assertEquals(1, drive.creates.get())
+    }
+
+
+    // =======================================================================================
+    // Pausing an upload
+    // =======================================================================================
+
+    // 1
+    @Test
+    fun `a book paused before its turn is never started`() {
+        val a = book("a", write("a.epub", epubBytes("a")))
+        assertFalse("nothing was in flight, so pause must say so", pool.pause("a"))
+        assertTrue("the pause must still be remembered", pool.isPaused("a"))
+
+        val listener = Recorder()
+        val result = run(listOf(a), listener)
+
+        assertEquals("a paused book must not be uploaded", 0, drive.creates.get())
+        assertEquals(0, result.confirmed.size)
+        assertTrue("it is skipped, not failed: ${result.failed}", result.failed.isEmpty())
+        assertTrue("the skip must reach the listener", "a" in listener.skipped)
+        assertTrue("the book must still be paused", pool.isPaused("a"))
+    }
+
+    // 2
+    @Test
+    fun `pausing during the transfer stops the bytes instead of the badge`() {
+        // Large enough that the body is written in several chunks, so a pause between two of them
+        // is a real interruption of real bytes rather than a flag set after everything landed.
+        val a = book("a", write("a.epub", epubBytes("a", extra = 400_000)))
+        val listener = object : Recorder() {
+            var asked = false
+            override fun onProgress(book: LibraryBook, sent: Long, total: Long) {
+                super.onProgress(book, sent, total)
+                if (!asked) {
+                    asked = true
+                    pool.pause(book.id)
+                }
+            }
+        }
+
+        val result = run(listOf(a), listener)
+
+        assertTrue(
+            "the reader's pause must be reported as one: ${listener.events}",
+            listener.pausedByReader.containsKey("a")
+        )
+        assertEquals("a paused book is not confirmed", 0, result.confirmed.size)
+        assertTrue("a pause is not a failure: ${result.failed}", result.failed.isEmpty())
+        assertTrue("its slot must be released", !pool.isInFlight("a"))
+        assertTrue("and it must stay paused", pool.isPaused("a"))
+        assertEquals("nothing may have been stored as a verified copy", 0, drive.files.size)
+    }
+
+    // 3
+    @Test
+    fun `a paused book does not hold a worker slot`() {
+        val paused = book("p", write("p.epub", epubBytes("p", extra = 400_000)))
+        val others = (1..3).map { i -> book("o$i", write("o$i.epub", epubBytes("o$i"))) }
+
+        // The pause lands on the first chunk of P, then the pool must carry on with the rest.
+        val entered = CountDownLatch(1)
+        drive.uploadEntered["p"] = entered
+        val listener = object : Recorder() {
+            var asked = false
+            override fun onProgress(book: LibraryBook, sent: Long, total: Long) {
+                super.onProgress(book, sent, total)
+                if (!asked) {
+                    asked = true
+                    pool.pause(book.id)
+                }
+            }
+        }
+
+        val result = run(listOf(paused) + others, listener)
+
+        assertEquals("the other three must still be confirmed", 3, result.confirmed.size)
+        assertTrue(result.confirmed.keys.containsAll(listOf("o1", "o2", "o3")))
+        assertTrue("the paused book is not in flight", !pool.isInFlight("p"))
+        assertTrue(
+            "the bound must hold even with one paused: saw ${drive.maxInFlight.get()}",
+            drive.maxInFlight.get() <= UploadPool.MAX_CONCURRENT_UPLOADS
+        )
+    }
+
+    // 4
+    @Test
+    fun `resuming sends the file once, and creates no second cloud copy`() {
+        val a = book("a", write("a.epub", epubBytes("a")))
+        pool.pause("a")
+        assertEquals(0, run(listOf(a)).confirmed.size)
+
+        pool.resume("a")
+        assertFalse("resume must clear the pause", pool.isPaused("a"))
+        val result = run(listOf(a))
+
+        assertEquals(setOf("a"), result.confirmed.keys)
+        assertEquals("one book, one Drive file", 1, drive.countFor("a"))
+        assertEquals(1, drive.creates.get())
+    }
+
+    // 5
+    @Test
+    fun `a paused transfer is not reported as failed`() {
+        val a = book("a", write("a.epub", epubBytes("a", extra = 400_000)))
+        val listener = object : Recorder() {
+            var asked = false
+            override fun onProgress(book: LibraryBook, sent: Long, total: Long) {
+                super.onProgress(book, sent, total)
+                if (!asked) {
+                    asked = true
+                    pool.pause(book.id)
+                }
+            }
+        }
+        val result = run(listOf(a), listener)
+
+        assertTrue("a pause must never appear as a failure: ${listener.failed}", listener.failed.isEmpty())
+        assertTrue("nor in the pass result: ${result.failed}", result.failed.isEmpty())
+        assertTrue("nor as an interruption", listener.paused.isEmpty())
+    }
+
+    // 6
+    @Test
+    fun `pause is per book and leaves the others alone`() {
+        val a = book("a", write("a.epub", epubBytes("a")))
+        val b = book("b", write("b.epub", epubBytes("b")))
+        pool.pause("a")
+
+        val result = run(listOf(a, b))
+
+        assertEquals(setOf("b"), result.confirmed.keys)
+        assertTrue("a stays paused", pool.isPaused("a"))
+        assertFalse("b was never paused", pool.isPaused("b"))
+        assertEquals(1, drive.countFor("b"))
+        assertEquals(0, drive.countFor("a"))
+    }
+
+    // 7
+    @Test
+    fun `a resumed book keeps its single slot and is verified, not just sent`() {
+        val a = book("a", write("a.epub", epubBytes("a")))
+        pool.pause("a")
+        run(listOf(a))
+        pool.resume("a")
+        val listener = Recorder()
+        val result = run(listOf(a), listener)
+
+        assertEquals(setOf("a"), result.confirmed.keys)
+        assertTrue("the book must reach verification: ${listener.events}", "a" in listener.verifying)
+        assertTrue("and be confirmed by the account: ${listener.events}", listener.verified.containsKey("a"))
+        assertEquals(1, drive.countFor("a"))
     }
 
     /**

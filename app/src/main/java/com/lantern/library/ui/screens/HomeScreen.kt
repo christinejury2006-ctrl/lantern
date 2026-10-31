@@ -28,7 +28,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -90,8 +89,6 @@ fun ReadingNookScreen(
     picksFailed: Boolean = false,
     onOpenBook: (LibraryBook) -> Unit,
     onOpenPick: (DiscoveryBook) -> Unit,
-    onSearch: () -> Unit,
-    onLibrary: () -> Unit,
     onRefreshPicks: () -> Unit,
     onNotifications: () -> Unit,
     /** Live upload progress, keyed by book. Read-only: the shelf never writes sync state. */
@@ -127,10 +124,11 @@ fun ReadingNookScreen(
                 Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = SystemBars.CONTENT_BOTTOM_DP.dp)
             ) {
-                item { SearchPill(palette, onSearch, onLibrary) }
-
                 item {
-                    Spacer(Modifier.height(22.dp))
+                    // No search field here any more. Search is its own destination in the bottom
+                    // bar, and a pill that duplicated it made the nook's first screen about
+                    // navigation rather than about the books on it.
+                    Spacer(Modifier.height(18.dp))
                     NookSectionTitle("My Shelf", palette) {
                         Text(
                             "${books.size}",
@@ -322,54 +320,6 @@ private fun NookHeader(
     }
 }
 
-@Composable
-private fun SearchPill(palette: NookPalette, onSearch: () -> Unit, onShelf: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 20.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        GlassSurface(
-            palette,
-            Modifier.weight(1f),
-            shape = RoundedCornerShape(24.dp),
-            onClick = onSearch
-        ) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(Icons.Filled.Search, "Search", tint = palette.mute, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(10.dp))
-                Text("Search", color = palette.mute, fontSize = 14.sp)
-            }
-        }
-        // The bookcase itself: this is the button that opens the revolving case.
-        GlassSurface(palette, Modifier.size(44.dp), shape = RoundedCornerShape(16.dp), onClick = onShelf) {
-            ShelfGlyph(palette, Modifier.align(Alignment.Center).size(22.dp))
-        }
-    }
-}
-
-/** Three little books on a shelf, drawn rather than iconified so it matches the covers. */
-@Composable
-private fun ShelfGlyph(palette: NookPalette, modifier: Modifier = Modifier) {
-    Row(
-        modifier,
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
-        verticalAlignment = Alignment.Bottom
-    ) {
-        listOf(13.dp, 20.dp, 10.dp).forEachIndexed { i, h ->
-            Box(
-                Modifier
-                    .width(5.dp)
-                    .height(h)
-                    .clip(RoundedCornerShape(1.dp))
-                    .background(palette.aurora[i % palette.aurora.size].copy(alpha = 0.9f))
-            )
-        }
-    }
-}
 
 @Composable
 private fun ShelfTile(

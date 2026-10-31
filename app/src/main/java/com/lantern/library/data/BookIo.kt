@@ -28,7 +28,67 @@ object BookIo {
     fun cloudDir(context: Context): File =
         File(context.getExternalFilesDir(null), "cloud").apply { mkdirs() }
 
-    fun importUri(context: Context, uri: Uri): LibraryBook? {
+    /**
+     * Measures a chosen document without importing it.
+     *
+     * This is what the review sheet shows: the real name, the real size, the format taken from the
+     * file's own bytes where the name is not conclusive, and a fingerprint so the same file chosen
+     * twice — from two folders, or in one selection — is recognised as one book.
+     */
+    fun measure(context: Context, uri: Uri): ImportCandidate {
+        val name = displayName(context, uri) ?: uri.lastPathSegment.orEmpty().ifBlank { "Untitled" }
+        val lower = name.lowercase()
+        var bytes = 0L
+        var head = ByteArray(0)
+        val opened = runCatching {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                val buffer = ByteArray(64 * 1024)
+                var total = 0L
+                var headRead = 0
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read <= 0) break
+                    if (headRead < buffer.size) {
+                        val take = minOf(read, buffer.size - headRead)
+                        if (head.isEmpty()) head = ByteArray(take)
+                        buffer.copyInto(head, headRead, 0, take)
+                        headRead += take
+                    }
+                    total += read
+                }
+                bytes = total
+            } != null
+        }.getOrDefault(false)
+        val digest = java.security.MessageDigest.getInstance("MD5")
+        if (head.isNotEmpty()) digest.update(head)
+        val headHash = if (opened && bytes > 0L) digest.digest().joinToString("") { "%02x".format(it) } else ""
+        val byName = when {
+            lower.endsWith(".epub") -> BookFormat.EPUB
+            lower.endsWith(".pdf") -> BookFormat.PDF
+            else -> null
+        }
+        val byMagic = when {
+            byName != null -> byName
+            head.size >= 4 && head[0] == 0x50.toByte() && head[1] == 0x4B.toByte() -> BookFormat.EPUB
+            String(head, 0, minOf(head.size, 5), Charsets.US_ASCII) == "%PDF-" -> BookFormat.PDF
+            else -> null
+        }
+        return ImportCandidate(
+            uri = uri.toString(),
+            name = name,
+            format = byMagic,
+            bytes = bytes,
+            headHash = headHash
+        )
+    }
+
+    /**
+     * Copies one chosen document into the library.
+     *
+     * @param id the id the caller decided on. A batch import passes its own so two files chosen in
+     *   the same millisecond cannot collide, which the old timestamp-only id could.
+     */
+    fun importUri(context: Context, uri: Uri, id: String? = null): LibraryBook? {
         val name = displayName(context, uri) ?: return null
         val lower = name.lowercase()
         val format = when {
@@ -36,11 +96,41 @@ object BookIo {
             lower.endsWith(".pdf") -> BookFormat.PDF
             else -> return null
         }
-        val id = "imp_${System.currentTimeMillis()}_${name.hashCode().toUInt()}"
+        val bookId = id ?: "imp_${System.currentTimeMillis()}_${name.hashCode().toUInt()}"
+        return importInto(context, uri, name, format, bookId)
+    }
+
+    /** The copying half of [importUri], with the identity already decided. */
+    private fun importInto(
+        context: Context,
+        uri: Uri,
+        name: String,
+        format: BookFormat,
+        id: String
+    ): LibraryBook? {
         val dest = File(booksDir(context), "$id.${if (format == BookFormat.EPUB) "epub" else "pdf"}")
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            FileOutputStream(dest).use { input.copyTo(it) }
-        } ?: return null
+        // Copy to a temporary first and move it into place only once the whole file is here. An
+        // import interrupted halfway then leaves nothing that looks like a book, which is the
+        // difference between "try again" and "this book is broken forever".
+        val incoming = File(dest.parentFile, dest.name + ".incoming")
+        val copied = runCatching {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(incoming).use { output -> input.copyTo(output) }
+            } ?: return null
+        }.isSuccess
+        if (!copied || !incoming.exists() || incoming.length() <= 0L) {
+            runCatching { incoming.delete() }
+            return null
+        }
+        // The container check runs on the copied bytes, not on the picker's word for them.
+        if (BookFiles.validate(incoming, format) !is BookFiles.Check.Ok) {
+            runCatching { incoming.delete() }
+            return null
+        }
+        if (!BookFiles.commit(incoming, dest)) {
+            runCatching { incoming.delete() }
+            return null
+        }
         val coverFile = File(coversDir(context), "$id.jpg")
         val coverOk = if (format == BookFormat.EPUB) extractEpubCover(dest, coverFile) else extractPdfCover(dest, coverFile)
         val title = if (format == BookFormat.EPUB) {

@@ -1,5 +1,7 @@
 package com.lantern.library.data
 
+import kotlinx.coroutines.CancellationException
+
 import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
@@ -53,9 +55,43 @@ object DriveLibrary {
         fun call(req: Request): Raw?
     }
 
+    /**
+     * The transfer a call belongs to, tagged by the thread that made it.
+     *
+     * Every Drive call here is blocking and runs on the thread of the coroutine that started it, so
+     * a thread-local is the correct (and cheapest) way to associate a request with the book it is
+     * for without threading an id through every helper. It is what lets "pause this book" abort the
+     * socket instead of waiting for a whole file to finish.
+     */
+    private val callKey = ThreadLocal<String?>()
+
+    /** Live calls, by transfer key, so [abortTransfer] can cancel exactly one book's request. */
+    private val activeCalls = java.util.concurrent.ConcurrentHashMap<String, okhttp3.Call>()
+
+    /**
+     * Aborts whatever request [bookId] currently has open, if any.
+     *
+     * Used by pause: a pause that only redraws a badge is not a pause. Cancelling the call closes
+     * the socket, which makes the writer throw, which releases the pool's permit.
+     */
+    fun abortTransfer(bookId: String) {
+        activeCalls.remove(bookId)?.cancel()
+    }
+
     private object OkHttpTransport : Transport {
         override fun call(req: Request): Raw? = try {
-            http.newCall(req).execute().use { res -> Raw(res.code, res.body?.bytes()) }
+            val key = callKey.get()
+            val call = http.newCall(req)
+            if (!key.isNullOrBlank()) activeCalls[key] = call
+            try {
+                call.execute().use { res -> Raw(res.code, res.body?.bytes()) }
+            } finally {
+                if (!key.isNullOrBlank()) activeCalls.remove(key, call)
+            }
+        } catch (cancelled: CancellationException) {
+            // A pause is thrown out of the progress callback and must reach the caller as a pause,
+            // not be swallowed into "the request failed, try again".
+            throw cancelled
         } catch (_: Exception) {
             null
         }
@@ -252,6 +288,27 @@ object DriveLibrary {
         file: File,
         onAttempt: (attempt: Int, reason: String) -> Unit = { _, _ -> },
         onProgress: (sent: Long, total: Long) -> Unit = { _, _ -> }
+    ): Sent = withTransferKey(book.id) {
+        transferTagged(token, book, file, onAttempt, onProgress)
+    }
+
+    /** Runs [block] with every Drive call it makes attributed to [bookId]. */
+    private inline fun <T> withTransferKey(bookId: String, block: () -> T): T {
+        val previous = callKey.get()
+        callKey.set(bookId)
+        try {
+            return block()
+        } finally {
+            callKey.set(previous)
+        }
+    }
+
+    private fun transferTagged(
+        token: String,
+        book: LibraryBook,
+        file: File,
+        onAttempt: (attempt: Int, reason: String) -> Unit,
+        onProgress: (sent: Long, total: Long) -> Unit
     ): Sent {
         if (!file.exists() || file.length() <= 0L) {
             noteError("upload", 0, "the local file is missing or empty")
@@ -519,6 +576,119 @@ object DriveLibrary {
             return DriveOutcome.Failed
         }
         return DriveOutcome.Ok(fileId)
+    }
+
+    /**
+     * Streams a book's bytes from the account into [dest], continuing from [from] when possible.
+     *
+     * This is the download half of the restore path, and it exists because the old one was a
+     * single blocking `bytes()` call: no progress, no pause, and a 40 MB PDF that either arrived or
+     * did not. Here the response body is copied in 64 KiB chunks, each one reported, each one a
+     * place where the reader's pause takes effect — the connection is closed and the bytes already
+     * written stay on disk as a checkpoint.
+     *
+     * **Range honesty.** The request asks for `bytes=<from>-`. If the service answers 206, the
+     * body really is the tail and is appended. If it answers 200, it ignored the range and is
+     * sending the whole file, so the destination is truncated first — appending a whole file to a
+     * prefix is how a corrupt book gets built that is the right length and the wrong contents.
+     */
+    internal fun streamDownload(
+        token: String,
+        bookId: String,
+        fileId: String,
+        dest: File,
+        from: Long,
+        control: RestoreControl,
+        onBytes: (received: Long, total: Long) -> Unit
+    ): StreamReport {
+        val builder = Request.Builder()
+            .url("$FILES/${enc(fileId)}?alt=media")
+            .header("Authorization", "Bearer $token")
+            .get()
+        if (from > 0L) builder.header("Range", "bytes=$from-")
+        val call = http.newCall(builder.build())
+        activeCalls[bookId] = call
+        try {
+            call.execute().use { res ->
+                if (res.code == 401) {
+                    return StreamReport(0L, -1L, complete = false, paused = false, retryable = false, reason = "Google rejected the sign-in — sign in again")
+                }
+                if (res.code == 416) {
+                    // The checkpoint is past the end of the file: it is stale. Start again.
+                    runCatching { dest.delete() }
+                    return StreamReport(0L, -1L, complete = false, paused = false, retryable = true, reason = "the saved position was out of date")
+                }
+                if (res.code == 404 || res.code == 410) {
+                    return StreamReport(0L, -1L, complete = false, paused = false, retryable = false, reason = "the file is no longer in your account")
+                }
+                if (res.code !in 200..299) {
+                    val retryable = RetryPolicy.classify(res.code) == TransferClass.TRANSIENT
+                    return StreamReport(0L, -1L, complete = false, paused = false, retryable = retryable, reason = "Google Drive returned HTTP ${res.code}")
+                }
+                val body = res.body ?: return StreamReport(0L, -1L, false, false, true, "the account returned no data")
+
+                val resuming = res.code == 206
+                if (from > 0L && !resuming) {
+                    // The service ignored the range and is sending the whole file from zero.
+                    runCatching { dest.delete() }
+                }
+                val total = when {
+                    resuming -> contentRangeTotal(res.header("Content-Range"))
+                    body.contentLength() > 0L -> body.contentLength() + if (resuming) from else 0L
+                    else -> -1L
+                }
+                dest.parentFile?.mkdirs()
+                var written = 0L
+                try {
+                    java.io.FileOutputStream(dest, resuming).use { out ->
+                        body.byteStream().use { input ->
+                            val buffer = ByteArray(64 * 1024)
+                            while (true) {
+                                if (control.paused() || control.cancelled()) {
+                                    // Stop at a chunk boundary: everything on disk is a genuine
+                                    // prefix, so the next attempt can ask to continue from it.
+                                    return StreamReport(
+                                        received = written,
+                                        total = total,
+                                        complete = false,
+                                        paused = true,
+                                        retryable = true,
+                                        reason = "paused"
+                                    )
+                                }
+                                val read = input.read(buffer)
+                                if (read <= 0) break
+                                out.write(buffer, 0, read)
+                                written += read
+                                onBytes(from + written, total)
+                            }
+                            out.flush()
+                        }
+                    }
+                } catch (cancelled: java.io.IOException) {
+                    // A pause aborts the call, which surfaces here as a broken stream. That is not
+                    // a failure of the book: it is the pause working.
+                    if (control.paused() || control.cancelled()) {
+                        return StreamReport(written, total, false, paused = true, retryable = true, reason = "paused")
+                    }
+                    return StreamReport(written, total, false, paused = false, retryable = true, reason = "the connection dropped")
+                }
+                return StreamReport(written, total, complete = true, paused = false, retryable = false)
+            }
+        } catch (t: Throwable) {
+            if (control.paused() || control.cancelled()) {
+                return StreamReport(0L, -1L, false, paused = true, retryable = true, reason = "paused")
+            }
+            return StreamReport(0L, -1L, false, paused = false, retryable = true, reason = t.javaClass.simpleName)
+        } finally {
+            activeCalls.remove(bookId, call)
+        }
+    }
+
+    /** The total size in `Content-Range: bytes 100-999/1000`, or -1 when it is not stated. */
+    private fun contentRangeTotal(header: String?): Long {
+        val slash = header?.substringAfterLast('/', "")?.trim()
+        return slash?.toLongOrNull()?.takeIf { it > 0L } ?: -1L
     }
 
     /**

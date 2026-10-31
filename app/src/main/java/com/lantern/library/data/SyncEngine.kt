@@ -211,7 +211,16 @@ data class TransferProgress(
     val sentBytes: Long = 0L,
     val totalBytes: Long = 0L,
     val startedAt: Long = 0L,
-    val reason: String = ""
+    val reason: String = "",
+    /**
+     * True when these bytes are coming *back* from the account, not going out.
+     *
+     * One progress channel, two directions: a book is never uploading and restoring at the same
+     * time, and the card needs to say "Downloading" or "Restoring" rather than "Uploading" for a
+     * book that is arriving. The direction also decides the cloud-panel bucket: an arriving book
+     * is still a book this phone does not have yet.
+     */
+    val restore: Boolean = false
 ) {
     /**
      * Percent transferred, or `null` when it cannot be known.
@@ -234,8 +243,18 @@ data class TransferProgress(
         fun verifying(bookId: String, total: Long, startedAt: Long) =
             TransferProgress(bookId, TransferPhase.VERIFYING, total, total, startedAt)
 
-        fun paused(bookId: String, sent: Long, total: Long, reason: String = "") =
-            TransferProgress(bookId, TransferPhase.PAUSED, sent, total, 0L, reason)
+        fun paused(bookId: String, sent: Long, total: Long, reason: String = "", restore: Boolean = false) =
+            TransferProgress(bookId, TransferPhase.PAUSED, sent, total, 0L, reason, restore)
+
+        /** Bytes arriving from the account. [sent] counts *downloaded* bytes for a restore. */
+        fun restoring(bookId: String, received: Long, total: Long, startedAt: Long) =
+            TransferProgress(bookId, TransferPhase.UPLOADING, received, total, startedAt, "", restore = true)
+
+        fun restorePreparing(bookId: String, total: Long) =
+            TransferProgress(bookId, TransferPhase.PREPARING, 0L, total, System.currentTimeMillis(), "", restore = true)
+
+        fun restoreVerifying(bookId: String, total: Long, startedAt: Long) =
+            TransferProgress(bookId, TransferPhase.VERIFYING, total, total, startedAt, "", restore = true)
 
         fun failed(bookId: String, sent: Long, total: Long, reason: String) =
             TransferProgress(bookId, TransferPhase.FAILED, sent, total, 0L, reason)

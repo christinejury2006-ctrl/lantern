@@ -56,6 +56,11 @@ object TransferBus {
         .filter { it.phase == TransferPhase.PREPARING || it.phase == TransferPhase.UPLOADING || it.phase == TransferPhase.VERIFYING }
         .mapTo(HashSet()) { it.bookId }
 
+    /** Books whose transfer the reader paused, either direction. */
+    fun pausedIds(): Set<String> = entries.values
+        .filter { it.phase == TransferPhase.PAUSED }
+        .mapTo(HashSet()) { it.bookId }
+
     fun start(bookId: String, totalBytes: Long) = edit {
         entries[bookId] = TransferProgress.preparing(bookId, totalBytes)
     }
@@ -76,6 +81,35 @@ object TransferBus {
         edit { entries[bookId] = next }
     }
 
+    /**
+     * A restore: the reader asked for a book back, and bytes are arriving.
+     *
+     * Same map, same throttling, same "no invented numbers" rule — the difference is only that
+     * [TransferProgress.sentBytes] counts downloaded bytes and the card says "Downloading".
+     * A separate bus for the other direction would be a second transfer system to keep in sync.
+     */
+    fun restorePreparing(bookId: String, totalBytes: Long) = edit {
+        entries[bookId] = TransferProgress.restorePreparing(bookId, totalBytes)
+    }
+
+    fun restoring(bookId: String, receivedBytes: Long, totalBytes: Long) {
+        val previous = entries[bookId]
+        val startedAt = previous?.startedAt?.takeIf { it > 0L } ?: System.currentTimeMillis()
+        val next = TransferProgress.restoring(bookId, receivedBytes, totalBytes, startedAt)
+        if (previous != null && previous.phase == TransferPhase.UPLOADING && previous.restore &&
+            previous.percent == next.percent
+        ) {
+            return
+        }
+        edit { entries[bookId] = next }
+    }
+
+    fun restoreVerifying(bookId: String, totalBytes: Long) = edit {
+        val previous = entries[bookId]
+        val startedAt = previous?.startedAt?.takeIf { it > 0L } ?: System.currentTimeMillis()
+        entries[bookId] = TransferProgress.restoreVerifying(bookId, totalBytes, startedAt)
+    }
+
     /** Every byte is out; the account is being asked to prove it. */
     fun verifying(bookId: String, totalBytes: Long) = edit {
         val previous = entries[bookId]
@@ -83,8 +117,8 @@ object TransferBus {
         entries[bookId] = TransferProgress.verifying(bookId, totalBytes, startedAt)
     }
 
-    fun paused(bookId: String, sentBytes: Long, totalBytes: Long, reason: String = "") = edit {
-        entries[bookId] = TransferProgress.paused(bookId, sentBytes, totalBytes, reason)
+    fun paused(bookId: String, sentBytes: Long, totalBytes: Long, reason: String = "", restore: Boolean = false) = edit {
+        entries[bookId] = TransferProgress.paused(bookId, sentBytes, totalBytes, reason, restore)
     }
 
     fun failed(bookId: String, sentBytes: Long, totalBytes: Long, reason: String) = edit {

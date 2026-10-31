@@ -28,7 +28,18 @@ interface UploadListener {
     fun onSkipped(book: LibraryBook, reason: String) {}
     /** One attempt failed and will be repeated: transient, so the card keeps its percentage. */
     fun onRetry(book: LibraryBook, attempt: Int, reason: String) {}
+
+    /** The reader paused this book. Its bytes stop moving and its slot is released. */
+    fun onPausedByReader(book: LibraryBook, sent: Long, total: Long) {}
 }
+
+/**
+ * Thrown out of a progress callback to stop a transfer the reader paused.
+ *
+ * A CancellationException so nothing above treats it as a failure of the book: the catch in the
+ * job maps it to "paused", keeps the journal entry, and releases the permit.
+ */
+class PauseTransfer : CancellationException("paused by the reader")
 
 /**
  * Bounded, per-book upload and verification.
@@ -89,6 +100,49 @@ class UploadPool(
     private val verifySlots = Semaphore(maxConcurrentVerifications)
     private val inFlight = ConcurrentHashMap.newKeySet<String>()
 
+    /**
+     * Books the reader paused.
+     *
+     * A pause has to stop bytes, not just redraw a badge. The transfer is asked to stop at the
+     * next chunk boundary (by throwing out of the progress callback) and the socket is aborted, so
+     * the permit is released and the book stops occupying one of the three slots. It is not a
+     * resumable HTTP session — Drive's simple upload endpoint does not offer one — so the resume
+     * re-sends the file, which is safe because every attempt looks the book up by `loreId` first
+     * and replaces rather than duplicates.
+     */
+    private val paused = ConcurrentHashMap.newKeySet<String>()
+
+    /** Running jobs, so a pause can also cancel the coroutine that owns the blocking call. */
+    private val jobs = ConcurrentHashMap<String, Job>()
+
+    /** True while this book is paused by the reader. */
+    fun isPaused(bookId: String): Boolean = bookId in paused
+
+    /**
+     * Stops the transfer for one book, now.
+     *
+     * Returns false when nothing was in flight for it, which the caller handles by remembering the
+     * pause in the queue instead: a book paused before its turn must not start when its turn comes.
+     */
+    fun pause(bookId: String): Boolean {
+        paused += bookId
+        val job = jobs[bookId]
+        // Abort the request first: a blocking body write only notices cancellation between chunks,
+        // and a reader who tapped Pause should not wait for a whole book to finish uploading.
+        DriveLibrary.abortTransfer(bookId)
+        val live = job?.isActive == true
+        if (live && job != null) job.cancel(CancellationException("paused by the reader"))
+        return live
+    }
+
+    /** Allows a paused book to be sent again. The caller starts a new pass for it. */
+    fun resume(bookId: String) {
+        paused -= bookId
+    }
+
+    /** True while any transfer of this book is running. */
+    private fun isPausing(bookId: String): Boolean = bookId in paused
+
     /** For tests and diagnostics: is a transfer for this book running right now? */
     fun isInFlight(bookId: String): Boolean = bookId in inFlight
 
@@ -129,26 +183,31 @@ class UploadPool(
         // not theoretical: it made a batch report zero confirmations while the listener had
         // already verified every book, which is exactly the "0 confirmed, 2 failed" kind of lie
         // this whole path exists to stop.
-        val jobs = ArrayList<Job>(books.size)
+        val launched = ArrayList<Job>(books.size)
         books.distinctBy { it.id }.forEach { book ->
+            // A paused book must not quietly start because a later pass asked for it.
+            if (isPausing(book.id)) {
+                skipped += book
+                listener.onSkipped(book, "paused by the reader")
+                return@forEach
+            }
             if (!inFlight.add(book.id)) {
                 skipped += book
                 listener.onSkipped(book, "already uploading")
                 return@forEach
             }
-            jobs += launch(Dispatchers.IO) {
+            val job = launch(Dispatchers.IO) {
                 try {
                     uploadOne(token, book, listener, confirmed, failed, unauthorized)
                 } catch (cancelled: CancellationException) {
-                    // The app went away, or the caller cancelled: the book is not broken, it is
-                    // interrupted. Say so and let the cancellation propagate.
+                    // Two quite different things arrive here, and the reader is told which one:
+                    // a pause they asked for, or the app going away mid-transfer. Neither is a
+                    // failure of the book, and its journal entry survives either way.
                     val progress = TransferBus.progressFor(book.id)
-                    listener.onPaused(
-                        book,
-                        progress?.sentBytes ?: 0L,
-                        progress?.totalBytes ?: 0L,
-                        "interrupted"
-                    )
+                    val sent = progress?.sentBytes ?: 0L
+                    val total = progress?.totalBytes ?: 0L
+                    if (isPausing(book.id)) listener.onPausedByReader(book, sent, total)
+                    else listener.onPaused(book, sent, total, "interrupted")
                     throw cancelled
                 } catch (t: Throwable) {
                     // A bug in one book must not cost the others their upload.
@@ -163,11 +222,14 @@ class UploadPool(
                     listener.onFailed(book, failure, TransferBus.progressFor(book.id)?.sentBytes ?: 0L)
                 } finally {
                     inFlight.remove(book.id)
+                    jobs.remove(book.id)
                 }
             }
+            jobs[book.id] = job
+            launched += job
         }
         // Wait for every book. Only then does the result describe the pass that actually happened.
-        jobs.joinAll()
+        launched.joinAll()
 
         Result(
             confirmed = confirmed.toMap(),
@@ -214,7 +276,12 @@ class UploadPool(
                 DriveLibrary.transfer(
                     token, book, file,
                     onAttempt = { attempt, reason -> listener.onRetry(book, attempt, reason) },
-                    onProgress = { sentBytes, size -> listener.onProgress(book, sentBytes, size) }
+                    onProgress = { sentBytes, size ->
+                        // The pause check lives here because this is the only place that runs
+                        // between chunks of real bytes. Throwing out of it closes the request.
+                        if (isPausing(book.id)) throw PauseTransfer()
+                        listener.onProgress(book, sentBytes, size)
+                    }
                 )
             }
         }

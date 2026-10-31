@@ -135,6 +135,18 @@ sealed class RestoreOutcome {
     /** The download was rejected or failed. The account copy is untouched either way. */
     data class Failed(val reason: String) : RestoreOutcome()
 
+    /**
+     * Stopped because the reader asked it to.
+     *
+     * [resumable] says whether the bytes received so far are kept as a checkpoint. When it is
+     * false the partial file has already been thrown away, so resuming restarts from zero — which
+     * is the honest thing to do when the server would not let us continue.
+     */
+    data class Paused(val received: Long, val total: Long, val resumable: Boolean) : RestoreOutcome()
+
+    /** Another restore for this book is already running. Two must never write the same file. */
+    object Busy : RestoreOutcome()
+
     object NotFound : RestoreOutcome()
 }
 
@@ -270,11 +282,81 @@ interface DownloadHost {
     /** Downloads the book's file into [dest]. False on any failure; the file may be absent or partial. */
     suspend fun fetchCloud(book: LibraryBook, dest: File): Boolean
 
+    /**
+     * Streams the account's copy into [dest], continuing from [from] when it can.
+     *
+     * The default has no streaming transport to offer: it fetches the whole file and reports it as
+     * complete, which is exactly what the older single-shot path did. The store overrides it with a
+     * ranged, cancellable download so the reader gets real bytes, a pause that stops the transfer
+     * and a resume that continues from the checkpoint.
+     */
+    suspend fun streamCloud(
+        book: LibraryBook,
+        dest: File,
+        from: Long,
+        control: RestoreControl,
+        onBytes: (received: Long, total: Long) -> Unit
+    ): StreamReport {
+        if (from > 0L) dest.delete()
+        if (!fetchCloud(book, dest)) {
+            return StreamReport(received = 0L, total = -1L, complete = false, paused = false, retryable = true, reason = "the download failed")
+        }
+        val size = if (dest.exists()) dest.length() else 0L
+        onBytes(size, book.backupBytes.takeIf { it > 0L } ?: size)
+        return StreamReport(
+            received = size,
+            total = book.backupBytes.takeIf { it > 0L } ?: size,
+            complete = true,
+            paused = false,
+            retryable = false,
+            reason = ""
+        )
+    }
+
+    /** Bytes already on disk for a paused restore of this book, or 0 when there are none. */
+    fun resumeOffset(bookId: String): Long = 0L
+
+    /** Remembers how far a restore got, so a restart can offer to continue instead of restarting. */
+    fun noteRestore(bookId: String, received: Long, total: Long) {}
+
+    /** The restore finished or was abandoned: nothing is left to resume. */
+    fun clearRestore(bookId: String) {}
+
+    /** Publishes restore progress. Called between chunks, on a background thread. */
+    fun noteRestoreProgress(bookId: String, received: Long, total: Long, phase: TransferPhase) {}
+
     /** Recomputes the backup audit and publishes it to the UI. */
     fun refreshAudit()
 
     /** A one-line message for the reader (toast + diagnosis). */
     fun note(message: String)
+}
+
+/** One streaming download's outcome. */
+data class StreamReport(
+    /** Bytes written into the destination by *this* call. */
+    val received: Long,
+    /** The full size of the file when the service said so, or -1. Never guessed. */
+    val total: Long,
+    /** The whole file is on disk now. */
+    val complete: Boolean,
+    /** The reader paused: stop here, keep the checkpoint. */
+    val paused: Boolean,
+    /** Worth trying again (a dropped socket, a timeout). */
+    val retryable: Boolean,
+    val reason: String = ""
+)
+
+/**
+ * What a running restore checks between chunks.
+ *
+ * Pause is implemented by asking the transfer to stop at the next chunk boundary and closing the
+ * connection — not by hiding a spinner. The bytes already written stay in the `.restore` file as a
+ * checkpoint, and the next attempt asks the service to continue from that offset.
+ */
+interface RestoreControl {
+    fun paused(): Boolean
+    fun cancelled(): Boolean
 }
 
 /** Whether the account still holds the file a book points at. */
@@ -289,6 +371,15 @@ enum class AccountLink {
 
 /** The crash-safe sequences. See the file comment for why the order is what it is. */
 class DownloadService(private val host: DownloadHost) {
+
+    /** Books with a restore running. Also the single-flight guard: two per book is never right. */
+    private val bookIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /** Pauses the reader asked for, honoured between chunks. */
+    private val pauseRequests = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /** Cancellations: the app is going away, or the book left the library. */
+    private val cancelRequests = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     /**
      * Deletes a verified book's **local file only**.
@@ -375,14 +466,101 @@ class DownloadService(private val host: DownloadHost) {
 
         DownloadRules.restoreBlocker(book)?.let { return RestoreOutcome.Refused(it) }
 
+        // One restore per book. Two writers on one `.restore` file would interleave their bytes
+        // into something that passes a size check and fails a checksum, or worse, nearly passes.
+        if (!bookIds.add(book.id)) return RestoreOutcome.Busy
+        val outcome = try {
+            streamInto(book)
+        } finally {
+            bookIds.remove(book.id)
+        }
+        // A pause keeps its checkpoint so resuming can continue from it. Everything else — done,
+        // refused, failed — leaves nothing to resume.
+        if (outcome !is RestoreOutcome.Paused) host.clearRestore(book.id)
+        return outcome
+    }
+
+    /** The transfer half: resume, download, pause, retry, and only then verify and commit. */
+    private suspend fun streamInto(book: LibraryBook): RestoreOutcome {
         val dest = File(host.booksDir, BookFiles.cacheNameFor(book.id, book.format))
         val temp = File(host.booksDir, dest.name + ".restore")
-        // A `.restore` file from an earlier attempt is never evidence of anything.
-        temp.delete()
-        try {
-            if (!host.fetchCloud(book, temp)) {
-                return RestoreOutcome.Failed("your account did not return the file. Check your connection and try again")
+
+        // Resume only from a checkpoint the journal agrees with. A `.restore` file whose length
+        // does not match what was recorded belongs to some other attempt: continuing from it would
+        // append the wrong bytes to the wrong prefix, which is exactly how a corrupt book gets
+        // committed. It is discarded instead.
+        var from = if (temp.exists()) temp.length() else 0L
+        val recorded = host.resumeOffset(book.id)
+        if (from > 0L && recorded != from) {
+            runCatching { temp.delete() }
+            from = 0L
+        }
+        if (from > 0L && book.backupBytes > 0L && from > book.backupBytes) {
+            runCatching { temp.delete() }
+            from = 0L
+        }
+
+        val total = book.backupBytes.takeIf { it > 0L } ?: -1L
+        val control = object : RestoreControl {
+            override fun paused(): Boolean = book.id in pauseRequests
+            override fun cancelled(): Boolean = book.id in cancelRequests
+        }
+
+        var attempts = 0
+        while (attempts < MAX_STREAM_ATTEMPTS) {
+            attempts++
+            host.noteRestoreProgress(book.id, from, total, TransferPhase.PREPARING)
+            if (control.paused() || control.cancelled()) return pausedOutcome(book, temp, from, total)
+
+            val report = host.streamCloud(book, temp, from, control) { received, size ->
+                host.noteRestore(book.id, received, size)
+                host.noteRestoreProgress(book.id, received, size, TransferPhase.UPLOADING)
             }
+            val onDisk = if (temp.exists()) temp.length() else 0L
+
+            if (report.paused || control.paused() || control.cancelled()) {
+                return pausedOutcome(book, temp, onDisk, report.total.takeIf { it > 0L } ?: total)
+            }
+            if (report.complete) {
+                return verifyAndCommit(book, temp, dest)
+            }
+            from = onDisk
+            host.noteRestore(book.id, from, total)
+            if (!report.retryable) {
+                // A refusal will not improve by repeating it, and the partial file is not a book.
+                runCatching { temp.delete() }
+                return RestoreOutcome.Failed(
+                    report.reason.ifBlank { "your account did not return the file" }
+                )
+            }
+        }
+        // Out of attempts. The partial file is not a book and must not be left where a later
+        // attempt — or the reader's eyes — could mistake it for one.
+        runCatching { temp.delete() }
+        return RestoreOutcome.Failed("the download kept stopping — check your connection and try again")
+    }
+
+    /**
+     * Keeps the checkpoint only when the transfer can actually continue from it.
+     *
+     * The `from` offset came from the transport, so if the server honoured the range request the
+     * bytes on disk are a genuine prefix and resuming is safe. A pause before any byte arrived
+     * leaves nothing to keep.
+     */
+    private fun pausedOutcome(book: LibraryBook, temp: File, received: Long, total: Long): RestoreOutcome {
+        host.noteRestore(book.id, received, total)
+        host.noteRestoreProgress(book.id, received, total, TransferPhase.PAUSED)
+        if (received <= 0L) {
+            runCatching { temp.delete() }
+            return RestoreOutcome.Paused(0L, total, resumable = false)
+        }
+        return RestoreOutcome.Paused(received, total, resumable = true)
+    }
+
+    /** Size, checksum, container: three independent reasons to refuse a file. */
+    private suspend fun verifyAndCommit(book: LibraryBook, temp: File, dest: File): RestoreOutcome {
+        host.noteRestoreProgress(book.id, temp.length(), book.backupBytes, TransferPhase.VERIFYING)
+        try {
             if (!temp.exists() || temp.length() <= 0L) {
                 return RestoreOutcome.Failed("the account returned an empty file")
             }
@@ -396,7 +574,8 @@ class DownloadService(private val host: DownloadHost) {
                 return RestoreOutcome.Failed("the copy in your account does not match the checksum of the file that was removed")
             }
             when (val check = BookFiles.validate(temp, book.format)) {
-                is BookFiles.Check.Invalid -> return RestoreOutcome.Failed("the downloaded file is not a valid book (${check.reason})")
+                is BookFiles.Check.Invalid ->
+                    return RestoreOutcome.Failed("the downloaded file is not a valid book (${check.reason})")
                 BookFiles.Check.Ok -> Unit
             }
             // Last look before anything is overwritten: a good local file is never replaced.
@@ -423,9 +602,40 @@ class DownloadService(private val host: DownloadHost) {
             host.note("\u201C${book.title.ifBlank { "Book" }}\u201D restored from your account.")
             return RestoreOutcome.Restored(updated, dest.length())
         } finally {
-            // Interrupted or rejected: no `.restore` remnant is left behind for a later retry to
-            // trip over, and the reader can simply try again.
+            // Verified or rejected: either way the `.restore` file has done its job. A rejection
+            // never leaves a partial file lying around for a later attempt to trust.
             if (temp.exists()) runCatching { temp.delete() }
         }
+    }
+
+    /** True when a restore for this book is running right now. */
+    fun isRestoring(bookId: String): Boolean = bookId in bookIds
+
+    /**
+     * Asks the running restore for [bookId] to stop at the next chunk boundary.
+     *
+     * The request is remembered even when no transfer is running yet, so a pause tapped a
+     * millisecond before the download starts is not lost.
+     */
+    fun pause(bookId: String) {
+        pauseRequests += bookId
+    }
+
+    /** Clears a pause. The caller starts the restore again; it continues from the checkpoint. */
+    fun resume(bookId: String) {
+        pauseRequests -= bookId
+    }
+
+    fun isPaused(bookId: String): Boolean = bookId in pauseRequests
+
+    /** Stops a restore for good (the app is going away, or the book left the library). */
+    fun cancel(bookId: String) {
+        cancelRequests += bookId
+        pauseRequests -= bookId
+    }
+
+    private companion object {
+        /** Three transport attempts, then the reader is told rather than kept waiting. */
+        const val MAX_STREAM_ATTEMPTS = 3
     }
 }

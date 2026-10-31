@@ -198,7 +198,8 @@ class UploadPoolTest {
     // What the app is told, recorded
     // ---------------------------------------------------------------------------------------
 
-    private class Recorder : UploadListener {
+    /** Open so a test can pause from inside a progress callback. */
+    private open class Recorder : UploadListener {
         val started = ConcurrentHashMap<String, Long>()
         val progress = ConcurrentHashMap<String, MutableList<Pair<Long, Long>>>()
         val verifying = CopyOnWriteArraySet<String>()

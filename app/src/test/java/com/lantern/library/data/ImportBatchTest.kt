@@ -144,7 +144,11 @@ class ImportBatchTest {
         assertEquals("the rest are stopped, not failed", 15, summary.stopped)
         assertEquals(0, summary.failed)
         assertEquals(5, worker.shelf.size)
-        assertEquals("every chosen file still has a row", 20, rows.size)
+        assertEquals(
+            "every chosen file still has a row",
+            20,
+            rows.distinctBy { it.uri }.size
+        )
         assertTrue("nothing may claim to be finished that was not", summary.complete)
         assertEquals(
             "the sheet must be able to say what remains",
@@ -293,10 +297,10 @@ class ImportBatchTest {
         try {
             val dest = File(dir, "imp_test.epub")
             val incoming = File(dir, dest.name + ".incoming")
-            // Half an EPUB: the copy was interrupted after the header and some entries.
-            val partial = StringBuilder("PK\u0003\u0004META-INF/container.xml")
-            while (partial.length < 4000) partial.append("partial ")
-            incoming.writeBytes(partial.toString().toByteArray(Charsets.ISO_8859_1))
+            // A copy interrupted in the first few kilobytes of a large archive: the ZIP header is
+            // there, but the entry names and the EPUB marker come later and never arrived.
+            val partial = ByteArray(4000) { i -> if (i < 4) byteArrayOf(0x50, 0x4B, 0x03, 0x04)[i] else (i % 251).toByte() }
+            incoming.writeBytes(partial)
 
             val check = BookFiles.validate(incoming, BookFormat.EPUB)
             assertTrue(

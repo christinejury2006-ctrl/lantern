@@ -267,6 +267,7 @@ class ImportMeasureTest {
         // Every file is 256 KiB and every stream returns 1000-byte reads, so this exercises both
         // the size-skip path and the ragged-read path at the batch size that failed.
         var total = 0L
+        var expected = 0L
         val fingerprints = ArrayList<String>(250)
         // One file exists in memory at a time: the loop body is the only place a book's bytes are
         // ever held, which is the property a 200+ selection depends on.
@@ -276,6 +277,7 @@ class ImportMeasureTest {
             val result = ImportMeasure.scan(stream, data.size.toLong())
             assertNotNull("file $i must be measured", result)
             total += result!!.fingerprint.bytes
+            expected += data.size
             fingerprints += result.fingerprint.key
             assertTrue(
                 "each file costs at most its windows: read ${stream.bytesRead} of ${data.size}",
@@ -283,7 +285,7 @@ class ImportMeasureTest {
                     2L * ImportMeasure.BUFFER_BYTES
             )
         }
-        assertEquals(250L * 256 * 1024, total)
+        assertEquals("every byte of every file must be accounted for", expected, total)
         assertEquals("every file has its own fingerprint", 250, fingerprints.toSet().size)
         fingerprints.forEach { assertTrue("no fingerprint may be empty", it.isNotBlank()) }
     }

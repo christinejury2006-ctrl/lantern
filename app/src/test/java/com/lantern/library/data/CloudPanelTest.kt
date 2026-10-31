@@ -16,9 +16,14 @@ import java.io.File
  * never counted as uploading, a paused book is never counted as uploading, and 100% of the bytes is
  * never mistaken for a verified copy.
  *
- * Pure functions only: no files, no network, no clock.
+ * The only thing these tests touch on disk is a small file per book, because "has a local copy" is
+ * a fact about the file system rather than about a record. No network, no clock.
  */
 class CloudPanelTest {
+
+    private companion object {
+        const val LOCAL_BYTES = 64
+    }
 
     /** A real directory, because "has a local file" is a fact about the file system. */
     private lateinit var dir: File
@@ -37,7 +42,7 @@ class CloudPanelTest {
 
     /** Writes a small file and returns its path: the book genuinely has bytes on this phone. */
     private fun localPath(id: String): String =
-        File(dir, "$id.epub").apply { writeBytes(ByteArray(64) { 1 }) }.absolutePath
+        File(dir, "$id.epub").apply { writeBytes(ByteArray(LOCAL_BYTES) { 1 }) }.absolutePath
 
     private fun book(
         id: String,
@@ -46,7 +51,9 @@ class CloudPanelTest {
         local: Boolean = true,
         driveId: String? = "drive-$id",
         backupAt: Long = 1L,
-        backupBytes: Long = 100L,
+        // Exactly the size of the file `localPath` writes: a record whose size disagrees with the
+        // file is not a confirmation of *these* bytes, and the panel must not call it verified.
+        backupBytes: Long = LOCAL_BYTES,
         pending: Boolean = false,
         failed: Boolean = false
     ) = LibraryBook(

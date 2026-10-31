@@ -311,17 +311,19 @@ object BookIo {
             cleanImportTitle(name)
         }
         val pages = if (format == BookFormat.PDF) pdfPageCount(dest) else estimateEpubPages(dest)
-        return LibraryBook(
-            id = id,
-            title = title,
-            author = "Imported",
-            remoteCover = if (coverOk) coverFile.absolutePath else null,
-            format = format,
-            origin = BookOrigin.IMPORT,
-            filePath = dest.absolutePath,
-            pageCount = pages.coerceAtLeast(1),
-            category = "Imported",
-            synopsis = "Imported from this phone."
+        return ImportedFile.Ok(
+            LibraryBook(
+                id = id,
+                title = title,
+                author = "Imported",
+                remoteCover = if (coverOk) coverFile.absolutePath else null,
+                format = format,
+                origin = BookOrigin.IMPORT,
+                filePath = dest.absolutePath,
+                pageCount = pages.coerceAtLeast(1),
+                category = "Imported",
+                synopsis = "Imported from this phone."
+            )
         )
     }
 

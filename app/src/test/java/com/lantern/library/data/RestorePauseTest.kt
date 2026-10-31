@@ -294,7 +294,8 @@ class RestorePauseTest {
     // 5
     @Test
     fun `a checkpoint larger than the cloud file is thrown away`() {
-        val book = remoteBook(bytes = epubBytes("small", size = 6_000))
+        val cloudBytes = epubBytes("small", size = 6_000)
+        val book = remoteBook(bytes = cloudBytes)
         tempFile().writeBytes(ByteArray(9_000) { 3 })
         host.journal[book.id] = 9_000L
 
@@ -302,7 +303,7 @@ class RestorePauseTest {
 
         assertTrue("expected Restored, got $outcome", outcome is RestoreOutcome.Restored)
         assertEquals("a checkpoint past the end is not a checkpoint", 0L, host.streamedFrom.first())
-        assertEquals(6_000L, localFile()!!.length())
+        assertEquals(cloudBytes.size.toLong(), localFile()!!.length())
     }
 
     // 6

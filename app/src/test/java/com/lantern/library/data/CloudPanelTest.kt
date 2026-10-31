@@ -1,9 +1,12 @@
 package com.lantern.library.data
 
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
+import java.io.File
 
 /**
  * The four numbers on the cloud panel.
@@ -16,6 +19,25 @@ import org.junit.Test
  * Pure functions only: no files, no network, no clock.
  */
 class CloudPanelTest {
+
+    /** A real directory, because "has a local file" is a fact about the file system. */
+    private lateinit var dir: File
+
+    @Before
+    fun setUp() {
+        dir = File.createTempFile("lore-cloud", "").let { f ->
+            f.delete(); f.mkdirs(); f
+        }
+    }
+
+    @After
+    fun tearDown() {
+        dir.deleteRecursively()
+    }
+
+    /** Writes a small file and returns its path: the book genuinely has bytes on this phone. */
+    private fun localPath(id: String): String =
+        File(dir, "$id.epub").apply { writeBytes(ByteArray(64) { 1 }) }.absolutePath
 
     private fun book(
         id: String,
@@ -33,9 +55,7 @@ class CloudPanelTest {
         author = "Writer",
         format = format,
         origin = origin,
-        // A real path is not needed: `localFileAvailable` checks the path, so "no file" is the
-        // absent path and "file" is a path this process will never open during a pure test.
-        filePath = if (local) "/nonexistent/$id.epub" else null,
+        filePath = if (local) localPath(id) else null,
         pageCount = 10,
         driveFileId = driveId,
         backupAt = backupAt,

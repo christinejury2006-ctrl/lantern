@@ -294,7 +294,12 @@ internal fun LanternRoot(store: LanternStore) {
                     onRestoreDownload = { id -> store.restoreDownload(id) },
                     removingIds = store.removingIds,
                     restoringIds = store.restoringIds,
-                    removalBlocker = { store.downloadRemovalBlocker(it) }
+                    removalBlocker = { store.downloadRemovalBlocker(it) },
+                    pausedUploadIds = store.pausedUploads,
+                    onPauseUpload = { store.pauseUpload(it) },
+                    onResumeUpload = { store.resumeUpload(it) },
+                    onPauseRestore = { store.pauseRestore(it) },
+                    onResumeRestore = { store.resumeRestore(it) }
                 )
                 Route.Library -> LibraryScreen(
                     books = store.books,

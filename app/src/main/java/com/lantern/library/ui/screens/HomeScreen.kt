@@ -108,7 +108,13 @@ fun ReadingNookScreen(
     removingIds: Set<String> = emptySet(),
     restoringIds: Set<String> = emptySet(),
     /** Why a removal is not allowed for a book, or null when it is. The store owns the rules. */
-    removalBlocker: (LibraryBook) -> String? = { null }
+    removalBlocker: (LibraryBook) -> String? = { null },
+    /** Uploads the reader paused, so the sheet can offer Resume rather than Try again. */
+    pausedUploadIds: Set<String> = emptySet(),
+    onPauseUpload: (String) -> Unit = {},
+    onResumeUpload: (String) -> Unit = {},
+    onPauseRestore: (String) -> Unit = {},
+    onResumeRestore: (String) -> Unit = {}
 ) {
     val palette = nookPalette(theme)
     // Which book's backup detail is open. Local to Home: opening it must not touch the shelf.
@@ -178,6 +184,11 @@ fun ReadingNookScreen(
                 removing = detailBook.id in removingIds,
                 restoring = detailBook.id in restoringIds,
                 removalBlocker = removalBlocker(detailBook),
+                pausedByReader = detailBook.id in pausedUploadIds,
+                onPauseUpload = { onPauseUpload(detailBook.id) },
+                onResumeUpload = { onResumeUpload(detailBook.id) },
+                onPauseRestore = { onPauseRestore(detailBook.id) },
+                onResumeRestore = { onResumeRestore(detailBook.id) },
                 onDismiss = { detailFor = null }
             )
         }
@@ -513,6 +524,12 @@ private fun BackupDetailSheet(
     restoring: Boolean,
     /** Non-null when the store refuses removal, with the reason to show. */
     removalBlocker: String?,
+    /** The reader paused this book's upload. */
+    pausedByReader: Boolean = false,
+    onPauseUpload: () -> Unit = {},
+    onResumeUpload: () -> Unit = {},
+    onPauseRestore: () -> Unit = {},
+    onResumeRestore: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val state = BackupAudit.badge(book, transfer, online = online, queued = queuedReason != null)
@@ -546,10 +563,37 @@ private fun BackupDetailSheet(
                     "Transfer",
                     when {
                         transfer == null -> if (fileBytes > 0L) "${Transfers.size(fileBytes)} on this phone" else "nothing to send"
-                        else -> Transfers.transferred(transfer.sentBytes, transfer.totalBytes)
+                        // The direction is stated, because one progress channel carries both and a
+                        // book arriving must not read as a book leaving.
+                        else -> (if (transfer.restore) "Downloading " else "Uploading ") +
+                            Transfers.transferred(transfer.sentBytes, transfer.totalBytes)
                     },
                     palette
                 )
+                // Pause / resume, offered only while there is something real to pause. The bytes
+                // stop at the transport; the checkpoint (restore) or the journal (upload) keeps
+                // what has already moved.
+                val canPause = transfer != null &&
+                    transfer.phase in listOf(TransferPhase.PREPARING, TransferPhase.UPLOADING, TransferPhase.VERIFYING)
+                val canResume = transfer != null && transfer.phase == TransferPhase.PAUSED &&
+                    (transfer.restore || pausedByReader)
+                if (canPause) {
+                    Spacer(Modifier.height(12.dp))
+                    SheetButton(
+                        if (transfer!!.restore) "Pause download" else "Pause upload",
+                        palette.glass,
+                        palette.ink,
+                        if (transfer.restore) onPauseRestore else onPauseUpload
+                    )
+                } else if (canResume) {
+                    Spacer(Modifier.height(12.dp))
+                    SheetButton(
+                        if (transfer!!.restore) "Resume download" else "Resume upload",
+                        palette.accent,
+                        palette.accentInk,
+                        if (transfer.restore) onResumeRestore else onResumeUpload
+                    )
+                }
                 if (transfer != null && transfer.percent != null) {
                     SheetRow("Progress", "${transfer.percent}%", palette)
                 }

@@ -658,9 +658,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     // Multi-select import
     // ---------------------------------------------------------------------------------------
     //
-    // The picker can return a list; the shop floor used to handle exactly one file. Importing is
-    // now: measure everything (no copying), show the review sheet with duplicates already marked,
-    // then copy each file independently so one bad file cannot take the others down with it.
+    // The picker can return a list, and a reader with two hundred books will hand it one. The
+    // sequence is: measure every file (bounded reads, nothing retained), decide what is worth
+    // copying (duplicates by content, and whether there is room on the shelf), then copy one file
+    // at a time through [ImportBatch] so a failure is one row and never the whole batch.
 
     /** The selection, decided but not yet imported. Null when the review sheet is closed. */
     var importPlan by mutableStateOf<ImportPlan?>(null)
@@ -674,43 +675,102 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     var importBusy by mutableStateOf(false)
         private set
 
+    /** How many of the chosen files have been measured, and how many there are. */
+    var importMeasured by mutableStateOf(0)
+        private set
+    var importToMeasure by mutableStateOf(0)
+        private set
+
+    /** Set by the reader's Stop button; the batch checks it between and inside files. */
+    @Volatile private var importStopRequested = false
+
     /** Measuring can be cancelled: the reader changed their mind before anything was copied. */
-    private var importGeneration = 0
+    @Volatile private var importGeneration = 0
 
     private val importRunning = java.util.concurrent.atomic.AtomicBoolean(false)
 
-    /** Measures [uris] and opens the review sheet. Nothing is copied yet. */
+    /**
+     * True while a confirmed batch is running, so the sheet can offer Stop rather than Cancel.
+     *
+     * Compose state rather than a read of the guard: a flag read through a getter would never
+     * invalidate the sheet, and the Stop button would appear only after some other row changed.
+     */
+    var isImporting by mutableStateOf(false)
+        private set
+
+    /**
+     * Measures [uris] and opens the review sheet. Nothing is copied yet.
+     *
+     * Measurement is sequential and incremental: one file open at a time, 128 KiB read per file,
+     * each candidate published to the sheet as soon as it is known. That is what keeps a 200-file
+     * selection from becoming 200 open streams, 200 hashers and a stalled main thread — the shape
+     * of the crash that started this round.
+     */
     fun beginImport(uris: List<Uri>) {
         if (uris.isEmpty()) return
         val gen = ++importGeneration
+        importStopRequested = false
+        // A picker can hand the same document over twice (a folder and a file chosen together);
+        // measuring it twice would also show it twice in the sheet.
+        val unique = uris.distinct()
         viewModelScope.launch {
             importBusy = true
-            val measured = withContext(Dispatchers.IO) {
-                uris.map { uri -> runCatching { BookIo.measure(getApplication(), uri) }.getOrNull() }
-                    .filterNotNull()
+            importMeasured = 0
+            importToMeasure = unique.size
+            importRows = emptyList()
+            // Ask for a durable read grant on every chosen document *before* the first read.
+            // A 200-file batch can outlive the transient grant that arrives with the picker result,
+            // and a revoked grant in the middle of the run is exactly the kind of failure that
+            // looks like "the file is corrupt". Best effort: a provider that does not support it
+            // simply keeps the transient grant, which is enough while the app is in front.
+            withContext(Dispatchers.IO) {
+                unique.forEach { uri ->
+                    runCatching {
+                        getApplication<Application>().contentResolver.takePersistableUriPermission(
+                            uri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        )
+                    }
+                }
+            }
+            val capacity = withContext(Dispatchers.Main) { remainingUserBookCapacity() }
+            val measured = ArrayList<ImportCandidate>(unique.size)
+            withContext(Dispatchers.IO) {
+                unique.forEach { uri ->
+                    if (gen != importGeneration) return@withContext
+                    val candidate = runCatching {
+                        BookIo.measure(getApplication(), uri) { gen != importGeneration }
+                    }.getOrNull()
+                    if (candidate != null) measured += candidate
+                    val done = measured.size
+                    withContext(Dispatchers.Main) { if (gen == importGeneration) importMeasured = done }
+                }
             }
             if (gen != importGeneration) return@launch
             val plan = withContext(Dispatchers.IO) {
-                ImportPlanner.plan(measured) { candidate -> findImportDuplicate(candidate) }
+                ImportPlanner.plan(measured, capacity) { candidate -> findImportDuplicate(candidate) }
             }
             importBusy = false
             importRows = emptyList()
             importPlan = plan
             SyncDiag.mark(
                 "Import review",
-                "${plan.total} chosen, ${plan.readyCount} ready, ${plan.duplicateCount} already here"
+                "${plan.total} chosen, ${plan.readyCount} ready, ${plan.duplicateCount} already here, " +
+                    "${plan.overflowCount} over the limit"
             )
         }
     }
 
     /**
-     * A book already on the shelf with the same bytes.
+     * A book already on the shelf with these bytes.
      *
-     * Size first, hash second: comparing two hundred lengths is free, hashing two hundred files is
-     * not, and a size collision is rare enough that the extra read almost never happens.
+     * Size first and fingerprint second, because comparing two hundred lengths is free and hashing
+     * two hundred files is not. The fingerprint is only ever used to *confirm* a size match, and the
+     * bytes of the shelf copy are compared against the chosen file's — a candidate whose fingerprint
+     * could not be established is never treated as a duplicate.
      */
     private fun findImportDuplicate(candidate: ImportCandidate): LibraryBook? {
-        if (candidate.bytes <= 0L || candidate.headHash.isBlank()) return null
+        if (candidate.contentKey.isBlank()) return null
         val sameSize = synchronized(libraryLock) {
             books.filter { b ->
                 b.origin != BookOrigin.BUNDLED &&
@@ -720,7 +780,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         }
         return sameSize.firstOrNull { b ->
             val file = b.filePath?.let(::File) ?: return@firstOrNull false
-            BookFiles.headMd5(file) == candidate.headHash
+            BookIo.fingerprintOf(file).key == candidate.contentKey
         }
     }
 
@@ -729,33 +789,67 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         importPlan = importPlan?.without(uri)
     }
 
-    /** Closes the review sheet without importing anything. */
+    /** Closes the review sheet without importing anything, and stops anything still measuring. */
     fun cancelImport() {
         importGeneration++
+        importStopRequested = true
         importPlan = null
         importRows = emptyList()
         importBusy = false
+        importMeasured = 0
+        importToMeasure = 0
+    }
+
+    /**
+     * Stops a running batch after the file in hand.
+     *
+     * The file being copied is abandoned before its commit, so it leaves no record and no file;
+     * every file already added stays added, and the rest are reported as stopped rather than as
+     * failures. Retrying then picks up only what remains.
+     */
+    fun stopImport() {
+        importStopRequested = true
     }
 
     /**
      * Imports every ready file in the plan, one at a time, each independent of the others.
      *
-     * A failure is recorded against its own row with a Retry action; the rest carry on. Nothing
-     * here uploads: an imported file is a *local* book, and the existing queue takes it from there
-     * under the same three-upload limit — a copy onto the phone is not a backup.
+     * Nothing here uploads: an imported file is a *local* book, and the existing queue takes it from
+     * there under the same three-upload limit — a copy onto the phone is not a backup, and import
+     * concurrency must never be traded against upload concurrency.
      */
     fun confirmImport() {
         val plan = importPlan ?: return
         if (!importRunning.compareAndSet(false, true)) return
-        val ready = plan.items.filter { it.importable }
-        importRows = ready.map { ImportProgress(it.candidate.uri, it.candidate.name, ImportState.WAITING) }
+        importStopRequested = false
+        isImporting = true
+        // A second run of the same sheet retries only what is still owed. Re-importing books that
+        // already landed would be pointless work for the reader's battery — and, worse, would
+        // replace their green rows with "skipped" ones, making the batch look like it failed.
+        val retryUris = importRows
+            .filter { it.state == ImportState.FAILED || it.state == ImportState.STOPPED }
+            .mapTo(HashSet()) { it.uri }
+        val ready = plan.items.withIndex()
+            .filter { it.value.importable && (retryUris.isEmpty() || it.value.candidate.uri in retryUris) }
+        // The rows exist from the first frame, so the sheet's list is stable while the batch runs
+        // instead of growing one row at a time underneath the reader.
+        val kept = importRows.filter { row ->
+            row.state == ImportState.ADDED || row.state == ImportState.SKIPPED
+        }
+        importRows = kept + ready.map { (index, item) ->
+            ImportProgress(item.candidate.uri, item.candidate.name, ImportState.WAITING, "", index)
+        }
         viewModelScope.launch {
             try {
-                ready.forEachIndexed { index, item ->
-                    runImport(item, index, ready.size)
-                }
+                val batch = ImportBatch(worker = this@LanternStore.importWorker)
+                val summary = batch.run(
+                    items = ready.map { it.value },
+                    stopped = { importStopRequested },
+                    report = { row -> publishImportRow(row) }
+                )
                 withContext(Dispatchers.Main) {
-                    val summary = ImportSummary.of(importRows, total = plan.total)
+                    // Ordered by the selection, so a retry's rows do not jump to the bottom.
+                    importRows = importRows.sortedBy { it.index }
                     if (summary.added > 0) {
                         toast(if (summary.added == 1) "1 book imported" else "${summary.added} books imported")
                     }
@@ -766,75 +860,125 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 }
             } finally {
                 importRunning.set(false)
+                withContext(Dispatchers.Main) { isImporting = false }
                 // Leave the sheet open with the per-file results: the reader needs to see which
                 // one failed and why, and the sheet is where the Retry button lives.
             }
         }
     }
 
-    /** Retries one failed row. The rest of the sheet is untouched. */
+    /**
+     * Imports one file: copy, validate, deduplicate, commit.
+     *
+     * Each step can fail, and each failure is returned rather than thrown where it is a normal
+     * outcome (a duplicate, a full shelf). Anything else is left to [ImportBatch], which records it
+     * against this file and carries on with the next one.
+     */
+    private val importWorker = object : ImportWorker {
+        override suspend fun import(item: ImportItem): ImportOutcome {
+            val candidate = item.candidate
+            val id = importIdFor(candidate)
+            // Room is checked again at commit time, not only when the sheet was built: the shelf
+            // can fill up while a two-hundred-file batch is running.
+            val room = withContext(Dispatchers.Main) { remainingUserBookCapacity() }
+            if (room <= 0) return ImportOutcome.Full(0)
+
+            val book = withContext(Dispatchers.IO) {
+                runCatching {
+                    BookIo.importUri(getApplication(), Uri.parse(candidate.uri), id) {
+                        importStopRequested
+                    }
+                }.getOrNull()
+            } ?: run {
+                withContext(Dispatchers.IO) { discardPartialImport(candidate) }
+                return if (importStopRequested) {
+                    ImportOutcome.Skipped("Stopped before this file was imported.")
+                } else {
+                    ImportOutcome.Failed("The file could not be read, or it is not a valid book.")
+                }
+            }
+
+            // The content check runs again here: the sheet may have been open for minutes, and a
+            // second copy of the same book must not be able to slip in behind it.
+            val duplicate = withContext(Dispatchers.IO) { findImportDuplicate(candidate) }
+            if (duplicate != null && duplicate.id != book.id) {
+                withContext(Dispatchers.IO) { discardOrphan(book) }
+                return ImportOutcome.Skipped("Already in your library: \u201C${duplicate.title}\u201D")
+            }
+
+            return when (withContext(Dispatchers.Main) { commitNewUserBook(book.copy(pendingUpload = false)) }) {
+                CommitUserBookResult.ACCEPTED -> {
+                    // One line per imported book, not per batch: a batch of two hundred that
+                    // wrote two hundred lines would push everything else out of the diagnosis.
+                    if (importRows.size <= 20) {
+                        SyncDiag.mark("Imported — ${book.title}", "added to the shelf")
+                    }
+                    ImportOutcome.Added
+                }
+                CommitUserBookResult.LIBRARY_FULL -> {
+                    withContext(Dispatchers.IO) { discardOrphan(book) }
+                    ImportOutcome.Full(0)
+                }
+                CommitUserBookResult.PERSIST_FAILED -> {
+                    withContext(Dispatchers.IO) { discardOrphan(book) }
+                    ImportOutcome.Failed("The library could not be saved.")
+                }
+            }
+        }
+    }
+
+    /** Publishes one row, replacing the placeholder of the same file. Cheap and main-thread only. */
+    private suspend fun publishImportRow(row: ImportProgress) {
+        withContext(Dispatchers.Main) {
+            // The sheet was closed while the batch ran: nothing to publish, and publishing would
+            // resurrect rows the reader has already dismissed.
+            if (importPlan == null) return@withContext
+            val current = importRows
+            val at = current.indexOfFirst { it.uri == row.uri }
+            importRows = if (at >= 0) {
+                // Keep the row's place in the selection: a retry runs a filtered list, and the
+                // batch numbers its own items from zero, so its index is not the sheet's index.
+                current.toMutableList().also { it[at] = row.copy(index = current[at].index) }
+            } else {
+                current + row
+            }
+        }
+    }
+
+    /** How many more user books fit, for the planner and for the commit-time check. */
+    private fun remainingUserBookCapacity(): Int = synchronized(libraryLock) {
+        (MAX_USER_BOOKS - userBookCountUnlocked()).coerceAtLeast(0)
+    }
+
+    /** Retries one failed row. The rest of the sheet — and the library — stays as it is. */
     fun retryImport(uri: String) {
-        val item = importPlan?.items?.firstOrNull { it.candidate.uri == uri && it.importable } ?: return
+        val plan = importPlan ?: return
+        val item = plan.items.firstOrNull { it.candidate.uri == uri && it.importable } ?: return
+        val row = importRows.firstOrNull { it.uri == uri }
+        if (row != null && row.state != ImportState.FAILED && row.state != ImportState.STOPPED) return
         if (!importRunning.compareAndSet(false, true)) return
+        importStopRequested = false
+        isImporting = true
         viewModelScope.launch {
             try {
-                val index = importRows.indexOfFirst { it.uri == uri }
-                runImport(item, if (index >= 0) index else 0, importRows.size)
+                val batch = ImportBatch(worker = importWorker)
+                batch.run(listOf(item), stopped = { importStopRequested }) { updated -> publishImportRow(updated) }
+                withContext(Dispatchers.Main) { refreshBackupAudit() }
             } finally {
                 importRunning.set(false)
+                withContext(Dispatchers.Main) { isImporting = false }
             }
-        }
-    }
-
-    private suspend fun runImport(item: ImportItem, index: Int, total: Int) {
-        val candidate = item.candidate
-        setImportRow(ImportProgress(candidate.uri, candidate.name, ImportState.COPYING))
-        val book = withContext(Dispatchers.IO) {
-            runCatching { BookIo.importUri(getApplication(), Uri.parse(candidate.uri), id = importIdFor(candidate)) }.getOrNull()
-        }
-        if (book == null) {
-            withContext(Dispatchers.IO) { discardPartialImport(candidate) }
-            setImportRow(ImportProgress(candidate.uri, candidate.name, ImportState.FAILED, "The file could not be read or is not a book."))
-            SyncDiag.fail("Import failed — ${candidate.name}", "copy or container check failed")
-            return
-        }
-        // A book the reader imported twice under different names is still one book: the content
-        // check runs again here, because the sheet may have been open for minutes.
-        val duplicate = findImportDuplicate(candidate)
-        if (duplicate != null && duplicate.id != book.id) {
-            withContext(Dispatchers.IO) { discardOrphan(book) }
-            setImportRow(ImportProgress(candidate.uri, candidate.name, ImportState.SKIPPED, "Already in your library: \u201C${duplicate.title}\u201D"))
-            return
-        }
-        when (val result = withContext(Dispatchers.Main) { commitNewUserBook(book.copy(pendingUpload = false)) }) {
-            CommitUserBookResult.ACCEPTED -> {
-                setImportRow(ImportProgress(candidate.uri, candidate.name, ImportState.ADDED, "Added to your library"))
-                SyncDiag.mark("Imported — ${book.title}", "${(index + 1)} of $total")
-            }
-            CommitUserBookResult.LIBRARY_FULL -> {
-                withContext(Dispatchers.IO) { discardOrphan(book) }
-                setImportRow(ImportProgress(candidate.uri, candidate.name, ImportState.FAILED, "Your library is full (200 books)."))
-            }
-            CommitUserBookResult.PERSIST_FAILED -> {
-                withContext(Dispatchers.IO) { discardOrphan(book) }
-                setImportRow(ImportProgress(candidate.uri, candidate.name, ImportState.FAILED, "The library could not be saved."))
-            }
-        }
-    }
-
-    private suspend fun setImportRow(row: ImportProgress) {
-        withContext(Dispatchers.Main) {
-            importRows = importRows.map { if (it.uri == row.uri) row else it }
-                .let { rows -> if (rows.any { it.uri == row.uri }) rows else rows + row }
         }
     }
 
     /**
      * A stable id for a chosen document.
      *
-     * Derived from the document identity, not from the clock: importing the same document twice in
-     * one batch therefore targets the same file name and the same record rather than creating two
-     * libraries' worth of "Book (1)".
+     * Derived from the document identity and its length, not from the clock: importing the same
+     * document twice in one batch therefore targets the same file name and the same record rather
+     * than creating two shelves' worth of "Book (1)". The content fingerprint is deliberately not
+     * part of the id — two different files could in principle be picked from the same URI after an
+     * edit, and the URI plus its current length is what makes the id stable for retries.
      */
     private fun importIdFor(candidate: ImportCandidate): String {
         val seed = candidate.uri + ":" + candidate.bytes
@@ -849,6 +993,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     private fun discardPartialImport(candidate: ImportCandidate) {
         val id = importIdFor(candidate)
         val ext = if (candidate.format == BookFormat.PDF) "pdf" else "epub"
+        runCatching { File(BookIo.booksDir(getApplication()), "$id.$ext.incoming").delete() }
         runCatching { File(BookIo.booksDir(getApplication()), "$id.$ext").delete() }
         runCatching { File(BookIo.coversDir(getApplication()), "$id.jpg").delete() }
     }

@@ -5,19 +5,26 @@ package com.lantern.library.data
  *
  * Importing used to be one file at a time, which on a phone meant opening the picker, choosing a
  * book, waiting, and doing it again — ten times for ten books. The picker can return a list; the
- * rest of this file is about not making a mess of it.
+ * rest of this file is about not making a mess of it at two hundred.
  *
  * Three things have to be true before a file is imported:
  *
- * 1. **It is a book this app can open.** EPUB or PDF, measured from the bytes, not from a
- *    filename that someone could have typed anything into.
- * 2. **It is not already here.** Once by document identity, once by content: a reader who picks
- *    the same file twice from two folders, or picks a book they imported last week, must not end
- *    up with two records, two files and two uploads.
- * 3. **It is not a duplicate of another file in the same selection**, which is the case that used
- *    to slip through because each import ran in isolation.
+ * 1. **It is a book this app can open.** EPUB or PDF, decided from the bytes, not from a filename
+ *    someone could have typed anything into.
+ * 2. **It is not already here.** Once by document identity, once by content: a reader who picks the
+ *    same file twice from two folders, or picks a book they imported last week, must not end up
+ *    with two records, two files and two uploads.
+ * 3. **It is not a duplicate of another file in the same selection**, which is the case that used to
+ *    slip through because each import ran in isolation.
  *
- * Everything in here is pure. The store does the copying; this decides what is worth copying.
+ * And one more, learned from a two-hundred-book batch: **it must fit on the shelf.** The library has
+ * a maximum size; discovering that *after* copying 200 files is a waste of the reader's battery and
+ * storage, so capacity is decided in the plan, before anything is copied.
+ *
+ * Everything in here is pure and cheap. It holds metadata only — a URI, a name, a format, a
+ * fingerprint — never file contents, and the selection's total memory is a few hundred bytes per
+ * book regardless of how large the books are. The store does the copying; this decides what is worth
+ * copying.
  */
 
 /** One file the reader chose, measured before anything is imported. */
@@ -28,20 +35,16 @@ data class ImportCandidate(
     val name: String,
     /** EPUB or PDF, or null when the file is neither. */
     val format: BookFormat?,
-    val bytes: Long,
-    /**
-     * MD5 of the file's first 64 KiB, or "" when it could not be read.
-     *
-     * Size alone collides (two 1.4 MB EPUBs are common); a head hash does not, and 64 KiB costs
-     * nothing to read. It is a *fingerprint*, not a verification: the real checksum still happens
-     * at upload and at restore.
-     */
-    val headHash: String
+    /** Size, head hash and tail hash. Bounded work and bounded memory to produce. */
+    val fingerprint: ImportFingerprint = ImportFingerprint.UNREADABLE
 ) {
-    /** What makes two files the same book, independent of where they were picked from. */
-    val contentKey: String get() = if (headHash.isBlank() || bytes <= 0L) "" else "$bytes:$headHash"
+    /** The file's length in bytes, or 0 when it could not be measured. */
+    val bytes: Long get() = fingerprint.bytes
 
     val supported: Boolean get() = format == BookFormat.EPUB || format == BookFormat.PDF
+
+    /** What makes two files the same book, independent of where they were picked from. */
+    val contentKey: String get() = fingerprint.key
 }
 
 /** Why an item is or is not going to be imported. */
@@ -60,6 +63,14 @@ sealed class ImportVerdict {
 
     /** Could not be opened or measured: a revoked permission, a vanished file, an empty one. */
     data class Unreadable(val reason: String) : ImportVerdict()
+
+    /**
+     * The shelf is full.
+     *
+     * [remaining] is how many books still fit, so the sheet can say "3 of these will not fit"
+     * before a single byte is copied, instead of failing file after file at the end of a long run.
+     */
+    data class LibraryFull(val remaining: Int) : ImportVerdict()
 }
 
 /** One row of the review sheet. */
@@ -76,6 +87,9 @@ data class ImportItem(
         is ImportVerdict.DuplicateInLibrary -> "Already in your library: \u201C${v.title}\u201D"
         is ImportVerdict.Unsupported -> v.reason
         is ImportVerdict.Unreadable -> v.reason
+        is ImportVerdict.LibraryFull ->
+            if (v.remaining <= 0) "Not imported: your library is at its limit."
+            else "Not imported: only ${v.remaining} more books fit."
     }
 }
 
@@ -85,8 +99,14 @@ data class ImportPlan(val items: List<ImportItem>) {
     val ready: List<ImportItem> get() = items.filter { it.importable }
     val readyCount: Int get() = ready.size
     val duplicateCount: Int
-        get() = items.count { it.verdict is ImportVerdict.DuplicateInSelection || it.verdict is ImportVerdict.DuplicateInLibrary }
-    val problemCount: Int get() = items.count { it.verdict is ImportVerdict.Unsupported || it.verdict is ImportVerdict.Unreadable }
+        get() = items.count {
+            it.verdict is ImportVerdict.DuplicateInSelection || it.verdict is ImportVerdict.DuplicateInLibrary
+        }
+    val problemCount: Int
+        get() = items.count {
+            it.verdict is ImportVerdict.Unsupported || it.verdict is ImportVerdict.Unreadable
+        }
+    val overflowCount: Int get() = items.count { it.verdict is ImportVerdict.LibraryFull }
 
     /** "3 of 5 ready" — the summary line above the list. */
     fun summary(): String = when {
@@ -97,6 +117,9 @@ data class ImportPlan(val items: List<ImportItem>) {
 
     /** Removes one row, recomputing the verdicts so a duplicate becomes ready when its twin goes. */
     fun without(uri: String): ImportPlan = ImportPlanner.planOf(items.filterNot { it.candidate.uri == uri })
+
+    /** Everything that can actually be imported, in selection order. */
+    fun readyItems(): List<ImportItem> = items.filter { it.importable }
 }
 
 object ImportPlanner {
@@ -104,42 +127,54 @@ object ImportPlanner {
     /**
      * Decides every item in [selection].
      *
+     * @param capacity how many more user books the shelf can hold. `Int.MAX_VALUE` for "no limit".
      * @param findInLibrary asks the library whether these exact bytes are already there. Injected
      *   rather than passed as a list so the store can compare only the books whose size collides,
      *   instead of hashing two hundred files every time the picker closes.
      */
     fun plan(
         selection: List<ImportCandidate>,
-        findInLibrary: (ImportCandidate) -> LibraryBook?
+        capacity: Int = Int.MAX_VALUE,
+        findInLibrary: (ImportCandidate) -> LibraryBook? = { null }
     ): ImportPlan {
         val items = ArrayList<ImportItem>(selection.size)
         val seenUris = HashMap<String, String>()
         val seenContent = HashMap<String, String>()
+        var remaining = capacity.coerceAtLeast(0)
 
         selection.forEach { candidate ->
             val verdict: ImportVerdict = when {
                 candidate.bytes <= 0L -> ImportVerdict.Unreadable("The file is empty.")
                 !candidate.supported -> ImportVerdict.Unsupported("Only EPUB and PDF books can be imported.")
-                candidate.headHash.isBlank() -> ImportVerdict.Unreadable("The file could not be read.")
+                !candidate.fingerprint.readable -> ImportVerdict.Unreadable("The file could not be read.")
                 seenUris.containsKey(candidate.uri) ->
                     ImportVerdict.DuplicateInSelection(seenUris.getValue(candidate.uri))
+                // A fingerprint that cannot prove two files identical is not used as evidence, so a
+                // book is never refused because of a length the provider would not confirm.
                 candidate.contentKey.isNotBlank() && seenContent.containsKey(candidate.contentKey) ->
                     ImportVerdict.DuplicateInSelection(seenContent.getValue(candidate.contentKey))
                 else -> findInLibrary(candidate)?.let { ImportVerdict.DuplicateInLibrary(it.title) }
-                    ?: ImportVerdict.Ready
+                    ?: if (remaining > 0) ImportVerdict.Ready else ImportVerdict.LibraryFull(remaining)
             }
-            // Only a file that is going to be imported claims its identity, so removing the first
-            // copy of a duplicate pair promotes the second one instead of losing both.
+            // Only a file that is going to be imported claims its identity and a place on the
+            // shelf, so removing the first copy of a duplicate pair promotes the second one instead
+            // of losing both.
             if (verdict is ImportVerdict.Ready) {
                 seenUris[candidate.uri] = candidate.name
                 if (candidate.contentKey.isNotBlank()) seenContent[candidate.contentKey] = candidate.name
+                remaining--
             }
             items += ImportItem(candidate, verdict)
         }
         return ImportPlan(items)
     }
 
-    /** Re-decides an already-built plan, keeping library duplicates as they were. */
+    /**
+     * Re-decides an already-built plan, keeping library and capacity verdicts as they were.
+     *
+     * Removing a row must not turn "already on the shelf" into "ready" (that is a fact about the
+     * library, not about the selection), and must not invent capacity that the shelf does not have.
+     */
     fun planOf(items: List<ImportItem>): ImportPlan {
         val seenUris = HashMap<String, String>()
         val seenContent = HashMap<String, String>()
@@ -149,13 +184,13 @@ object ImportPlanner {
             val verdict = when {
                 c.bytes <= 0L -> ImportVerdict.Unreadable("The file is empty.")
                 !c.supported -> ImportVerdict.Unsupported("Only EPUB and PDF books can be imported.")
-                c.headHash.isBlank() -> ImportVerdict.Unreadable("The file could not be read.")
+                !c.fingerprint.readable -> ImportVerdict.Unreadable("The file could not be read.")
                 seenUris.containsKey(c.uri) -> ImportVerdict.DuplicateInSelection(seenUris.getValue(c.uri))
                 c.contentKey.isNotBlank() && seenContent.containsKey(c.contentKey) ->
                     ImportVerdict.DuplicateInSelection(seenContent.getValue(c.contentKey))
-                // A library duplicate stays a library duplicate: it is a fact about the shelf, not
-                // about the order of the selection.
+                // Facts about the shelf and about its capacity survive a row being removed.
                 item.verdict is ImportVerdict.DuplicateInLibrary -> item.verdict
+                item.verdict is ImportVerdict.LibraryFull -> item.verdict
                 else -> ImportVerdict.Ready
             }
             if (verdict is ImportVerdict.Ready) {
@@ -179,7 +214,9 @@ enum class ImportState {
     /** Something went wrong, with a reason and a Retry action. */
     FAILED,
     /** Skipped because it could not be imported at all (duplicate or unsupported). */
-    SKIPPED
+    SKIPPED,
+    /** The reader stopped the batch before this file's turn. Nothing was copied for it. */
+    STOPPED
 }
 
 /**
@@ -192,23 +229,31 @@ data class ImportProgress(
     val uri: String,
     val name: String,
     val state: ImportState,
-    val message: String = ""
-)
+    val message: String = "",
+    /** Position in the selection, so a lazy list can key rows without searching. */
+    val index: Int = 0
+) {
+    val finished: Boolean get() = state == ImportState.ADDED || state == ImportState.FAILED ||
+        state == ImportState.SKIPPED || state == ImportState.STOPPED
+}
 
 /** The counters above the list: "2 of 5 imported". */
 data class ImportSummary(
     val total: Int,
     val added: Int,
     val failed: Int,
-    val skipped: Int
+    val skipped: Int,
+    val stopped: Int = 0
 ) {
-    val finished: Int get() = added + failed + skipped
+    val finished: Int get() = added + failed + skipped + stopped
     val complete: Boolean get() = total > 0 && finished >= total
 
     fun line(): String = when {
         total == 0 -> "Nothing to import"
         !complete -> "$added of $total imported · ${total - finished} to go"
+        failed > 0 && stopped > 0 -> "$added imported · $failed failed · $stopped not reached"
         failed > 0 -> "$added imported · $failed failed"
+        stopped > 0 -> "$added imported · stopped before the rest"
         added == 0 -> "Nothing was imported"
         else -> "$added imported"
     }
@@ -218,7 +263,8 @@ data class ImportSummary(
             total = total,
             added = rows.count { it.state == ImportState.ADDED },
             failed = rows.count { it.state == ImportState.FAILED },
-            skipped = rows.count { it.state == ImportState.SKIPPED }
+            skipped = rows.count { it.state == ImportState.SKIPPED },
+            stopped = rows.count { it.state == ImportState.STOPPED }
         )
     }
 }

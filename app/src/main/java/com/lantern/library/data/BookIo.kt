@@ -31,56 +31,59 @@ object BookIo {
     /**
      * Measures a chosen document without importing it.
      *
-     * This is what the review sheet shows: the real name, the real size, the format taken from the
-     * file's own bytes where the name is not conclusive, and a fingerprint so the same file chosen
-     * twice — from two folders, or in one selection — is recognised as one book.
+     * The name, the provider's stated size, and a bounded fingerprint: the first 64 KiB, the last
+     * 64 KiB and the exact length, never the whole file. On a two-hundred-book selection this is
+     * 128 KiB of reading per book instead of every byte of every book, and it holds no file
+     * contents at all — the candidate is a URI, a name, a format and three short strings.
      */
-    fun measure(context: Context, uri: Uri): ImportCandidate {
+    fun measure(context: Context, uri: Uri, cancelled: () -> Boolean = { false }): ImportCandidate? {
         val name = displayName(context, uri) ?: uri.lastPathSegment.orEmpty().ifBlank { "Untitled" }
-        val lower = name.lowercase()
-        var bytes = 0L
-        var head = ByteArray(0)
-        val opened = runCatching {
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                val buffer = ByteArray(64 * 1024)
-                var total = 0L
-                var headRead = 0
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read <= 0) break
-                    if (headRead < buffer.size) {
-                        val take = minOf(read, buffer.size - headRead)
-                        if (head.isEmpty()) head = ByteArray(take)
-                        buffer.copyInto(head, headRead, 0, take)
-                        headRead += take
-                    }
-                    total += read
-                }
-                bytes = total
-            } != null
-        }.getOrDefault(false)
-        val digest = java.security.MessageDigest.getInstance("MD5")
-        if (head.isNotEmpty()) digest.update(head)
-        val headHash = if (opened && bytes > 0L) digest.digest().joinToString("") { "%02x".format(it) } else ""
-        val byName = when {
-            lower.endsWith(".epub") -> BookFormat.EPUB
-            lower.endsWith(".pdf") -> BookFormat.PDF
-            else -> null
+        val stated = statedSize(context, uri)
+        var scanned: ImportMeasure.Result? = null
+        runCatching {
+            context.contentResolver.openInputStream(uri)?.let { input ->
+                // `use` closes the descriptor before the next file is opened: a 200-file selection
+                // must never hold more than one stream at a time.
+                input.use { stream -> scanned = ImportMeasure.scan(stream, stated, cancelled) }
+            }
         }
-        val byMagic = when {
-            byName != null -> byName
-            head.size >= 4 && head[0] == 0x50.toByte() && head[1] == 0x4B.toByte() -> BookFormat.EPUB
-            String(head, 0, minOf(head.size, 5), Charsets.US_ASCII) == "%PDF-" -> BookFormat.PDF
-            else -> null
-        }
+        // A cancelled scan or a provider that closed the stream is not a book we can offer; the
+        // caller reports the file as unreadable rather than guessing anything about it.
+        val result = scanned ?: return if (cancelled()) null else ImportCandidate(
+            uri = uri.toString(),
+            name = name,
+            format = null,
+            fingerprint = ImportFingerprint.UNREADABLE
+        )
         return ImportCandidate(
             uri = uri.toString(),
             name = name,
-            format = byMagic,
-            bytes = bytes,
-            headHash = headHash
+            format = ImportMeasure.formatOf(name, result.head),
+            fingerprint = result.fingerprint
         )
     }
+
+    /** The provider's stated size, or -1 when it will not say. One column, one row. */
+    private fun statedSize(context: Context, uri: Uri): Long = runCatching {
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
+            if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else -1L
+        } ?: -1L
+    }.getOrDefault(-1L)
+
+    /**
+     * A fast, non-cryptographic fingerprint of a file already on this phone.
+     *
+     * Used only to confirm that a candidate which matches a shelf book by size really is that
+     * same book: the head and tail windows are re-read from the local file and compared. This is a
+     * *confirmation*, never the sole reason to refuse a book.
+     */
+    fun fingerprintOf(file: File): ImportFingerprint = runCatching {
+        if (!file.exists() || file.length() <= 0L) return@runCatching ImportFingerprint.UNREADABLE
+        file.inputStream().use { stream ->
+            val result = ImportMeasure.scan(stream, file.length())
+            result?.fingerprint ?: ImportFingerprint.UNREADABLE
+        }
+    }.getOrDefault(ImportFingerprint.UNREADABLE)
 
     /**
      * Copies one chosen document into the library.
@@ -88,7 +91,12 @@ object BookIo {
      * @param id the id the caller decided on. A batch import passes its own so two files chosen in
      *   the same millisecond cannot collide, which the old timestamp-only id could.
      */
-    fun importUri(context: Context, uri: Uri, id: String? = null): LibraryBook? {
+    fun importUri(
+        context: Context,
+        uri: Uri,
+        id: String? = null,
+        cancelled: () -> Boolean = { false }
+    ): LibraryBook? {
         val name = displayName(context, uri) ?: return null
         val lower = name.lowercase()
         val format = when {
@@ -97,7 +105,7 @@ object BookIo {
             else -> return null
         }
         val bookId = id ?: "imp_${System.currentTimeMillis()}_${name.hashCode().toUInt()}"
-        return importInto(context, uri, name, format, bookId)
+        return importInto(context, uri, name, format, bookId, cancelled)
     }
 
     /** The copying half of [importUri], with the identity already decided. */
@@ -106,16 +114,29 @@ object BookIo {
         uri: Uri,
         name: String,
         format: BookFormat,
-        id: String
+        id: String,
+        cancelled: () -> Boolean = { false }
     ): LibraryBook? {
         val dest = File(booksDir(context), "$id.${if (format == BookFormat.EPUB) "epub" else "pdf"}")
         // Copy to a temporary first and move it into place only once the whole file is here. An
         // import interrupted halfway then leaves nothing that looks like a book, which is the
         // difference between "try again" and "this book is broken forever".
         val incoming = File(dest.parentFile, dest.name + ".incoming")
+        // Copy in bounded chunks, checking for cancellation between them. `copyTo` would be just
+        // as memory-tight, but it cannot be stopped: a reader who cancels a 200-book batch must not
+        // wait for the current 300 MB file to finish copying first.
         val copied = runCatching {
             context.contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(incoming).use { output -> input.copyTo(output) }
+                FileOutputStream(incoming).use { output ->
+                    val buffer = ByteArray(256 * 1024)
+                    while (true) {
+                        if (cancelled()) throw java.io.InterruptedIOException("import cancelled")
+                        val read = input.read(buffer)
+                        if (read <= 0) break
+                        output.write(buffer, 0, read)
+                    }
+                    output.flush()
+                }
             } ?: return null
         }.isSuccess
         if (!copied || !incoming.exists() || incoming.length() <= 0L) {

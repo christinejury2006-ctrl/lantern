@@ -151,14 +151,16 @@ internal fun LanternRoot(store: LanternStore) {
             plan = plan,
             rows = store.importRows,
             busy = store.importBusy,
-            running = store.importRows.any {
-                it.state == com.lantern.library.data.ImportState.COPYING ||
-                    it.state == com.lantern.library.data.ImportState.WAITING
-            },
+            measured = store.importMeasured,
+            toMeasure = store.importToMeasure,
+            // The store owns "a batch is running", not a guess from the rows: a batch that has not
+            // published its first row yet is still running, and a stopped one is not.
+            running = store.isImporting,
             palette = com.lantern.library.ui.theme.nookPalette(theme),
             onRemove = { uri -> store.removeImportRow(uri) },
             onRetry = { uri -> store.retryImport(uri) },
             onConfirm = { store.confirmImport() },
+            onStop = { store.stopImport() },
             onDismiss = { store.cancelImport() }
         )
     }

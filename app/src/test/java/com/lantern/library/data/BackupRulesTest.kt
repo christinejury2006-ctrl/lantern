@@ -110,7 +110,7 @@ class BackupRulesTest {
         val b = book(backupAt = 1_700_000_000_000L) // a stamp with no file behind it
         assertFalse(BackupRules.restorable(b))
     }
-}
+
 
     @Test
     fun `cloud backup confirmation is applied before upload decisions on sign in`() {
@@ -157,4 +157,4 @@ class BackupRulesTest {
             file.delete()
         }
     }
-
+}

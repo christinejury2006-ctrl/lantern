@@ -124,12 +124,22 @@ class ShellNavigationTest {
             "the bar keeps the app's own gap above the system bar",
             barCall.contains("SystemBars.BAR_GAP_DP")
         )
-        assertEqualsOnce("the shell must not add a second nav-bar padding", chrome, "navigationBarsPadding()")
+        assertEqualsOnce(
+            "the shell must not add a second nav-bar padding",
+            code(chrome),
+            "navigationBarsPadding()"
+        )
         // The helper that decides whether to add it is still honest about the zero case.
         assertTrue(SystemBars.barAppliesOwnInset(48))
         assertTrue(SystemBars.barAppliesOwnInset(144))
         assertFalse(SystemBars.barAppliesOwnInset(0))
     }
+
+    /** The source with `//` comment lines removed, so prose about an inset is not read as one. */
+    private fun code(text: String): String = text
+        .lines()
+        .filterNot { it.trimStart().startsWith("//") }
+        .joinToString("\n")
 
     private fun assertEqualsOnce(what: String, text: String, needle: String) {
         val count = Regex(Regex.escape(needle)).findAll(text).count()

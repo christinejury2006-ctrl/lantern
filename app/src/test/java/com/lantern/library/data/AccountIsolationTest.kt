@@ -176,7 +176,7 @@ class AccountIsolationTest {
         // touch Drive's delete path. Read as text because that is exactly the mistake that shipped
         // once and would ship again silently.
         val source = storeSource()
-        val signOut = section(source, "fun signOut(activity", "private fun endSession")
+        val signOut = section(source, "fun signOut(activity", "private fun purgeBackedUpCache")
         assertFalse(
             "sign-out must not tombstone books via LanternStore.remove",
             signOut.contains("remove(")

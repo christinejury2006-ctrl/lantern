@@ -115,9 +115,18 @@ class ChromeTest {
     @Test
     fun `the bottom bar is outside the scrolling content`() {
         val root = source("AppRoot.kt")
-        // Drawn by the root, anchored to the bottom of a Box that does not scroll with a screen.
+        // Drawn by the root, as the *last* region of a Column: below the content, not floating over
+        // it. Before 3.7.0 this asserted `.align(Alignment.BottomCenter)`, which is exactly the
+        // overlay that let a scrolling screen paint under the bar and made the bar look like it
+        // moved. The property being protected is the same one — the bar is anchored by the root and
+        // outside any scrolling container — but it is now enforced by the layout, so the assertion
+        // is stricter: a weighted content region above, the bar after it, and no `align` at all.
         assertTrue(
-            "the bar must be anchored by the root layout",
+            "the bar must be anchored by the root layout, in its own column region",
+            root.contains("Column(Modifier.fillMaxSize())") && root.contains(".weight(1f)")
+        )
+        assertFalse(
+            "the bar must not be a floating overlay inside the content box",
             root.contains(".align(Alignment.BottomCenter)")
         )
         assertTrue("and it must own its own inset", root.contains("navigationBarsPadding()"))

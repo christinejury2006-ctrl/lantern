@@ -138,6 +138,11 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.6.2")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.6.2")
+    // Background uploads. WorkManager's own database is what makes an upload survive the Activity,
+    // the process and a device restart, and its network constraint plus backoff is what "retry when
+    // the connection comes back" means without a polling loop. The three-slot cap is *not*
+    // configured here: UploadPool owns it, so foreground and background uploads share one limit.
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
     implementation("androidx.navigation:navigation-compose:2.7.6")
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.core:core-splashscreen:1.0.1")

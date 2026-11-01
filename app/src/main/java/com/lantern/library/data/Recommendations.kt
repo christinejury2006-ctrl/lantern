@@ -39,35 +39,42 @@ object Recommendations {
         Query("subject:Fantasy", "relevance", 20)
     )
 
-    fun cached(context: Context, interests: List<String>): List<DiscoveryBook>? =
+    /**
+     * @param dir the profile directory that owns this cache. Discovery is personal — it is built
+     *   from the interests and the library of one identity — so its cache belongs in that identity's
+     *   directory, not in a shared file that the next account to sign in would inherit.
+     */
+    fun cached(context: Context, interests: List<String>, dir: File? = null): List<DiscoveryBook>? =
         synchronized(cacheLock) {
-            val cache = readUnlocked(context, InterestCatalog.key(interests)) ?: return@synchronized null
+            val cache = readUnlocked(context, InterestCatalog.key(interests), dir) ?: return@synchronized null
             if (cache.books.isEmpty() || isExpired(cache.lastRefreshAt)) null else cache.books
         }
 
-    fun excludeFromCache(context: Context, drop: (DiscoveryBook) -> Boolean) {
+    fun excludeFromCache(context: Context, drop: (DiscoveryBook) -> Boolean, dir: File? = null) {
         synchronized(cacheLock) {
-            val cache = readUnlocked(context, null) ?: return
+            val cache = readUnlocked(context, null, dir) ?: return
             val kept = cache.books.filterNot(drop)
             if (kept.size == cache.books.size) return
             writeUnlocked(
                 context, cache.lastRefreshAt, kept, cache.interestsKey,
-                cache.refreshGen, cache.recentIds
+                cache.refreshGen, cache.recentIds, dir
             )
         }
     }
 
-    fun clearCache(context: Context) {
+    fun clearCache(context: Context, dir: File? = null) {
         synchronized(cacheLock) {
-            runCatching { File(context.filesDir, CACHE_FILE).delete() }
-            runCatching { File(context.filesDir, "$CACHE_FILE.tmp").delete() }
+            val where = dir ?: context.filesDir
+            runCatching { File(where, CACHE_FILE).delete() }
+            runCatching { File(where, "$CACHE_FILE.tmp").delete() }
         }
     }
 
     suspend fun daily(
         context: Context,
         interests: List<String>,
-        forceRefresh: Boolean = false
+        forceRefresh: Boolean = false,
+        dir: File? = null
     ): List<DiscoveryBook> {
         RecDiag.reset()
         RecDiag.keyConfigured = GoogleBooks.isConfigured()
@@ -80,7 +87,7 @@ object Recommendations {
             clearCache(context)
             return emptyList()
         }
-        val cached = synchronized(cacheLock) { readUnlocked(context, interestKey) }
+        val cached = synchronized(cacheLock) { readUnlocked(context, interestKey, dir) }
         if (!forceRefresh && cached != null && cached.books.isNotEmpty() && !isExpired(cached.lastRefreshAt)) {
             RecDiag.cacheHit = true
             RecDiag.cacheSize = cached.books.size
@@ -120,7 +127,7 @@ object Recommendations {
         }
         if (built.isNullOrEmpty()) {
             RecDiag.log("built empty, not restoring pool")
-            persistHistory(context, interestKey, cached, emptyList(), nextGen)
+            persistHistory(context, interestKey, cached, emptyList(), nextGen, dir)
             return emptyList()
         }
         RecDiag.log("finalIds=${built.map { it.volumeId }.joinToString(",")}")
@@ -130,7 +137,7 @@ object Recommendations {
             val recent = (built.map { it.volumeId } + (cached?.recentIds ?: emptyList()))
                 .distinct()
                 .take(AVOID_LIMIT)
-            writeUnlocked(context, System.currentTimeMillis(), built, interestKey, nextGen, recent)
+            writeUnlocked(context, System.currentTimeMillis(), built, interestKey, nextGen, recent, dir)
         }
         return built
     }
@@ -673,7 +680,8 @@ object Recommendations {
         interestKey: String,
         cached: Cache?,
         books: List<DiscoveryBook>,
-        refreshGen: Int
+        refreshGen: Int,
+        dir: File? = null
     ) {
         synchronized(cacheLock) {
             writeUnlocked(
@@ -682,13 +690,14 @@ object Recommendations {
                 books,
                 interestKey,
                 refreshGen,
-                (cached?.recentIds ?: emptyList()).take(AVOID_LIMIT)
+                (cached?.recentIds ?: emptyList()).take(AVOID_LIMIT),
+                dir
             )
         }
     }
 
-    private fun readUnlocked(context: Context, expectedKey: String?): Cache? {
-        val file = File(context.filesDir, CACHE_FILE)
+    private fun readUnlocked(context: Context, expectedKey: String?, dir: File? = null): Cache? {
+        val file = File(dir ?: context.filesDir, CACHE_FILE)
         if (!file.exists()) return null
         return runCatching {
             val o = JSONObject(file.readText())
@@ -720,7 +729,8 @@ object Recommendations {
         books: List<DiscoveryBook>,
         interestsKey: String,
         refreshGen: Int,
-        recentIds: List<String>
+        recentIds: List<String>,
+        dir: File? = null
     ) {
         val arr = JSONArray()
         books.forEach { arr.put(toJson(it)) }
@@ -733,9 +743,9 @@ object Recommendations {
             .put("refreshGen", refreshGen)
             .put("recentIds", recent)
             .put("books", arr)
-        val dir = context.filesDir
-        val target = File(dir, CACHE_FILE)
-        val tmp = File(dir, "$CACHE_FILE.tmp")
+        val where = dir ?: context.filesDir
+        val target = File(where, CACHE_FILE)
+        val tmp = File(where, "$CACHE_FILE.tmp")
         runCatching {
             tmp.writeText(o.toString())
             if (!tmp.renameTo(target)) {

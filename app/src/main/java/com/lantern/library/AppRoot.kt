@@ -258,129 +258,160 @@ internal fun LanternRoot(store: LanternStore) {
     }
     val needsOnboarding = !store.interestsChosen
     LanternTheme(theme) {
+        // The shell is two regions, not two layers.
+        //
+        // Before this, the bar was a child of the same `Box` as the screen and positioned with
+        // `align(BottomCenter)`: it floated *over* the content, so any screen that scrolled could
+        // paint under it, and the bar's position depended on whatever the content happened to do.
+        // A `Column` with the screen in a `weight(1f)` region and the bar below it makes the two
+        // regions physically separate — the bar cannot move because nothing in it scrolls, and no
+        // list can draw beneath it. The outer `Box` remains only for things that genuinely float
+        // above both: the details sheet, the onboarding editor, the restore banner and the toast.
         Box(Modifier.fillMaxSize()) {
-            Box(Modifier.fillMaxSize().blur(if (details != null) 12.dp else 0.dp)) {
-            if (needsOnboarding) {
-                InterestOnboardingScreen(
-                    theme = theme,
-                    initial = store.interests,
-                    allowCancel = false,
-                    onContinue = { store.saveInterests(it) },
-                    onCancel = {}
-                )
-            } else when (val r = tab) {
-                Route.Home -> ReadingNookScreen(
-                    books = store.books,
-                    picks = store.forYou,
-                    account = store.account,
-                    theme = theme,
-                    picksBusy = store.forYouBusy,
-                    picksFailed = store.forYouFailed,
-                    onOpenBook = { book ->
-                        readerBack = Route.Home
-                        store.openForReading(book) { ready ->
-                            if (ready != null) tab = Route.Reader(ready.id)
-                        }
-                    },
-                    onOpenPick = { pick -> details = pick },
-                    onLibrary = { tab = Route.Library },
-                    onRefreshPicks = { store.refreshForYou() },
-                    onNotifications = { tab = Route.Profile },
-                    // Live per-book byte progress. Reading the bus here (not the library) is what
-                    // keeps a transfer from recomposing or re-flowing the shelf.
-                    transfers = com.lantern.library.data.TransferBus.states,
-                    queueReasons = store.uploadQueueReasons,
-                    online = store.account.driveConnected,
-                    onRetryBackup = { id -> store.retryBook(id) },
-                    onRemoveDownload = { id -> store.removeDownload(id) },
-                    onRestoreDownload = { id -> store.restoreDownload(id) },
-                    removingIds = store.removingIds,
-                    restoringIds = store.restoringIds,
-                    removalBlocker = { store.downloadRemovalBlocker(it) },
-                    pausedUploadIds = store.pausedUploads,
-                    onPauseUpload = { store.pauseUpload(it) },
-                    onResumeUpload = { store.resumeUpload(it) },
-                    onPauseRestore = { store.pauseRestore(it) },
-                    onResumeRestore = { store.resumeRestore(it) }
-                )
-                Route.Library -> LibraryScreen(
-                    books = store.books,
-                    theme = theme,
-                    onOpen = { book ->
-                        readerBack = Route.Library
-                        store.openForReading(book) { ready ->
-                            if (ready != null) tab = Route.Reader(ready.id)
-                        }
-                    },
-                    onRemove = { store.remove(it) },
-                    onImport = { importFile() },
-                    // The books the reader saved from Explore stand on the same shelf as the ones
-                    // they own; "want to read" was a separate list nothing ever showed.
-                    savedForLater = store.wantToRead,
-                    onOpenSaved = { pick -> details = pick },
-                    onRemoveSaved = { pick -> store.removeWantToRead(pick) },
-                    onDidNotFinish = { store.markDidNotFinish(it) },
-                    onBackOnShelf = { store.clearDidNotFinish(it) },
-                    onRemoveDownload = { store.removeDownload(it) },
-                    onRestoreDownload = { store.restoreDownload(it) },
-                    removingIds = store.removingIds,
-                    restoringIds = store.restoringIds,
-                    removalBlocker = { store.downloadRemovalBlocker(it) },
-                    restoreBlocker = { store.downloadRestoreBlocker(it) },
-                    transfers = com.lantern.library.data.TransferBus.states,
-                    pausedUploads = store.pausedUploads,
-                    onPauseRestore = { store.pauseRestore(it) },
-                    onResumeRestore = { store.resumeRestore(it) },
-                    onPauseUpload = { store.pauseUpload(it) },
-                    onResumeUpload = { store.resumeUpload(it) }
-                )
-                Route.Search -> SearchScreen(
-                    theme = theme,
-                    fetchingId = store.fetchingEditionId,
-                    onOpen = { remote -> getDiscovery(remote) },
-                    // Borrow and "open the record" links leave for the browser: the point of them
-                    // is that the book is read where it is legally lent, not copied here.
-                    onOpenLink = { url ->
-                        runCatching {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                        }.onFailure { store.toast("No app can open that link") }
-                    },
-                    onDownload = { edition ->
-                        // Straight from the catalogue into the library, then straight into the
-                        // reader: the reader asked for a book, not for a file manager.
-                        readerBack = Route.Search
-                        store.fetchEdition(edition) { ready ->
-                            tab = Route.Reader(ready.id)
+            Column(Modifier.fillMaxSize()) {
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .blur(if (details != null) 12.dp else 0.dp)
+                ) {
+                    if (needsOnboarding) {
+                        InterestOnboardingScreen(
+                            theme = theme,
+                            initial = store.interests,
+                            allowCancel = false,
+                            onContinue = { store.saveInterests(it) },
+                            onCancel = {}
+                        )
+                    } else when (val r = tab) {
+                        Route.Home -> ReadingNookScreen(
+                            books = store.books,
+                            picks = store.forYou,
+                            account = store.account,
+                            theme = theme,
+                            picksBusy = store.forYouBusy,
+                            picksFailed = store.forYouFailed,
+                            onOpenBook = { book ->
+                                readerBack = Route.Home
+                                store.openForReading(book) { ready ->
+                                    if (ready != null) tab = Route.Reader(ready.id)
+                                }
+                            },
+                            onOpenPick = { pick -> details = pick },
+                            onLibrary = { tab = Route.Library },
+                            onRefreshPicks = { store.refreshForYou() },
+                            onNotifications = { tab = Route.Profile },
+                            // Live per-book byte progress. Reading the bus here (not the library) is what
+                            // keeps a transfer from recomposing or re-flowing the shelf.
+                            transfers = com.lantern.library.data.TransferBus.states,
+                            queueReasons = store.uploadQueueReasons,
+                            online = store.account.driveConnected,
+                            onRetryBackup = { id -> store.retryBook(id) },
+                            onRemoveDownload = { id -> store.removeDownload(id) },
+                            onRestoreDownload = { id -> store.restoreDownload(id) },
+                            removingIds = store.removingIds,
+                            restoringIds = store.restoringIds,
+                            removalBlocker = { store.downloadRemovalBlocker(it) },
+                            pausedUploadIds = store.pausedUploads,
+                            onPauseUpload = { store.pauseUpload(it) },
+                            onResumeUpload = { store.resumeUpload(it) },
+                            onPauseRestore = { store.pauseRestore(it) },
+                            onResumeRestore = { store.resumeRestore(it) }
+                        )
+                        Route.Library -> LibraryScreen(
+                            books = store.books,
+                            theme = theme,
+                            onOpen = { book ->
+                                readerBack = Route.Library
+                                store.openForReading(book) { ready ->
+                                    if (ready != null) tab = Route.Reader(ready.id)
+                                }
+                            },
+                            onRemove = { store.remove(it) },
+                            onImport = { importFile() },
+                            // The books the reader saved from Explore stand on the same shelf as the ones
+                            // they own; "want to read" was a separate list nothing ever showed.
+                            savedForLater = store.wantToRead,
+                            onOpenSaved = { pick -> details = pick },
+                            onRemoveSaved = { pick -> store.removeWantToRead(pick) },
+                            onDidNotFinish = { store.markDidNotFinish(it) },
+                            onBackOnShelf = { store.clearDidNotFinish(it) },
+                            onRemoveDownload = { store.removeDownload(it) },
+                            onRestoreDownload = { store.restoreDownload(it) },
+                            removingIds = store.removingIds,
+                            restoringIds = store.restoringIds,
+                            removalBlocker = { store.downloadRemovalBlocker(it) },
+                            restoreBlocker = { store.downloadRestoreBlocker(it) },
+                            transfers = com.lantern.library.data.TransferBus.states,
+                            pausedUploads = store.pausedUploads,
+                            onPauseRestore = { store.pauseRestore(it) },
+                            onResumeRestore = { store.resumeRestore(it) },
+                            onPauseUpload = { store.pauseUpload(it) },
+                            onResumeUpload = { store.resumeUpload(it) }
+                        )
+                        Route.Search -> SearchScreen(
+                            theme = theme,
+                            fetchingId = store.fetchingEditionId,
+                            onOpen = { remote -> getDiscovery(remote) },
+                            // Borrow and "open the record" links leave for the browser: the point of them
+                            // is that the book is read where it is legally lent, not copied here.
+                            onOpenLink = { url ->
+                                runCatching {
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                                }.onFailure { store.toast("No app can open that link") }
+                            },
+                            onDownload = { edition ->
+                                // Straight from the catalogue into the library, then straight into the
+                                // reader: the reader asked for a book, not for a file manager.
+                                readerBack = Route.Search
+                                store.fetchEdition(edition) { ready ->
+                                    tab = Route.Reader(ready.id)
+                                }
+                            }
+                        )
+                        Route.Profile -> ProfileScreen(
+                            store.books, store.account, store.readingPrefs,
+                            { store.setPrefs(it) },
+                            { beginGoogleSignIn() },
+                            { store.signOut(activity) },
+                            { store.requestDriveConnect() },
+                            { store.openInterestEditor() },
+                            { store.syncNow() },
+                            // Four numbers from one function. The diagnosis UI is gone; the functions it
+                            // called are still here, still logging, still used by the sync itself.
+                            transfers = com.lantern.library.data.TransferBus.states,
+                            queuedIds = store.queuedUploadIds,
+                            pausedUploads = store.pausedUploads
+                        )
+                        is Route.Reader -> {
+                            val book = store.book(r.id)
+                            val back = { tab = readerBack }
+                            if (book == null) back()
+                            else ReaderScreen(
+                                book, store.readingPrefs, { store.setPrefs(it) }, back,
+                                { p, n -> store.markRead(book.id, p, n) }, { store.addBookmark(book.id, it) },
+                                store.readerAppearance, { store.saveReaderAppearance(it) },
+                                store.bookmarksFor(book.id),
+                                onEnsureAvailable = { store.ensureBookAvailable(book.id) }
+                            )
                         }
                     }
-                )
-                Route.Profile -> ProfileScreen(
-                    store.books, store.account, store.readingPrefs,
-                    { store.setPrefs(it) },
-                    { beginGoogleSignIn() },
-                    { store.signOut(activity) },
-                    { store.requestDriveConnect() },
-                    { store.openInterestEditor() },
-                    { store.syncNow() },
-                    // Four numbers from one function. The diagnosis UI is gone; the functions it
-                    // called are still here, still logging, still used by the sync itself.
-                    transfers = com.lantern.library.data.TransferBus.states,
-                    queuedIds = store.queuedUploadIds,
-                    pausedUploads = store.pausedUploads
-                )
-                is Route.Reader -> {
-                    val book = store.book(r.id)
-                    val back = { tab = readerBack }
-                    if (book == null) back()
-                    else ReaderScreen(
-                        book, store.readingPrefs, { store.setPrefs(it) }, back,
-                        { p, n -> store.markRead(book.id, p, n) }, { store.addBookmark(book.id, it) },
-                        store.readerAppearance, { store.saveReaderAppearance(it) },
-                        store.bookmarksFor(book.id),
-                        onEnsureAvailable = { store.ensureBookAvailable(book.id) }
+                }
+                // The bar is in the layout, below the content region, and never inside a scroll
+                // container. `navigationBarsPadding()` resolves against the window below it: zero
+                // while the activity keeps the default fitting behaviour (the window has already
+                // consumed the inset), and the real gesture/three-button height if the window is
+                // ever edge-to-edge. That is one owner of the inset, and it is why the bar cannot
+                // be padded twice.
+                if (!needsOnboarding && tab !is Route.Reader && details == null) {
+                    BottomBar(
+                        theme, tab, { tab = it },
+                        Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(bottom = com.lantern.library.data.SystemBars.BAR_GAP_DP.dp)
                     )
                 }
-            }
             }
             val detail = details
             if (detail != null && tab !is Route.Reader) {
@@ -397,22 +428,6 @@ internal fun LanternRoot(store: LanternStore) {
                             details = null
                         }
                     } else null
-                )
-            }
-            if (!needsOnboarding && tab !is Route.Reader && details == null) {
-                // The bottom bar, with its inset story in one place (see [SystemBars]).
-                //
-                // `navigationBarsPadding()` is here because Compose is the correct owner if the
-                // window is edge-to-edge — and it resolves to zero when the window already fits
-                // system windows, which is the app's default. So the system bar's height is
-                // respected in both gesture and three-button modes, and never added twice.
-                // The 10 dp is the app's own breathing room, not an offset from the screen edge.
-                BottomBar(
-                    theme, tab, { tab = it },
-                    Modifier
-                        .align(Alignment.BottomCenter)
-                        .navigationBarsPadding()
-                        .padding(bottom = com.lantern.library.data.SystemBars.BAR_GAP_DP.dp)
                 )
             }
             if (store.editingInterests && store.interestsChosen) {

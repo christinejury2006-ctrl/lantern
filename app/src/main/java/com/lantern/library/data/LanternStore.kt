@@ -12,6 +12,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
@@ -40,13 +42,46 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
      * reintroduced anywhere in this path.
      */
 
-    private val prefs = app.getSharedPreferences("lantern", Context.MODE_PRIVATE)
-    private val booksFile = File(app.filesDir, "library.json")
-    private val wantFile = File(app.filesDir, "want_to_read.json")
-    private val notInterestedIds = prefs.getStringSet("not_interested_volume_ids", emptySet())!!.toMutableSet()
-    private val pendingDeleteFile = File(app.filesDir, "pending_deletes.json")
+    /**
+     * Who this store is currently showing, and the token that proves an answer belongs to it.
+     *
+     * Lore is account-based: the library, the history, the bookmarks, the preferences and the
+     * transfer queue all belong to one identity — the guest, or one Google account — and switching
+     * identity is a real session change, not a UI reset. [profiles] owns the directories,
+     * [session] owns the generation that stale callbacks are checked against.
+     */
+    private val profiles = ProfileStore(app)
+    private val session = SessionGate()
+
+    /** Serialises identity loading: one namespace is read at a time, so two cannot interleave. */
+    private val loadLock = Mutex()
+
+    /**
+     * The identity currently loaded.
+     *
+     * Everything below that used to be a top-level file in `filesDir` is now resolved through this,
+     * which is why they are getters: changing the namespace changes every path at once, and no
+     * read or write can accidentally target the previous account.
+     */
+    var namespace by mutableStateOf(Profiles.GUEST)
+        private set
+
+    /** Shorthand for the property files of the active identity. */
+    private fun storeFile(name: String): File = profiles.file(namespace, name)
+
+    /**
+     * Preferences belong to the identity too: theme, font size, brightness, chosen interests and
+     * the paused-upload set are all per-account, so a getter (not a captured instance) is what
+     * every call site needs to keep reading the right file after a switch.
+     */
+    private val prefs: android.content.SharedPreferences get() = profiles.preferences(namespace)
+
+    private val booksFile: File get() = storeFile("library.json")
+    private val wantFile: File get() = storeFile("want_to_read.json")
+    private var notInterestedIds: MutableSet<String> = mutableSetOf()
+    private val pendingDeleteFile: File get() = storeFile("pending_deletes.json")
     /** Books the reader deleted on purpose. The other half of the merge — see [Deletions]. */
-    private val deletionsFile = File(app.filesDir, "deletions.json")
+    private val deletionsFile: File get() = storeFile("deletions.json")
 
     /**
      * The upload retry queue.
@@ -55,14 +90,14 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
      * was last tried and why it failed are written to disk, so the queue survives the process
      * being killed and the reader can be shown something true about it after a restart.
      */
-    private val uploadQueueFile = File(app.filesDir, "upload_queue.json")
+    private val uploadQueueFile: File get() = storeFile("upload_queue.json")
     /**
      * Uploads that were in flight when the process died.
      *
      * One small entry per book (id, bytes sent, bytes total, when). It is what lets the shelf say
      * "Paused" after a restart instead of "Failed" — or, worse, nothing at all.
      */
-    private val uploadJournalFile = File(app.filesDir, "upload_journal.json")
+    private val uploadJournalFile: File get() = storeFile("upload_journal.json")
     /**
      * Restores that were interrupted, and how far each got.
      *
@@ -70,16 +105,16 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
      * is "bytes still owed to the account", this one is "bytes already on disk that the account
      * can continue from". Mixing them would let a half-downloaded book look like a pending upload.
      */
-    private val restoreJournalFile = File(app.filesDir, "restore_journal.json")
+    private val restoreJournalFile: File get() = storeFile("restore_journal.json")
     private val restoreLock = Any()
     private val journalLock = Any()
     /** Per-book throttle, so one book's journal write cannot suppress another's. */
     private val journalFlushedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val deletionsLock = Any()
     private val queueLock = Any()
-    private val libraryAppearFile = File(app.filesDir, "library_appearance.json")
-    private val readerAppearFile = File(app.filesDir, "reader_appearance.json")
-    private val bookmarksFile = File(app.filesDir, "bookmarks.json")
+    private val libraryAppearFile: File get() = storeFile("library_appearance.json")
+    private val readerAppearFile: File get() = storeFile("reader_appearance.json")
+    private val bookmarksFile: File get() = storeFile("bookmarks.json")
     private val libraryLock = Any()
     private val pendingDeleteLock = Any()
     private val bookmarksLock = Any()
@@ -215,61 +250,137 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     init {
         StartupTrace.mark("LanternStore.init scheduled")
         viewModelScope.launch {
-            StartupTrace.mark("LanternStore hydrate start")
-            val disk = withContext(Dispatchers.IO) {
-                StartupTrace.mark("LanternStore hydrate IO")
-                hydrateFromDisk()
+            // Migration first, before anything reads a file: the pre-3.7.0 install kept one shared
+            // shelf in filesDir, and it has exactly one correct owner.
+            val migrated = withContext(Dispatchers.IO) {
+                runCatching { profiles.migrateLegacyIfNeeded() }.getOrNull()
             }
-            readingPrefs = disk.readingPrefs
-            val acc = disk.googleAcc
-            if (acc != null) {
-                googleAccountKey = GoogleAuth.accountKey(acc)
-                applyAccount(acc, announce = false)
-            } else {
-                account = disk.account
+            if (migrated != null) StartupTrace.mark("profiles migrated into $migrated")
+            val start = withContext(Dispatchers.IO) { resolveStartupIdentity(migrated) }
+            StartupTrace.mark("profiles start namespace=${start.first}")
+            activate(start.first, start.second, announce = false)
+        }
+    }
+
+    /**
+     * Which identity the app opens as.
+     *
+     * The rule is deliberately narrow: the account Google says this device is signed into, and only
+     * if the session pointer left by the previous run names that same account. A pointer naming an
+     * account that is no longer signed in is ignored, so a phone handed to somebody else — or an
+     * account removed from the device — can never open into that account's shelf. When in doubt the
+     * answer is guest, which is always safe: it holds only what was created while signed out.
+     */
+    private fun resolveStartupIdentity(migrated: String?): Pair<String, String?> {
+        val app = getApplication<Application>()
+        val deviceAccount = runCatching { GoogleAuth.accountId(app) }.getOrNull()
+        val pointer = readSessionPointer()
+        // What the previous run was showing: a fresh migration says so outright, otherwise the
+        // pointer left behind does.
+        val previous = migrated ?: pointer?.first
+        // A guest session stays a guest session. Only an account the device is really signed into
+        // survives a restart, and only if the pointer names that same account.
+        val account = when {
+            previous == null -> deviceAccount
+            previous == Profiles.GUEST -> null
+            deviceAccount != null && profiles.ownedBy(previous, deviceAccount) -> deviceAccount
+            else -> null
+        }
+        val namespace = when {
+            account == null -> Profiles.GUEST
+            previous != null && profiles.ownedBy(previous, account) -> previous
+            else -> Profiles.namespaceFor(account)
+        }
+        return namespace to (if (namespace == Profiles.GUEST) null else account)
+    }
+
+    private val sessionPointerFile = File(app.filesDir, "session.json")
+
+    private fun readSessionPointer(): Pair<String, String?>? = runCatching {
+        if (!sessionPointerFile.exists()) return@runCatching null
+        val json = JSONObject(sessionPointerFile.readText())
+        val ns = json.optString("namespace").ifBlank { Profiles.GUEST }
+        if (!Profiles.isValidNamespace(ns)) return@runCatching null
+        ns to json.optString("accountId").ifBlank { null }
+    }.getOrNull()
+
+    private fun writeSessionPointer(namespace: String, accountId: String?) {
+        val json = JSONObject()
+            .put("namespace", namespace)
+            .put("accountId", accountId ?: "")
+        runCatching { atomicWrite(sessionPointerFile, json.toString()) }
+    }
+
+    /**
+     * Loads one identity and makes it the active session.
+     *
+     * This is the only way the store changes whose data it is showing. It does, in this order:
+     *
+     * 1. starts a new session generation, so every callback already in flight is stale from here on;
+     * 2. empties the in-memory state — the shelf, saved picks, bookmarks, appearance, preferences,
+     *    the import sheet, live transfers — before the new files are read, so there is no frame in
+     *    which Account B's screen shows Account A's books;
+     * 3. reads the new identity's files;
+     * 4. records which identity this run is showing;
+     * 5. re-queues that identity's pending uploads and, for a Google account, refreshes from cloud.
+     *
+     * Signing out calls this with [Profiles.GUEST]; signing in calls it with the account's
+     * namespace. Neither path deletes anything: the account's directory, its cloud library and its
+     * Drive files all stay exactly as they were, which is what makes signing back in a return
+     * rather than a new start.
+     */
+    private fun activate(target: String, accountId: String?, announce: Boolean) {
+        if (!Profiles.isValidNamespace(target)) return
+        // A new generation *first*: from this line on, every answer that was already on its way
+        // belongs to a session that no longer exists and will be dropped.
+        val gen = session.begin(target)
+        // Never adopt a directory that belongs to somebody else.
+        val owner = if (target == Profiles.GUEST) null else accountId
+        if (target != Profiles.GUEST) {
+            val recorded = profiles.identity(target)
+            if (owner.isNullOrBlank() || (recorded != null && recorded.ownerAccountId != owner)) {
+                SyncDiag.fail("Account isolation", "refused to open $target: it belongs to another account")
+                return
             }
-            synchronized(libraryLock) {
-                books.clear()
-                books.addAll(disk.books)
+        }
+        viewModelScope.launch {
+            // One identity is loaded at a time. Two overlapping loads used to be able to interleave
+            // their file reads, which is how a half-loaded shelf could be published under the wrong
+            // name; with the lock, the second load starts only after the first has published or
+            // given up.
+            loadLock.withLock {
+                if (!session.isCurrent(gen, target)) return@withLock
+                namespace = target
+                // One directory per identity, created when that identity is opened and never on a
+                // hot path.
+                profiles.dir(target)
+                if (target != Profiles.GUEST) profiles.ensure(target, owner)
+                if (accountId != null) {
+                    // A brand-new namespace has no preferences yet; seed the minimum that says
+                    // "this directory belongs to this account" before anything reads it.
+                    val own = profiles.preferences(target)
+                    if (!own.getBoolean("in", false) || own.getString("uid", "").orEmpty() != accountId) {
+                        own.edit().putBoolean("in", true).putString("prov", "google")
+                            .putString("uid", accountId).apply()
+                    }
+                } else {
+                    profiles.preferences(target).edit()
+                        .putBoolean("in", false).putString("prov", "").putString("uid", "").apply()
+                }
+                setSignedInAccount(accountId, announce)
+                clearActiveState()
+                val disk = withContext(Dispatchers.IO) {
+                    StartupTrace.mark("LanternStore hydrate IO ns=$target")
+                    hydrateFromDisk()
+                }
+                if (!session.isCurrent(gen, target)) return@withLock
+                applyHydrated(disk, gen)
+                writeSessionPointer(target, accountId)
             }
-            wantToRead.clear()
-            wantToRead.addAll(disk.want)
-            interestsChosen = disk.interestsChosen
-            interests = disk.interests
-            libraryAppearance = disk.libraryAppearance
-            readerAppearance = disk.readerAppearance
-            libraryAppearAt = disk.libraryAppearAt
-            readerAppearAt = disk.readerAppearAt
-            prefsAt = disk.prefsAt
-            snapshotAt = disk.snapshotAt
-            synchronized(bookmarksLock) {
-                bookmarkRecords.clear()
-                bookmarkRecords.addAll(disk.bookmarks)
-            }
-            StartupTrace.mark("LanternStore prefs interestsChosen=$interestsChosen n=${interests.size}")
-            if (interestsChosen) {
-                forYou = disk.forYouCached.filterNot { it.volumeId in notInterestedIds }
-                StartupTrace.mark("LanternStore cached forYou=${forYou.size}")
-            }
-            hydrated = true
-            StartupTrace.mark("LanternStore hydrated")
-            // The shelf and the You screen show a per-book backup state from the first frame, not
-            // after the first sync.
-            reconcileVerifications()
-            pausedUploads = loadPausedUploads()
-            reconcileInterruptedUploads()
-            reconcileInterruptedRestores()
-            refreshBackupAudit()
-            if (interestsChosen) ensureRecommendations()
-            if (account.signedIn && account.provider == "google" && GoogleAuth.accountId(acc) != null) {
+            if (accountId != null && session.isCurrent(gen, target)) {
                 viewModelScope.launch(Dispatchers.IO) {
-                    // This coroutine is launched from the view model, so an exception that escapes
-                    // it does not stay in the background: it reaches the default handler and takes
-                    // the whole app down, on launch, with nothing the reader can do about it. That
-                    // is exactly how build 276 died, when a Compose snapshot conflict was thrown
-                    // from inside the upload retry. Each step is therefore caught and reported to
-                    // the diagnosis screen instead; a failed startup sync is a thing to see, not a
-                    // thing to crash on.
+                    // Reported, never thrown: an exception escaping this coroutine reaches the
+                    // default handler and takes the whole app down (build 276).
                     try {
                         connectDrive(quiet = true, pullAccount = true)
                     } catch (cancelled: CancellationException) {
@@ -277,9 +388,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     } catch (t: Throwable) {
                         SyncDiag.fail("Drive on launch", t.describe())
                     }
-                    // Anything still queued from a previous run gets another try on launch, which
-                    // is what "retry when connectivity returns" means for an app that is not
-                    // running a foreground service.
+                    if (!session.isCurrent(gen, target)) return@launch
                     try {
                         retryQueuedTransfers()
                     } catch (cancelled: CancellationException) {
@@ -289,6 +398,152 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Empties everything that belongs to the identity being left.
+     *
+     * Written as one list rather than scattered across the switch so it is obvious what "the active
+     * app state" means: if a field is missing here it would leak from one account into the next.
+     */
+    private fun clearActiveState() {
+        synchronized(libraryLock) { books.clear() }
+        wantToRead.clear()
+        forYou = emptyList()
+        forYouBusy = false
+        forYouFailed = false
+        interestsChosen = false
+        interests = emptyList()
+        editingInterests = false
+        readingPrefs = ReadingPrefs()
+        libraryAppearance = LibraryAppearance()
+        readerAppearance = ReaderAppearance()
+        libraryAppearAt = 0L
+        readerAppearAt = 0L
+        prefsAt = 0L
+        snapshotAt = 0L
+        synchronized(bookmarksLock) { bookmarkRecords.clear() }
+        uploadingIds = emptySet()
+        queuedUploadIds = emptySet()
+        pausedUploads = emptySet()
+        uploadQueueReasons = emptyMap()
+        backupCounts = BackupAudit.Counts(0, 0, 0, 0, 0)
+        importPlan = null
+        importRows = emptyList()
+        importBusy = false
+        importMeasured = 0
+        importToMeasure = 0
+        isImporting = false
+        restoringIds = emptySet()
+        removingIds = emptySet()
+        TransferBus.clearAll()
+        notInterestedIds = mutableSetOf()
+        driveConsentPrompted = false
+        driveConsentIntent = null
+    }
+
+    /**
+     * Publishes a hydrated identity to the UI — only if its session is still the live one.
+     *
+     * The generation check is the whole point: a hydrate that started for Account A and finishes
+     * after the reader has signed into Account B must write nothing at all.
+     */
+    private fun applyHydrated(disk: DiskHydrate, gen: Int) {
+        if (!session.isCurrent(gen)) return
+        readingPrefs = disk.readingPrefs
+        val owner = profiles.identity(namespace)
+        // `GoogleAuth.lastAccount` is whatever account the device signed into last, which is not
+        // necessarily the owner of this namespace. Accepting it blindly is exactly how one
+        // account's identity ends up attached to another account's shelf.
+        val deviceAccount = disk.googleAcc?.takeIf { owner != null && GoogleAuth.accountId(it) == owner }
+        if (deviceAccount != null) {
+            googleAccountKey = GoogleAuth.accountKey(deviceAccount)
+            applyAccount(deviceAccount, announce = false)
+        } else if (owner != null) {
+            googleAccountKey = owner
+            account = disk.account.copy(signedIn = true, provider = "google", userId = owner)
+            prefs.edit().putString("uid", owner).apply()
+        } else {
+            googleAccountKey = null
+            account = CloudAccount()
+        }
+        synchronized(libraryLock) {
+            books.clear()
+            books.addAll(disk.books)
+        }
+        wantToRead.clear()
+        wantToRead.addAll(disk.want)
+        interestsChosen = disk.interestsChosen
+        interests = disk.interests
+        libraryAppearance = disk.libraryAppearance
+        readerAppearance = disk.readerAppearance
+        libraryAppearAt = disk.libraryAppearAt
+        readerAppearAt = disk.readerAppearAt
+        prefsAt = disk.prefsAt
+        snapshotAt = disk.snapshotAt
+        notInterestedIds = prefs.getStringSet("not_interested_volume_ids", emptySet())!!.toMutableSet()
+        synchronized(bookmarksLock) {
+            bookmarkRecords.clear()
+            bookmarkRecords.addAll(disk.bookmarks)
+        }
+        StartupTrace.mark("LanternStore prefs interestsChosen=$interestsChosen n=${interests.size}")
+        if (interestsChosen) {
+            forYou = disk.forYouCached.filterNot { it.volumeId in notInterestedIds }
+            StartupTrace.mark("LanternStore cached forYou=${forYou.size}")
+        }
+        hydrated = true
+        StartupTrace.mark("LanternStore hydrated ns=$namespace")
+        // The shelf and the You screen show a per-book backup state from the first frame, not
+        // after the first sync.
+        reconcileVerifications()
+        pausedUploads = loadPausedUploads()
+        reconcileInterruptedUploads()
+        reconcileInterruptedRestores()
+        refreshBackupAudit()
+        if (interestsChosen) ensureRecommendations()
+        // Anything this identity still owes the account becomes durable work now, not only while a
+        // screen happens to be open.
+        schedulePendingUploads()
+    }
+
+    /** Sets the account header without touching any files. */
+    private fun setSignedInAccount(accountId: String?, announce: Boolean) {
+        if (accountId.isNullOrBlank()) {
+            googleAccountKey = null
+            account = CloudAccount()
+            prefs.edit().putBoolean("in", false).putString("prov", "").putString("uid", "").apply()
+            return
+        }
+        val key = accountId
+        googleAccountKey = key
+        val existing = account
+        account = CloudAccount(
+            signedIn = true,
+            displayName = existing.displayName,
+            email = existing.email,
+            provider = "google",
+            driveConnected = false,
+            userId = key
+        )
+        if (announce) toast("Signed in as ${existing.displayName.ifBlank { "your account" }}")
+    }
+
+    /**
+     * Hands every book that still owes this identity's account to WorkManager.
+     *
+     * Cheap and idempotent: the jobs are unique per book, so a queue entry that is already in
+     * flight is not queued twice.
+     */
+    fun schedulePendingUploads() {
+        val ns = namespace
+        if (ns == Profiles.GUEST) return
+        val pending = runCatching { pendingTransfers() }.getOrDefault(emptyList())
+        if (pending.isEmpty()) return
+        val account = account.userId.takeIf { it.isNotBlank() } ?: googleAccountKey ?: return
+        val context = getApplication<Application>()
+        pending.filter { it.retryable }.forEach { transfer ->
+            UploadScheduler.enqueue(context, ns, account, transfer.bookId)
         }
     }
 
@@ -332,7 +587,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             .split("|")
             .map { it.trim() }
             .filter { it.isNotEmpty() }
-        val cached = if (chosen) Recommendations.cached(app, chosenInterests).orEmpty() else emptyList()
+        val cached = if (chosen) Recommendations.cached(app, chosenInterests, profiles.dir(namespace)).orEmpty() else emptyList()
         val libRaw = runCatching { if (libraryAppearFile.exists()) libraryAppearFile.readText() else null }.getOrNull()
         val readRaw = runCatching { if (readerAppearFile.exists()) readerAppearFile.readText() else null }.getOrNull()
         val libAppear = LibraryAppearance(appearLookFromJson(libRaw, AppearLook.libraryDefault))
@@ -625,7 +880,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             .putString("interests", clean.joinToString("|"))
             .apply()
         StartupTrace.mark("saveInterests n=${clean.size} ids=${clean.joinToString(",")}")
-        Recommendations.clearCache(getApplication())
+        Recommendations.clearCache(getApplication(), profiles.dir(namespace))
         forYou = emptyList()
         forYouFailed = false
         ensureRecommendations(force = true)
@@ -654,7 +909,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             forYouBusy = true
             forYouFailed = false
             try {
-                val list = Recommendations.daily(getApplication(), interests, force)
+                val list = Recommendations.daily(getApplication(), interests, force, profiles.dir(namespace))
                 forYou = list.filterNot { it.volumeId in notInterestedIds }
                 RecDiag.storeCount = forYou.size
                 RecDiag.log(RecDiag.summary())
@@ -1169,19 +1424,46 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Signing in, which is an identity change and not a merge.
+     *
+     * The critical property: a guest shelf is never handed to the account. Guest books stay in the
+     * guest namespace, on this phone, exactly as they were; the account's own namespace is loaded
+     * from its files and then reconciled with its cloud library. If the reader was already in
+     * another Google account, that account's session is invalidated first, so its callbacks and
+     * workers cannot write into the namespace that is about to become active.
+     */
     fun onGoogleSignedIn(acc: GoogleSignInAccount) {
         val incoming = GoogleAuth.accountId(acc)
-        if (googleAccountKey != null && incoming != null && googleAccountKey != incoming) {
-            DriveLibrary.clearCachedFolder()
-        }
-        googleAccountKey = incoming
-        applyAccount(acc, announce = incoming != null)
         if (incoming.isNullOrBlank()) {
             toast("Signed in, but Google did not return a stable account ID. Library stays on this phone.")
             return
         }
-        viewModelScope.launch(Dispatchers.IO) { connectDrive(quiet = false, pullAccount = true) }
-        viewModelScope.launch(Dispatchers.IO) { syncFirebaseAccount(acc, announce = true) }
+        val target = profiles.namespaceFor(incoming)
+        val previousNamespace = namespace
+        if (previousNamespace != target) {
+            // A different identity is being loaded: close the old session before anything else so
+            // that nothing in flight can be mistaken for this account's work.
+            endSession(previousNamespace, keepOnDisk = true)
+            DriveLibrary.clearCachedFolder()
+        }
+        // Seed this namespace's header before the files are read, so the first frame already says
+        // whose library is loading and no frame can show the previous identity's name.
+        profiles.preferences(target).edit()
+            .putBoolean("in", true)
+            .putString("prov", "google")
+            .putString("uid", incoming)
+            .putString("name", acc.displayName.orEmpty().ifBlank { acc.email.orEmpty() })
+            .putString("email", acc.email.orEmpty())
+            .apply()
+        activate(target, incoming, announce = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            // The Firestore mirror is the account's own record; it is written only for the account
+            // that is active now.
+            val gen = session.generation
+            if (!session.isCurrent(gen, target)) return@launch
+            syncFirebaseAccount(acc, announce = true)
+        }
     }
 
     /**
@@ -1293,28 +1575,83 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) { connectDrive(quiet = false, pullAccount = true) }
     }
 
+    /**
+     * Signing out: detach this account, do not destroy it.
+     *
+     * In order: invalidate the session so late callbacks are refused, cancel this account's queued
+     * and running uploads, drop the account's in-memory state, hand Google back its token, and open
+     * a fresh Guest Mode. Nothing in the account's namespace is deleted wholesale and nothing at all
+     * is deleted in Drive or Firestore — signing back in has to be a return, not a new start:
+     *
+     * * the transfer queue and journals stay, because they are work this account still owes and
+     *   they are already isolated per namespace;
+     * * books that this account has not finished backing up stay on disk, because discarding them
+     *   on sign-out would lose data the reader believes is safe (and a sign-out is not a request to
+     *   delete anything);
+     * * books that are confirmed backed up are dropped from the local library, so the account's
+     *   cached shelf is not left lying around; the cloud copy is untouched and restores it.
+     */
     fun signOut(activity: android.app.Activity) {
-        syncGen++
+        val leaving = namespace
+        endSession(leaving, keepOnDisk = true)
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 DriveLibrary.clearCachedFolder()
+                purgeBackedUpCache(leaving)
                 GoogleAuth.signOutAndClearToken(activity, getApplication())
                 FirestoreAccountRepository.signOut()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (t: Throwable) {
+                SyncDiag.fail("Sign out", t.describe())
             } finally {
-                googleAccountKey = null
                 withContext(Dispatchers.Main) {
-                    driveConsentPrompted = false
-                    driveConsentIntent = null
-                    account = CloudAccount()
-                    prefs.edit()
-                        .putBoolean("in", false)
-                        .putString("prov", "")
-                        .putString("uid", "")
-                        .apply()
+                    activate(Profiles.GUEST, null, announce = false)
                     toast("Signed out")
                 }
             }
         }
+    }
+
+    /**
+     * Ends the session for [namespace]: invalidates its generation, stops its background work and
+     * empties the in-memory state that belonged to it.
+     *
+     * Called before every identity change, in both directions. [keepOnDisk] is always true in the
+     * app — it exists so the intent is explicit at the call site rather than implied.
+     */
+    private fun endSession(namespace: String, keepOnDisk: Boolean) {
+        session.begin(Profiles.GUEST)
+        syncGen++
+        val ctx = getApplication<Application>()
+        // Cancel by *account*, not by directory: the jobs are tagged with the account id they were
+        // created for, so nothing queued under another account is touched.
+        val owner = runCatching { profiles.identity(namespace)?.ownerAccountId }.getOrNull()
+        UploadScheduler.cancelAccount(ctx, owner)
+        if (!keepOnDisk) runCatching { profiles.purge(namespace) }
+        clearActiveState()
+        hydrated = false
+    }
+
+    /**
+     * Drops the local shelf entries for an account that are already safe in Drive.
+     *
+     * Deliberately conservative: an entry is only removed when it carries a confirmed remote copy
+     * and there is no pending transfer for it, so nothing un-backed-up is ever lost by signing out.
+     */
+    private fun purgeBackedUpCache(namespace: String) {
+        if (namespace == Profiles.GUEST) return
+        runCatching {
+            val file = profiles.file(namespace, "library.json")
+            if (!file.exists()) return@runCatching
+            val pending = UploadQueue.read(profiles.file(namespace, "upload_queue.json"))
+                .map { it.bookId }.toSet()
+            val all = BookRecords.decodeAll(file.readText())
+            val keep = all.filter { book -> book.volumeId in pending || !book.isBackedUp() }
+            if (keep.size == all.size) return@runCatching
+            BookRecords.write(file, keep)
+            SyncDiag.mark("Sign out", "kept ${keep.size} of ${all.size} local entries")
+        }.onFailure { SyncDiag.fail("Sign out", it.describe()) }
     }
 
     private fun applyAccount(acc: GoogleSignInAccount, announce: Boolean) {
@@ -3006,17 +3343,17 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     // Transfer queue
     // ---------------------------------------------------------------------------------------
 
-    /** One book that owes the account a file, and why it still does. */
-    data class PendingTransfer(
-        val bookId: String,
-        val title: String,
-        val attempts: Int,
-        val lastTryAt: Long,
-        val reason: String,
-        val retryable: Boolean
-    )
-
-    fun pendingTransfers(): List<PendingTransfer> = synchronized(queueLock) { loadQueueUnlocked() }
+    /**
+     * The queue of books that still owe this identity's account their bytes.
+     *
+     * The record and the file format now live in [UploadQueue], because the background worker reads
+     * and writes the same file without a store. This is the in-process view of it, for the shelf and
+     * the audit, and it is always the *active namespace's* queue: after a switch it resolves to the
+     * new directory, so Account A's pending work can never be listed as Account B's.
+     */
+    fun pendingTransfers(): List<PendingTransfer> = synchronized(queueLock) {
+        UploadQueue.read(uploadQueueFile).sortedBy { it.lastTryAt }
+    }
 
     /** Recomputes [uploadQueueReasons] from the persisted queue. */
     private fun refreshQueueReasons() {
@@ -3025,72 +3362,45 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
 
     private fun noteTransferFailed(book: LibraryBook, reason: String, retryable: Boolean) {
         synchronized(queueLock) {
-            val list = loadQueueUnlocked().toMutableList()
+            val list = UploadQueue.read(uploadQueueFile)
             val prev = list.firstOrNull { it.bookId == book.id }
-            list.removeAll { it.bookId == book.id }
-            list += PendingTransfer(
-                bookId = book.id,
-                title = book.title,
-                attempts = (prev?.attempts ?: 0) + 1,
-                lastTryAt = System.currentTimeMillis(),
-                reason = reason,
-                retryable = retryable
+            UploadQueue.write(
+                uploadQueueFile,
+                list.filterNot { it.bookId == book.id } + PendingTransfer(
+                    bookId = book.id,
+                    title = book.title,
+                    attempts = (prev?.attempts ?: 0) + 1,
+                    lastTryAt = System.currentTimeMillis(),
+                    reason = reason,
+                    retryable = retryable
+                )
             )
-            saveQueueUnlocked(list)
         }
         refreshQueueReasons()
         refreshBackupAudit()
+        // A book that still owes the account its bytes becomes durable work immediately, so leaving
+        // the app does not end the attempt.
+        if (retryable) enqueueUpload(book.id)
     }
 
     private fun clearTransfer(bookId: String) {
         synchronized(queueLock) {
-            val list = loadQueueUnlocked()
-            if (list.none { it.bookId == bookId }) return
-            saveQueueUnlocked(list.filterNot { it.bookId == bookId })
+            UploadQueue.remove(uploadQueueFile, bookId)
         }
         refreshQueueReasons()
     }
 
-    private fun loadQueueUnlocked(): List<PendingTransfer> {
-        if (!uploadQueueFile.exists()) return emptyList()
-        return runCatching {
-            val arr = JSONArray(uploadQueueFile.readText())
-            val out = ArrayList<PendingTransfer>(arr.length())
-            for (i in 0 until arr.length()) {
-                val row = arr.optJSONObject(i) ?: continue
-                val id = row.optString("id")
-                if (id.isBlank()) continue
-                out += PendingTransfer(
-                    bookId = id,
-                    title = row.optString("title"),
-                    attempts = row.optInt("attempts", 0),
-                    lastTryAt = row.optLong("at", 0L),
-                    reason = row.optString("reason"),
-                    retryable = row.optBoolean("retryable", true)
-                )
-            }
-            out
-        }.getOrDefault(emptyList())
-    }
-
-    private fun saveQueueUnlocked(list: List<PendingTransfer>) {
-        if (list.isEmpty()) {
-            runCatching { uploadQueueFile.delete() }
-            return
-        }
-        val arr = JSONArray()
-        list.forEach { t ->
-            arr.put(
-                JSONObject()
-                    .put("id", t.bookId)
-                    .put("title", t.title)
-                    .put("attempts", t.attempts)
-                    .put("at", t.lastTryAt)
-                    .put("reason", t.reason)
-                    .put("retryable", t.retryable)
-            )
-        }
-        runCatching { atomicWrite(uploadQueueFile, arr.toString()) }
+    /**
+     * Hands one book to WorkManager, if the active identity is one that can upload.
+     *
+     * Guest books are never queued: they are local to this phone by design.
+     */
+    private fun enqueueUpload(bookId: String) {
+        val ns = namespace
+        if (ns == Profiles.GUEST) return
+        val owner = account.userId.takeIf { it.isNotBlank() } ?: profiles.identity(ns)?.ownerAccountId
+        if (owner.isNullOrBlank()) return
+        UploadScheduler.enqueue(getApplication(), ns, owner, bookId)
     }
 
     // ---------------------------------------------------------------------------------------
@@ -3416,7 +3726,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     private fun dropFromRecommendations(drop: (DiscoveryBook) -> Boolean) {
         val excluded = { book: DiscoveryBook -> book.volumeId in notInterestedIds || drop(book) }
         if (forYou.any(excluded)) forYou = forYou.filterNot(excluded)
-        Recommendations.excludeFromCache(getApplication(), excluded)
+        Recommendations.excludeFromCache(getApplication(), excluded, profiles.dir(namespace))
     }
     private fun persistWantToRead() {
         val arr = JSONArray()

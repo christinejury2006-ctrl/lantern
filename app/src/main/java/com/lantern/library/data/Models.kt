@@ -147,6 +147,16 @@ data class LibraryBook(
             else -> ((currentPage + 1).toFloat() / pageCount.toFloat()).coerceIn(0f, 1f)
         }
 
+    /**
+     * True only when the account provably holds this book's bytes.
+     *
+     * Same rule the shelf uses for [BookBackupState.BACKED_UP]: a verified checksum, a real Drive id,
+     * and nothing still queued or failed. Sign-out relies on this to decide which local entries are
+     * safe to drop, so it must never be optimistic.
+     */
+    fun isBackedUp(): Boolean =
+        backupAt > 0L && !pendingUpload && !backupFailed && !driveFileId.isNullOrBlank()
+
     /** What the reader can honestly be told about this book's cloud copy. */
     val backupState: BookBackupState
         get() {

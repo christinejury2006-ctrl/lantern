@@ -247,18 +247,31 @@ jobs:
           # expected to be *gone* after the upgrade — moved into the namespace that owns it. Look in
           # both places rather than assume: reading only the old path would report a missing library
           # on every later build, and reading only the new one would hide a migration that never ran.
-          legacy_path=files/library.json
-          migrated_path=files/profiles/guest/library.json
           echo "== where the shelf went =="
-          adb shell "run-as com.lantern.library sh -c 'ls -l files/library.json files/profiles 2>&1'" || true
-          if adb shell "run-as com.lantern.library sh -c 'test -f files/library.json'"; then
-            echo "legacy library.json is still at the old path: the migration did not run"
-            after_path=files/library.json
+          adb shell "run-as com.lantern.library sh -c 'ls -R files | head -60'" || true
+          echo "== shared_prefs =="
+          adb shell "run-as com.lantern.library sh -c 'ls -l shared_prefs'" || true
+          adb shell "logcat -d -s LoreProfiles | tail -5" || true
+          # The shelf must be readable *by the app*, which since 3.7.0 means inside a profile
+          # directory. Reading the legacy path would report PRESERVED even if the migration never
+          # ran, so the namespaced copy is preferred and the legacy path is only a fallback that is
+          # reported as a failure of the migration rather than as success.
+          after_path=""
+          for candidate in files/profiles/guest/library.json files/library.json; do
+            if adb shell "run-as com.lantern.library sh -c 'test -f $candidate'"; then
+              after_path="$candidate"
+              break
+            fi
+          done
+          if [ -z "$after_path" ]; then
+            echo "NO LIBRARY FOUND after the upgrade"
+            echo "[]" > library-after.json
           else
-            echo "legacy library.json is gone; reading $migrated_path"
-            after_path="$migrated_path"
+            echo "reading the shelf from $after_path"
           fi
-          adb shell "run-as com.lantern.library sh -c 'cat $after_path'" > library-after.json
+          if [ -n "$after_path" ]; then
+            adb shell "run-as com.lantern.library sh -c 'cat $after_path'" > library-after.json
+          fi
           head -c 300 library-after.json
           python3 - <<'PY' || true
           import json, pathlib

@@ -285,12 +285,27 @@ class ProfileStore(private val app: Application) {
         val target = Profiles.namespaceFor(ownerAccountId)
         ensure(target, ownerAccountId)
         dir(target)
-        val moved = LegacyMigrate.moveFiles(app.filesDir, dir(target), managedFiles)
+        // The library is the one file that must not be resolved by "keep the newer copy": both
+        // sides can hold books the other does not. If a destination library already exists (an
+        // install of 3.7.0 that ran once before this data appeared, a downgrade and re-upgrade), the
+        // two are merged by book id, destination winning for a book that exists in both. Every other
+        // file is moved only when the destination is absent — the destination is the newer copy, and
+        // a half-migrated install must never be overwritten.
+        val destinationDir = dir(target)
+        val legacyLibrary = File(app.filesDir, "library.json")
+        val existingLibrary = File(destinationDir, "library.json")
+        var merged = 0
+        if (legacyLibrary.exists() && existingLibrary.exists()) {
+            merged = LegacyMigrate.mergeLibrary(existingLibrary, legacyLibrary)
+            runCatching { legacyLibrary.delete() }
+        }
+        val moved = LegacyMigrate.moveFiles(app.filesDir, destinationDir, managedFiles)
         // Logged on every build, not only debug ones: "where did my library go" has to be answerable
         // from a reader's logcat, and this is the one moment the app moves their data.
         android.util.Log.i(
             "LoreProfiles",
-            "migrated $moved of ${pending.size} legacy file(s) into $target"
+            "migrated $moved of ${pending.size} legacy file(s) into $target" +
+                (if (merged > 0) ", merged $merged book(s) into an existing library" else "")
         )
         migrateLegacyPreferences(target)
         // Last, so a crash above leaves the migration to be completed rather than declared done.
@@ -367,6 +382,28 @@ class ProfileStore(private val app: Application) {
  * rather than only being reasoned about.
  */
 object LegacyMigrate {
+
+    /**
+     * Merges a legacy `library.json` into one that already exists.
+     *
+     * Property that matters: **no book is dropped by an upgrade**. A book present only in the legacy
+     * file is added; a book present in both keeps the destination's record, because that is the one the
+     * newer build has been updating (progress, backup state, checksum). Ordering is legacy-first so the
+     * shelf reads in the order the reader last saw, with the destination's newer books after it.
+     *
+     * @return how many books the legacy file contributed.
+     */
+    fun mergeLibrary(destination: File, legacy: File): Int {
+        val existing = BookRecords.read(destination)
+        val incoming = BookRecords.read(legacy)
+        if (incoming.isEmpty()) return 0
+        val known = existing.map { it.id }.toHashSet()
+        val added = incoming.filter { it.id !in known }
+        if (added.isEmpty()) return 0
+        BookRecords.write(destination, added + existing)
+        return added.size
+    }
+
 
     /**
      * Moves each of [names] from [from] into [to].

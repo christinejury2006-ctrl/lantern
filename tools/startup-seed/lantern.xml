@@ -1,0 +1,18 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map>
+    <string name="theme">DARK</string>
+    <string name="fontId">times</string>
+    <float name="fontSize" value="19.0" />
+    <float name="brightness" value="0.85" />
+    <boolean name="swipe" value="true" />
+    <boolean name="landscape" value="false" />
+    <boolean name="mobile" value="true" />
+    <string name="name">Seed Reader</string>
+    <string name="email">seed@example.com</string>
+    <string name="prov"></string>
+    <string name="uid"></string>
+    <boolean name="in" value="false" />
+    <set name="paused_uploads">
+        <string>imp_seed_2</string>
+    </set>
+</map>

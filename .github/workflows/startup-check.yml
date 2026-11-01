@@ -2,20 +2,26 @@ name: Startup smoke test (release APK on an emulator)
 
 # Why this exists.
 #
-# Round 8.1 shipped a release APK that dies about a second after launch, and CI stayed green. The
+# Round 8.1 shipped a release APK that died about a second after launch, and CI stayed green. The
 # reason is not subtle: every check in build-apk.yml compiles, runs JVM unit tests, reads the DEX
 # back and verifies a signature. **Nothing ever launched the app.** A crash that only happens on a
-# device - an exception on the startup coroutine, an R8-renamed member, a resource that is missing at
-# run time - is invisible to all of it.
+# device - an exception on a startup coroutine, a resource missing at run time - is invisible to all
+# of it, and the crash was thrown from an upload thread inside a coroutine job that had nothing above
+# it to catch it.
 #
-# So this workflow does the one thing the build workflow cannot: it boots an Android runtime,
-# installs the *release* APK, launches it, and checks whether the process is still alive well past
-# the one second the report mentions. If it is not, it retraces the crash with that build's own
-# mapping.txt and fails.
+# So this workflow boots an Android runtime and launches the *minified release* APK twice:
 #
-# The retrace step runs before the emulator so its output is available even when the emulator is
-# slow: everything important is emitted as a run annotation (readable from the run page) rather than
-# only as an artifact.
+#   1. fresh install, to prove it starts at all;
+#   2. over a seeded library (five books, an interrupted-upload journal, existing preferences) to
+#      prove it starts with existing data and keeps that data.
+#
+# Both APKs are built with -PloreEmulatorAbi=x86_64: an app whose native libraries match no ABI of
+# the device is refused at install (INSTALL_FAILED_NO_MATCHING_ABIS), and phones do not need x86_64.
+# Sources, R8 configuration and mapping are identical to the shipped build.
+#
+# Output: the whole transcript goes into a check run named "Emulator startup result", because run
+# logs and artifact downloads are not always reachable. Read it with:
+#   gh api repos/<owner>/<repo>/commits/<sha>/check-runs --jq '.check_runs[] | select(.name=="Emulator startup result") | .output.text'
 
 on:
   workflow_dispatch:
@@ -25,11 +31,12 @@ on:
 
 permissions:
   contents: read
+  checks: write
 
 jobs:
   launch:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
 
@@ -39,7 +46,7 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Enable KVM for the emulator
+      - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
             | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -52,8 +59,10 @@ jobs:
         with:
           packages: platform-tools
 
-      - name: Install platform and build tools
-        run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
+      - name: Install platform, build tools and emulator
+        run: |
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" "emulator" \
+            "system-images;android-34;google_apis;x86_64"
 
       - name: Restore the persistent signing key
         env:
@@ -70,119 +79,176 @@ jobs:
             echo "LORE_KEY_PASSWORD=$LORE_KEY_PASSWORD"
           } >> "$GITHUB_ENV"
 
-      - name: Build the release APK the phone gets
-        timeout-minutes: 25
+      - name: Build the release and debug APKs for the emulator
+        timeout-minutes: 30
         env:
           GOOGLE_BOOKS_API_KEY: ${{ secrets.GOOGLE_BOOKS_API_KEY }}
           FIREBASE_WEB_CLIENT_ID: ${{ secrets.FIREBASE_WEB_CLIENT_ID }}
           LORE_BUILD_NUMBER: ${{ github.run_number }}
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tail -30
-          apk="$(ls app/build/outputs/apk/release/*.apk | head -n 1)"
-          echo "release APK: $apk"
-          "$ANDROID_HOME"/build-tools/34.0.0/aapt dump badging "$apk" | head -1
-          mapping=app/build/outputs/mapping/release/mapping.txt
-          {
-            echo "MAPPING_SHA256=$(sha256sum "$mapping" | cut -d' ' -f1)"
-            echo "MAPPING_BYTES=$(wc -c < "$mapping")"
-          } | tee mapping-id.txt
-          cat mapping-id.txt
+          ./gradlew assembleRelease assembleDebug -PloreEmulatorAbi=x86_64 --no-daemon --stacktrace 2>&1 | tail -25
+          ls -l app/build/outputs/apk/release/ app/build/outputs/apk/debug/
+          sha256sum app/build/outputs/mapping/release/mapping.txt
+          wc -c app/build/outputs/mapping/release/mapping.txt
 
-      # Everything below is printed *and* annotated: the run page is the only output channel that
-      # works in every environment, and the point of this workflow is to make the mapping readable.
       - name: Retrace the reported trace with THIS build's mapping
         run: |
           set +e
           mapping=app/build/outputs/mapping/release/mapping.txt
           python3 tools/retrace.py "$mapping" tools/reported-crash-276.txt > retraced.txt 2>&1
           python3 tools/retrace.py "$mapping" --dump J.j J.k w2.A4 w2.m3 w2.F4 o3.g > dump.txt 2>&1
-          echo "----- retraced -----"; cat retraced.txt
-          echo "----- reverse mapping -----"; cat dump.txt
-          python3 tools/annotate.py notice "Mapping identity" mapping-id.txt
-          python3 tools/annotate.py notice "Reported trace, retraced with this build's mapping" retraced.txt
-          python3 tools/annotate.py notice "Reverse mapping for reported classes" dump.txt
-          {
-            echo "### Mapping identity"; echo '```'; cat mapping-id.txt; echo '```'
-            echo "### Reported trace, retraced"; echo '```'; cat retraced.txt; echo '```'
-            echo "### Reverse mapping"; echo '```'; cat dump.txt; echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          head -40 retraced.txt
 
-      - name: Launch the release APK on an Android 34 emulator
-        timeout-minutes: 25
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 34
-          target: google_apis
-          arch: x86_64
-          profile: pixel_6
-          disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-audio -no-boot-anim
-          script: |
-            set +e
-            apk="$(ls app/build/outputs/apk/release/*.apk | head -n 1)"
-            adb install -r "$apk" || adb install "$apk"
-            adb shell pm list packages | grep lantern
+      # Everything is captured into boot.log and published as a check run at the end. Nothing in this
+      # step is allowed to stop the transcript: a failed install has to be readable too.
+      - name: Boot the emulator and launch the app twice
+        timeout-minutes: 40
+        run: |
+          exec > >(tee boot.log) 2>&1
+          set -x
+          echo "== creating AVD =="
+          echo "no" | avdmanager create avd -n lore -k "system-images;android-34;google_apis;x86_64" \
+            -d pixel_6 --force
+          nohup "$ANDROID_HOME/emulator/emulator" -avd lore -no-window -no-audio -no-boot-anim \
+            -gpu swiftshader_indirect -no-snapshot -wipe-data > emulator.log 2>&1 &
+          timeout 900 adb wait-for-device || echo "WAIT_FOR_DEVICE_TIMED_OUT"
+          adb devices
+          for i in $(seq 1 90); do
+            booted="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+            echo "boot poll $i: '$booted'"
+            [ "$booted" = "1" ] && break
+            sleep 10
+          done
+          tail -20 emulator.log
+          adb shell wm size
+          adb shell getprop ro.product.cpu.abilist
+
+          rel="$(ls app/build/outputs/apk/release/*.apk | head -n 1)"
+          dbg="app/build/outputs/apk/debug/lore-debug.apk"
+          [ -f "$dbg" ] || dbg="$(ls app/build/outputs/apk/debug/*.apk | head -n 1)"
+          echo "release=$rel debug=$dbg"
+
+          launch_and_watch () { # $1 = label
+            label="$1"
             adb logcat -c
             adb shell am start -W -n com.lantern.library/.MainActivity
-            # The report says "approximately one second". This waits far longer, so a slow emulator
-            # cannot be mistaken for a healthy app.
+            # Far longer than the "approximately one second" in the report.
             sleep 30
             pid="$(adb shell pidof com.lantern.library | tr -d '\r')"
-            echo "pid after 30s: '$pid'"
-            adb logcat -d -b crash > crash.log 2>&1
-            adb logcat -d > app.log 2>&1
-            echo "----- crash buffer -----"; cat crash.log
-            echo "----- app log (filtered) -----"
-            grep -E "lantern|AndroidRuntime|FATAL|LoreStartup" app.log | tail -120
-            # The verdict is written to a file as well as to the log: the emulator is shut down when
-            # this script returns, so a later step cannot ask `adb` whether the process is alive.
+            echo "== phase $label: pid after 30s = '$pid'"
+            adb logcat -d -b crash > "crash-$label.log" 2>&1
+            adb logcat -d > "app-$label.log" 2>&1
             if [ -z "$pid" ]; then
-              echo "DEAD" > startup-result.txt
-              echo "::error title=Startup crash::com.lantern.library is not running 30s after launch: the process died."
+              echo "PHASE $label DEAD" | tee -a startup-result.txt
             else
-              echo "ALIVE $pid" > startup-result.txt
-              echo "::notice title=Startup survived::com.lantern.library is still running (pid $pid) 30s after launch."
+              echo "PHASE $label ALIVE $pid" | tee -a startup-result.txt
             fi
-            exit 0
+          }
 
-      - name: Retrace whatever the device actually threw
+          echo "=================== PHASE A: fresh install of the release APK ==================="
+          adb install -r "$rel" || adb install "$rel"
+          adb shell pm list packages | grep lantern
+          launch_and_watch fresh
+
+          echo "=================== PHASE B: existing data, then the release APK ==================="
+          adb shell am force-stop com.lantern.library
+          adb uninstall com.lantern.library
+          # The debug build is the only one that can be `run-as`-ed, so it is used purely to create
+          # the app's own data directory and then to seed it, exactly as a previous release would
+          # have left it.
+          adb install -r "$dbg" || adb install "$dbg"
+          adb shell am start -W -n com.lantern.library/.MainActivity
+          sleep 15
+          adb shell am force-stop com.lantern.library
+          adb shell "run-as com.lantern.library mkdir -p files/seed shared_prefs"
+          for f in book1.epub book2.epub book3.pdf book5.epub; do
+            adb push "tools/startup-seed/$f" "/data/local/tmp/$f"
+            adb shell "run-as com.lantern.library sh -c 'cat /data/local/tmp/$f > files/seed/$f'"
+          done
+          for f in library.json upload_journal.json; do
+            adb push "tools/startup-seed/$f" "/data/local/tmp/$f"
+            adb shell "run-as com.lantern.library sh -c 'cat /data/local/tmp/$f > files/$f'"
+          done
+          adb push tools/startup-seed/lantern.xml /data/local/tmp/lantern.xml
+          adb shell "run-as com.lantern.library sh -c 'cat /data/local/tmp/lantern.xml > shared_prefs/lantern.xml'"
+          echo "== seeded library =="
+          adb shell "run-as com.lantern.library sh -c 'ls -l files files/seed shared_prefs; cat files/library.json'" \
+            > seeded.json
+          head -c 400 seeded.json
+
+          # The upgrade a reader performs: same package, same signing key, data kept.
+          adb install -r "$rel" || adb install "$rel"
+          launch_and_watch existing-data
+
+          echo "=================== was the seeded library kept? ==================="
+          adb shell am force-stop com.lantern.library
+          # Read the app's own data back through the debug build (same package, same key, data kept).
+          adb install -r "$dbg" || adb install "$dbg"
+          adb shell "run-as com.lantern.library sh -c 'cat files/library.json'" > library-after.json
+          python3 - <<'PY' || true
+          import json, pathlib
+          before = {b["id"] for b in json.loads(pathlib.Path("tools/startup-seed/library.json").read_text())}
+          try:
+              after = {b["id"] for b in json.loads(pathlib.Path("library-after.json").read_text())}
+          except Exception as exc:
+              print(f"DATA CHECK FAILED: {exc}")
+              raise SystemExit(0)
+          print("seeded ids :", sorted(before))
+          print("ids after  :", sorted(after))
+          print("PRESERVED" if before <= after else "MISSING " + str(sorted(before - after)))
+          PY
+
+          echo "== crash buffers =="
+          for f in crash-fresh.log crash-existing-data.log; do echo "--- $f"; cat "$f"; done
+          echo "== app log: startup-relevant lines =="
+          grep -E "lantern|AndroidRuntime|FATAL|LoreStartup|Snapshot" app-fresh.log | tail -60
+          grep -E "lantern|AndroidRuntime|FATAL|LoreStartup|Snapshot" app-existing-data.log | tail -60
+          echo "== retraced crash buffers =="
+          mapping=app/build/outputs/mapping/release/mapping.txt
+          python3 tools/retrace.py "$mapping" crash-fresh.log > crash-fresh-retraced.log 2>&1
+          python3 tools/retrace.py "$mapping" crash-existing-data.log > crash-existing-retraced.log 2>&1
+          cat crash-fresh-retraced.log crash-existing-retraced.log
+          exit 0
+
+      - name: Publish the startup transcript as a check run
         if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set +e
-          mapping=app/build/outputs/mapping/release/mapping.txt
-          [ -f crash.log ] || : > crash.log
-          [ -f app.log ] || : > app.log
-          python3 tools/retrace.py "$mapping" crash.log > crash-retraced.txt 2>&1
-          python3 tools/retrace.py "$mapping" app.log > app-retraced.txt 2>&1
-          grep -B2 -A14 -E "FATAL|Caused by|Exception" crash-retraced.txt | head -80
-          python3 tools/annotate.py notice "Device crash buffer, retraced" crash-retraced.txt
+          [ -f boot.log ] || echo "boot.log missing: the emulator step never ran" > boot.log
+          [ -f startup-result.txt ] || echo "NO VERDICT" > startup-result.txt
+          verdict="$(cat startup-result.txt)"
+          if grep -q DEAD startup-result.txt; then conclusion=failure; else conclusion=success; fi
+          if ! grep -q "PHASE fresh ALIVE" startup-result.txt; then conclusion=failure; fi
+          if ! grep -q "PHASE existing-data ALIVE" startup-result.txt; then conclusion=failure; fi
           {
-            echo "### Device crash buffer, retraced"; echo '```'
-            head -60 crash-retraced.txt; echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo "verdict: $verdict"
+            echo "preserved: $(grep -c PRESERVED boot.log) marker(s), $(grep -m1 -o 'MISSING.*' boot.log || true)"
+            echo
+            echo "===== transcript (tail) ====="
+            tail -c 30000 boot.log
+            echo
+            echo "===== retraced crash (existing data) ====="
+            head -c 4000 crash-existing-retraced.log 2>/dev/null
+            echo
+            echo "===== retraced crash (fresh) ====="
+            head -c 4000 crash-fresh-retraced.log 2>/dev/null
+          } > summary.txt
+          gh api -X POST "repos/$GITHUB_REPOSITORY/check-runs" \
+            -f name="Emulator startup result" \
+            -f head_sha="$GITHUB_SHA" \
+            -f status=completed \
+            -f conclusion="$conclusion" \
+            -f "output[title]=Release APK launch: $(echo "$verdict" | tr '\n' ' ')" \
+            -f "output[summary]=$(echo "$verdict" | tr '\n' ' ' | cut -c1-600)" \
+            -f "output[text]=$(cat summary.txt)"
+          echo "conclusion=$conclusion"
 
-      # The gate. `if: always()` so a failure earlier in the job still reports the verdict, and the
-      # step fails when the app did not survive.
-      - name: Startup must be alive to pass
+      - name: The app must be alive in both phases
         if: always()
         run: |
-          echo "startup-result.txt: $(cat startup-result.txt 2>/dev/null)"
-          grep -q '^ALIVE' startup-result.txt
-
-      - name: Upload logs and mapping
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: startup-logs
-          path: |
-            crash.log
-            app.log
-            crash-retraced.txt
-            app-retraced.txt
-            retraced.txt
-            dump.txt
-            mapping-id.txt
-            app/build/outputs/mapping/release/mapping.txt
-            startup-result.txt
-          if-no-files-found: ignore
+          cat startup-result.txt
+          grep -q "PHASE fresh ALIVE" startup-result.txt
+          grep -q "PHASE existing-data ALIVE" startup-result.txt

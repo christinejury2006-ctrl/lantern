@@ -29,6 +29,23 @@ android {
         // emulator ABIs would triple the download for nobody's benefit.
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            // An APK whose native libraries match no ABI of the device is refused at install time
+            // (INSTALL_FAILED_NO_MATCHING_ABIS), which is why the startup smoke test could not put
+            // the shipped APK on an x86_64 emulator at all. That test therefore builds its own
+            // copy with the emulator ABI added:
+            //
+            //     ./gradlew assembleRelease -PloreEmulatorAbi=x86_64
+            //
+            // Same sources, same R8 configuration, same mapping. Shipped builds never pass this
+            // property, so the APK readers download is unchanged.
+            (project.findProperty("loreEmulatorAbi") as String?)
+                ?.split(',')
+                ?.map(String::trim)
+                ?.filter(String::isNotEmpty)
+                ?.forEach { abi ->
+                    abiFilters.add(abi)
+                    logger.lifecycle("Emulator-only ABI added to this build: $abi")
+                }
         }
         buildConfigField("String", "GOOGLE_BOOKS_API_KEY", "\"${escapeBuildConfig(resolveGoogleBooksApiKey())}\"")
         buildConfigField("String", "FIREBASE_WEB_CLIENT_ID", "\"${escapeBuildConfig(resolveFirebaseWebClientId())}\"")

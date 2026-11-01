@@ -2462,10 +2462,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             BackupRules.needsUpload(b, file != null && file.exists() && file.length() > 0L)
         }.take(40)
         var extraFailures = 0
-        var deferredUploads = 0
         if (stillOwed.isNotEmpty()) {
-            val batch = uploadBatch(stillOwed.take(40))
-            deferredUploads = (stillOwed.size - 40).coerceAtLeast(0)
+            val batch = uploadBatch(stillOwed)
             extraFailures = batch.failed.size
             if (batch.failed.isNotEmpty()) {
                 SyncDiag.mark(
@@ -2543,7 +2541,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             retryPendingDeletes()
             withContext(Dispatchers.Main) {
                 val at = System.currentTimeMillis()
-                val pending = extraFailures + deferredUploads
+                val pending = extraFailures
                 // The dirty flag means "the account is fully up to date". While a file is still
                 // owed, it stays set so the next sync retries it.
                 prefs.edit()

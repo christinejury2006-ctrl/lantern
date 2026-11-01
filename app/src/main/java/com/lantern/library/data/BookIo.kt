@@ -565,6 +565,9 @@ object BookIo {
 
     /** Removes only derived EPUB images; the original archive remains the source of truth. */
     fun deleteDerivedMedia(book: File): Long {
+        // Book archives are direct children of Lore's private books directory; never derive a
+        // sibling deletion target from an arbitrary path supplied by a record.
+        if (book.parentFile?.name != "books") return 0L
         val dir = mediaDirFor(book)
         if (!dir.exists()) return 0L
         val bytes = directoryBytes(dir)

@@ -378,6 +378,7 @@ class DownloadTest {
         assertTrue("expected AlreadyRemoved, got $second", second is RemoveOutcome.AlreadyRemoved)
         assertNull(host.library[book.id]!!.filePath)
         assertEquals("drive-file-book-1", host.library[book.id]!!.driveFileId)
+        assertFalse("removing the local copy clears its offline pin", host.library[book.id]!!.keepOffline)
         assertEquals("only the first call said anything", 1, host.notes.size)
     }
 
@@ -428,6 +429,7 @@ class DownloadTest {
         val after = host.library[removed.id]!!
         assertEquals(BookFormat.EPUB, after.format)
         assertEquals(BookBackupState.BACKED_UP, after.backupState)
+        assertTrue("an explicit restore is an offline-download choice", after.keepOffline)
     }
 
     // 3

@@ -418,6 +418,8 @@ class DownloadService(private val host: DownloadHost) {
         val md5 = BookFiles.md5(present)
         val cleared = book.copy(
             filePath = null,
+            // Removing the local copy also clears its offline pin. A later explicit restore pins it again.
+            keepOffline = false,
             backupMd5 = md5.ifBlank { book.backupMd5 }
         )
 

@@ -2597,6 +2597,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     )
                 }
             }
+            // Only after the account snapshot is durably written: the remote file upload alone is
+            // not enough to evict a local copy if its library metadata has not been synced.
+            maybeEvictCache(keepId = null)
         } else {
             SyncDiag.fail("Account snapshot written", "Drive rejected the write; the account copy is unchanged")
             if (announce) withContext(Dispatchers.Main) {

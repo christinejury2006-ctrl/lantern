@@ -2,16 +2,56 @@ package com.lantern.library.data
 
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.snapshots.Snapshot
+import androidx.compose.runtime.snapshots.SnapshotApplyConflictException
 
 /**
- * Applies a change to the map inside its own snapshot.
+ * How many times one publish may be re-applied before the conflict is passed on.
  *
- * Progress arrives on the OkHttp writer thread, which is not a composition; writing Compose state
- * without a snapshot from there is the kind of thing that works in a demo and throws on a
- * release build. `withMutableSnapshot` is the supported way to publish a value from any thread.
+ * The only writers are the transfer callbacks below and they all take [writeLock], so a conflict can
+ * only come from outside this file; repeating a failing apply forever would hang an upload thread
+ * instead of reporting the problem, so it gives up after a few tries.
  */
-private inline fun edit(block: () -> Unit) {
-    Snapshot.withMutableSnapshot(block)
+private const val MAX_CONFLICT_RETRIES = 3
+
+/**
+ * Serialises every publish into [TransferBus].
+ *
+ * `Snapshot.withMutableSnapshot` *applies* a snapshot to the global one, and Compose rejects that
+ * apply when the same objects were changed by another snapshot in between - throwing
+ * [SnapshotApplyConflictException]. That is correct behaviour for Compose and fatal for this app:
+ * [UploadPool] runs several books at once, so two upload threads publishing progress at the same
+ * instant could conflict, and the throw happened inside a per-book upload job that had nothing
+ * above it to catch it. Build 276 died about a second after launch that way, on its first attempt to
+ * retry a queued upload:
+ *
+ * ```
+ * SnapshotApplyConflictException
+ *     at SnapshotApplyResult$Failure.check()
+ *     at TransferBus.failed(...)
+ *     at LanternStore$uploadListener$1.onFailed(...)
+ *     at UploadPool$run$3$2$job$1.invokeSuspend(...)
+ * ```
+ *
+ * One lock, held for the duration of one apply, makes the writers take turns. The writes are tiny
+ * (one map entry) and progress is already throttled to whole percent changes, so the contention
+ * costs nothing measurable; the retry loop above it covers a conflict from a writer outside this
+ * file, and re-running a block that only assigns one entry is safe.
+ */
+private val writeLock = Any()
+
+/** Applies a change to the map inside its own snapshot: serialised, then retried if needed. */
+private fun edit(block: () -> Unit) {
+    synchronized(writeLock) {
+        var attempt = 0
+        while (true) {
+            try {
+                Snapshot.withMutableSnapshot(block)
+                return
+            } catch (conflict: SnapshotApplyConflictException) {
+                if (++attempt >= MAX_CONFLICT_RETRIES) throw conflict
+            }
+        }
+    }
 }
 
 /**

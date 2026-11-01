@@ -656,6 +656,14 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     fun toast(msg: String) { viewModelScope.launch { toast = msg; delay(5000); if (toast == msg) toast = null } }
     fun book(id: String): LibraryBook? = synchronized(libraryLock) { books.firstOrNull { it.id == id } }
 
+    /** Persists whether this local copy is protected from automatic cache cleanup. */
+    fun setKeepOffline(bookId: String, keep: Boolean) {
+        val current = book(bookId) ?: return
+        if (current.keepOffline == keep) return
+        upsert(current.copy(keepOffline = keep))
+        toast(if (keep) "Saved for offline reading" else "Eligible for automatic storage cleanup")
+    }
+
     fun upsert(book: LibraryBook) {
         synchronized(libraryLock) {
             val i = books.indexOfFirst { it.id == book.id }
@@ -3032,8 +3040,12 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             }
         }
 
-        override fun deleteLocal(file: File): Boolean =
-            runCatching { file.delete() }.getOrDefault(false)
+        override fun deleteLocal(file: File): Boolean {
+            val deleted = runCatching { file.delete() && !file.exists() }.getOrDefault(false)
+            // EPUB media is derived from the original archive, so it can be regenerated on restore.
+            if (deleted) runCatching { BookIo.deleteDerivedMedia(file) }
+            return deleted
+        }
 
         override suspend fun fetchCloud(book: LibraryBook, dest: File): Boolean {
             val id = book.driveFileId ?: return false
@@ -3555,7 +3567,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         // the account still has the exact book, validates its size/checksum, persists filePath=null
         // before deleting bytes, and rolls the record back if deletion fails.
         val dir = BookIo.booksDir(getApplication())
-        val used = dir.listFiles()?.filter { it.isFile }?.sumOf { it.length() } ?: 0L
+        // EPUB illustrations live in nested media_<book> folders. Count the whole tree.
+        val used = BookIo.directoryBytes(dir)
         val targetBytes = 192L * 1024 * 1024
         val cacheLimit = 256L * 1024 * 1024
         if (used <= cacheLimit) return
@@ -3563,7 +3576,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         val protectedRecentlyOpened = 30L * 60L * 1000L
         val busy = uploadingIds + restoringIds + removingIds
         val victims = synchronized(libraryLock) { books.toList() }
-            .filter { it.id != keepId && it.id !in busy }
+            .filter { it.id != keepId && it.id !in busy && !it.keepOffline }
             .filter { book ->
                 val openedAt = recentBookOpens[book.id] ?: 0L
                 (openedAt == 0L || now - openedAt > protectedRecentlyOpened) &&
@@ -3716,7 +3729,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     o.optLong("lastReadAt"), o.optString("category", "Library"), o.optString("synopsis"), emptyList(),
                     o.optString("driveFileId").ifBlank { null }, o.optBoolean("pendingUpload", false),
                     o.optBoolean("dnf", false), o.optLong("backupAt", 0L), o.optBoolean("backupFailed", false),
-                    o.optLong("backupBytes", 0L), backupMd5 = o.optString("backupMd5")
+                    o.optLong("backupBytes", 0L), backupMd5 = o.optString("backupMd5"),
+                    // Missing on older records: protect existing local downloads after upgrade.
+                    keepOffline = o.optBoolean("keepOffline", true)
                 )
             }
         }
@@ -3760,7 +3775,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     .put("backupBytes", b.backupBytes)
                     // Read back with optString, so an older library.json without this key loads
                     // as "no checksum recorded" rather than failing.
-                    .put("backupMd5", b.backupMd5)
+.put("backupMd5", b.backupMd5).put("keepOffline", b.keepOffline)
             )
         }
         atomicWrite(booksFile, arr.toString())

@@ -2410,8 +2410,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             SyncDiag.fail("Account sync", "skipped: no usable connection")
             return
         }
-        // Files first: the snapshot describes them, so it must not be written before them.
-        val uploads = uploadAvailableBooks()
+        // Read and reconcile the account snapshot before deciding which local files need sending.
+        // Uploading first is unsafe on sign-in: this device may have an older/incomplete local
+        // record while Drive already has a verified copy. The cloud snapshot carries that proof.
+        // The merged "stillOwed" pass below is the single upload decision point for this sync.
         val local = withContext(Dispatchers.Main) { currentSnapshot() }
         val cloudOutcome = withDriveOutcome { token, owner ->
             when (val folder = DriveLibrary.ensureFolder(token, owner)) {
@@ -2460,8 +2462,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             BackupRules.needsUpload(b, file != null && file.exists() && file.length() > 0L)
         }.take(40)
         var extraFailures = 0
+        var deferredUploads = 0
         if (stillOwed.isNotEmpty()) {
-            val batch = uploadBatch(stillOwed)
+            val batch = uploadBatch(stillOwed.take(40))
+            deferredUploads = (stillOwed.size - 40).coerceAtLeast(0)
             extraFailures = batch.failed.size
             if (batch.failed.isNotEmpty()) {
                 SyncDiag.mark(
@@ -2539,7 +2543,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             retryPendingDeletes()
             withContext(Dispatchers.Main) {
                 val at = System.currentTimeMillis()
-                val pending = uploads.failed.size + extraFailures
+                val pending = extraFailures + deferredUploads
                 // The dirty flag means "the account is fully up to date". While a file is still
                 // owed, it stays set so the next sync retries it.
                 prefs.edit()

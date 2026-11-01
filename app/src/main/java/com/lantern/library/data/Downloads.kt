@@ -457,7 +457,7 @@ class DownloadService(private val host: DownloadHost) {
      * recorded checksum and container shape, and only then is atomically put in place. A valid
      * local file is never replaced, and a failure never touches the account copy.
      */
-    suspend fun restoreDownload(bookId: String): RestoreOutcome {
+    suspend fun restoreDownload(bookId: String, keepOffline: Boolean = true): RestoreOutcome {
         val book = host.latest(bookId) ?: return RestoreOutcome.NotFound
         val existing = book.filePath?.let(::File)
         if (existing != null && existing.exists() && existing.length() > 0L &&
@@ -593,7 +593,7 @@ class DownloadService(private val host: DownloadHost) {
                 backupBytes = dest.length(),
                 backupFailed = false,
                 // An explicit Restore download request is an offline-download choice.
-                keepOffline = true,
+                keepOffline = keepOffline,
                 backupMd5 = book.backupMd5.ifBlank { BookFiles.md5(dest) }
             )
             if (!host.persist(updated)) {

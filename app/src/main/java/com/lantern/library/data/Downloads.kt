@@ -524,7 +524,7 @@ class DownloadService(private val host: DownloadHost) {
                 return pausedOutcome(book, temp, onDisk, report.total.takeIf { it > 0L } ?: total)
             }
             if (report.complete) {
-                return verifyAndCommit(book, temp, dest)
+                return verifyAndCommit(book, temp, dest, keepOffline)
             }
             from = onDisk
             host.noteRestore(book.id, from, total)
@@ -560,7 +560,7 @@ class DownloadService(private val host: DownloadHost) {
     }
 
     /** Size, checksum, container: three independent reasons to refuse a file. */
-    private suspend fun verifyAndCommit(book: LibraryBook, temp: File, dest: File): RestoreOutcome {
+    private suspend fun verifyAndCommit(book: LibraryBook, temp: File, dest: File, keepOffline: Boolean): RestoreOutcome {
         host.noteRestoreProgress(book.id, temp.length(), book.backupBytes, TransferPhase.VERIFYING)
         try {
             if (!temp.exists() || temp.length() <= 0L) {

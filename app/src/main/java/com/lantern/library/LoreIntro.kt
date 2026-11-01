@@ -70,8 +70,19 @@ internal fun LoreAfterSplash() {
     // a reader who reads at night.
     val context = LocalContext.current
     val theme = remember {
-        val stored = context.getSharedPreferences("lantern", android.content.Context.MODE_PRIVATE)
-            .getString("theme", "LIGHT")
+        // Preferences are per profile since 3.7.0, so the splash reads the same namespace the store
+        // is about to open. Showing the guest theme over an account's library would be a small
+        // version of the mistake this round is about: one identity's setting applied to another's
+        // screen.
+        val stored = com.lantern.library.data.ProfileStore.lastNamespace(context)
+            ?.let { ns ->
+                context.getSharedPreferences(
+                    com.lantern.library.data.ProfileStore.preferencesName(ns),
+                    android.content.Context.MODE_PRIVATE
+                ).getString("theme", null)
+            }
+            ?: context.getSharedPreferences("lantern", android.content.Context.MODE_PRIVATE)
+                .getString("theme", "LIGHT")
         if (stored == "DARK") ReaderTheme.DARK else ReaderTheme.LIGHT
     }
     var storeReady by remember { mutableStateOf(false) }

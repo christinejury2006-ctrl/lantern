@@ -190,8 +190,7 @@ class ProfileStore(private val app: Application) {
     fun preferences(namespace: String): SharedPreferences =
         app.getSharedPreferences(prefsName(namespace), Context.MODE_PRIVATE)
 
-    private fun prefsName(namespace: String): String =
-        if (namespace == Profiles.GUEST) "lantern_guest" else "lantern_$namespace"
+    private fun prefsName(namespace: String): String = ProfileStore.preferencesName(namespace)
 
     /** The identity written into a profile, or null when the profile has never been created. */
     fun identity(namespace: String): ProfileIdentity? {
@@ -310,6 +309,24 @@ class ProfileStore(private val app: Application) {
 
     companion object {
         const val PROFILE_FILE = "profile.json"
+        const val SESSION_FILE = "session.json"
+
+        /**
+         * The namespace the previous run ended in, for callers that must pick a look before the
+         * store exists (the splash). Never trusted for data: only for choosing which preferences to
+         * read first.
+         */
+        fun lastNamespace(context: Context): String? = runCatching {
+            val file = File(context.filesDir, SESSION_FILE)
+            if (!file.exists()) return@runCatching null
+            org.json.JSONObject(file.readText())
+                .optString("namespace")
+                .takeIf { Profiles.isValidNamespace(it) }
+        }.getOrNull()
+
+        /** The preferences file name for [namespace]. */
+        fun preferencesName(namespace: String): String =
+            if (namespace == Profiles.GUEST) "lantern_guest" else "lantern_$namespace"
         private const val LEGACY_MARKER = ".legacy-migrated"
         private const val LEGACY_PREFS = "lantern"
     }

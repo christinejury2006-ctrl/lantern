@@ -339,6 +339,10 @@ class UploadWorker(
             UploadOwnership.Decision.Run -> Unit
         }
 
+        // The profile directory should already exist (it was created when the identity was
+        // opened); create it again rather than let a write fail into a missing directory after a
+        // cache clear or a restore.
+        profiles.dir(namespace)
         val queueFile = profiles.file(namespace, "upload_queue.json")
         val libraryFile = profiles.file(namespace, "library.json")
         val journalFile = profiles.file(namespace, "upload_journal.json")

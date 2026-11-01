@@ -23,6 +23,12 @@ class OfflineRetentionTest {
     )
 
     @Test
+    fun `new books start as managed cache rather than pinned offline downloads`() {
+        val fresh = book().copy(keepOffline = false)
+        assertFalse(fresh.keepOffline)
+    }
+
+    @Test
     fun `offline retention choice survives record serialization`() {
         val encoded = BookRecords.encode(book(keepOffline = false))
         val decoded = BookRecords.decode(encoded)

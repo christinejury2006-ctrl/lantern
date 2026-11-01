@@ -132,7 +132,7 @@ data class LibraryBook(
      */
     val backupMd5: String = "",
     /** Keep this complete local copy on the device; automatic cache cleanup must never evict it. */
-    val keepOffline: Boolean = true
+    val keepOffline: Boolean = false
 ) {
     val localFileAvailable: Boolean
         get() {

@@ -107,20 +107,36 @@ jobs:
         run: |
           exec > >(tee boot.log) 2>&1
           set -x
+          echo "== acceleration =="
+          ls -l /dev/kvm || true
+          "$ANDROID_HOME/emulator/emulator" -accel-check || true
+
           echo "== creating AVD =="
+          # `avdmanager` and `emulator` have to agree on where the AVD lives. The runner's HOME is
+          # the only directory both look at unless ANDROID_AVD_HOME says otherwise, so it is set
+          # explicitly and then checked, rather than assumed.
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
           echo "no" | avdmanager create avd -n lore -k "system-images;android-34;google_apis;x86_64" \
-            -d pixel_6 --force
+            -d pixel_6 --force || echo "AVD_CREATE_FAILED"
+          ls -la "$ANDROID_AVD_HOME" || true
+          find / -name "lore.ini" -not -path "*/proc/*" 2>/dev/null | head -5
+          "$ANDROID_HOME/emulator/emulator" -list-avds || true
+
           nohup "$ANDROID_HOME/emulator/emulator" -avd lore -no-window -no-audio -no-boot-anim \
-            -gpu swiftshader_indirect -no-snapshot -wipe-data > emulator.log 2>&1 &
-          timeout 900 adb wait-for-device || echo "WAIT_FOR_DEVICE_TIMED_OUT"
+            -gpu swiftshader_indirect -no-snapshot > emulator.log 2>&1 &
+          for i in $(seq 1 60); do
+            if adb devices | grep -q emulator; then echo "device appeared after $((i * 5))s"; break; fi
+            sleep 5
+          done
           adb devices
-          for i in $(seq 1 90); do
+          for i in $(seq 1 60); do
             booted="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
-            echo "boot poll $i: '$booted'"
-            [ "$booted" = "1" ] && break
+            if [ $((i % 3)) -eq 1 ]; then echo "boot poll $i: '$booted'"; fi
+            [ "$booted" = "1" ] && { echo "BOOTED after $((i * 10))s"; break; }
             sleep 10
           done
-          tail -20 emulator.log
+          tail -30 emulator.log
           adb shell wm size
           adb shell getprop ro.product.cpu.abilist
 
@@ -134,7 +150,7 @@ jobs:
             adb logcat -c
             adb shell am start -W -n com.lantern.library/.MainActivity
             # Far longer than the "approximately one second" in the report.
-            sleep 30
+            sleep 20
             pid="$(adb shell pidof com.lantern.library | tr -d '\r')"
             echo "== phase $label: pid after 30s = '$pid'"
             adb logcat -d -b crash > "crash-$label.log" 2>&1

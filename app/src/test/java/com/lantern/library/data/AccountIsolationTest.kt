@@ -245,6 +245,21 @@ class AccountIsolationTest {
         assertEquals(0, LegacyMigrate.moveFiles(legacy, target, Profiles.FILES))
     }
 
+    @Test
+    fun `a clean install strands nothing it finds later`() {
+        val files = File(root, "files").apply { mkdirs() }
+        // A fresh 3.7.0 install has no legacy files: nothing to migrate, so nothing is claimed and
+        // no marker is written over data that has not arrived yet.
+        assertEquals(emptyList<String>(), Profiles.legacyPending(files))
+        // Somebody later puts a legacy shelf there (a restore, a seed, a stale backup).
+        File(files, "library.json").writeText("[]")
+        assertEquals(listOf("library.json"), Profiles.legacyPending(files))
+        // The migration then claims it, which is the case the "marker only" check would have missed.
+        val target = File(File(root, "profiles"), Profiles.GUEST).apply { mkdirs() }
+        assertEquals(1, LegacyMigrate.moveFiles(files, target, Profiles.FILES))
+        assertEquals(emptyList<String>(), Profiles.legacyPending(files))
+    }
+
     // -- helpers -----------------------------------------------------------------------------
 
     private fun storeSource(): String {

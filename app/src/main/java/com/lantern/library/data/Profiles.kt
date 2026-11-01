@@ -102,6 +102,16 @@ object Profiles {
         return cleaned.take(24).ifBlank { "account" }
     }
 
+    /**
+     * Which pre-3.7.0 files are still sitting at the old, shared path.
+     *
+     * Public and pure because the migration's safety property ("nothing is stranded, and a clean
+     * install does not write a marker that would strand something later") is worth a test that does
+     * not need a device.
+     */
+    fun legacyPending(filesRoot: File, names: List<String> = FILES): List<String> =
+        names.filter { File(filesRoot, it).exists() }
+
     /** First eight hex characters of the SHA-256 of the raw account id. */
     private fun hash(accountId: String): String = MessageDigest.getInstance("SHA-256")
         .digest(accountId.toByteArray(Charsets.UTF_8))
@@ -258,7 +268,18 @@ class ProfileStore(private val app: Application) {
      */
     fun migrateLegacyIfNeeded(): String? {
         val marker = File(root, LEGACY_MARKER)
-        if (marker.exists()) return null
+        // The check is "is there anything left at the old path", not "does the marker exist".
+        //
+        // The marker alone is not enough. A build of 3.7.0 that ran once on a clean install wrote
+        // the marker and had nothing to move; if a legacy shelf then appeared on that device — a
+        // restore, a developer seed, a stale backup — the marker would silently strand it and the
+        // reader would open an empty library. Asking about the files themselves is both simpler and
+        // strictly safer: the app never writes to the old paths any more, so anything there is data
+        // that has not been claimed yet.
+        val pending = Profiles.legacyPending(app.filesDir, managedFiles)
+        val legacyPrefsPresent = runCatching { legacyPrefs.all.isNotEmpty() }.getOrDefault(false)
+        if (pending.isEmpty() && !legacyPrefsPresent) return null
+        if (pending.isEmpty() && marker.exists()) return null
         root.mkdirs()
         val ownerAccountId = legacyOwnerAccountId()
         val target = Profiles.namespaceFor(ownerAccountId)

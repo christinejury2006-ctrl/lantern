@@ -6,7 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
-import org.json.JSONObject
+import java.io.File
 
 class OfflineRetentionTest {
     @get:Rule

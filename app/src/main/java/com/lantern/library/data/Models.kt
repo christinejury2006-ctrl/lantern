@@ -130,7 +130,9 @@ data class LibraryBook(
      * Empty is a normal value: records written before this existed simply do not have it, and a
      * restore then relies on size plus the EPUB/PDF container checks.
      */
-    val backupMd5: String = ""
+    val backupMd5: String = "",
+    /** Keep this complete local copy on the device; automatic cache cleanup must never evict it. */
+    val keepOffline: Boolean = true
 ) {
     val localFileAvailable: Boolean
         get() {

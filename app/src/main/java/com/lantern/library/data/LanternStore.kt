@@ -3570,14 +3570,17 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         atomicWrite(pendingDeleteFile, arr.toString())
     }
 
+    private fun managedBookStorageBytes(): Long =
+        BookIo.directoryBytes(BookIo.booksDir(getApplication())) +
+            BookIo.directoryBytes(BookIo.coversDir(getApplication()))
+
     private suspend fun maybeEvictCache(keepId: String?) {
         // Lore is cloud-first: keep a modest on-device reading cache, not the entire library.
         // Eviction is deliberately conservative and goes through DownloadService, which checks
         // the account still has the exact book, validates its size/checksum, persists filePath=null
         // before deleting bytes, and rolls the record back if deletion fails.
-        val dir = BookIo.booksDir(getApplication())
-        // EPUB illustrations live in nested media_<book> folders. Count the whole tree.
-        val used = BookIo.directoryBytes(dir)
+        // Both book archives/EPUB media and persistent cover thumbnails count toward the budget.
+        val used = managedBookStorageBytes()
         val targetBytes = 192L * 1024 * 1024
         val cacheLimit = 256L * 1024 * 1024
         if (used <= cacheLimit) return
@@ -3608,7 +3611,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             when (downloadService.removeDownload(candidate.id, notify = false)) {
                 is RemoveOutcome.Removed, is RemoveOutcome.AlreadyRemoved -> {
                     // Re-measure instead of assuming all derived media was deleted successfully.
-                    remaining = BookIo.directoryBytes(dir)
+                    remaining = managedBookStorageBytes()
                     removed++
                 }
                 else -> Unit // Offline, stale, unverified or otherwise uncertain: keep the bytes.

@@ -553,14 +553,6 @@ object BookIo {
         if (opts.outWidth > 0 && opts.outHeight > 0) opts.outWidth to opts.outHeight else null
     }.getOrNull()
 
-    /**
-     * Unpacks every image in the archive once, keyed by its normalised entry name.
-     *
-     * A finished pass leaves a marker file so reopening the book does not rescan (and, for a
-     * picture book, does not rewrite a hundred JPEGs every time the reader taps it). Vector images
-     * are skipped: they cannot be drawn without an SVG renderer, and a missing illustration is
-     * better than a broken page.
-     */
     /** Directory containing images extracted from this EPUB. It is regenerable from the archive. */
     fun mediaDirFor(book: File): File = File(book.parentFile, "media_" + book.name)
 
@@ -580,6 +572,14 @@ object BookIo {
         return if (!dir.exists()) bytes else 0L
     }
 
+    /**
+     * Unpacks every image in the archive once, keyed by its normalised entry name.
+     *
+     * A finished pass leaves a marker file so reopening the book does not rescan (and, for a
+     * picture book, does not rewrite a hundred JPEGs every time the reader taps it). Vector images
+     * are skipped: they cannot be drawn without an SVG renderer, and a missing illustration is
+     * better than a broken page.
+     */
     private fun unpackMedia(zip: ZipFile, book: File): Map<String, File> {
         val dir = File(book.parentFile, "media_" + book.name)
         val done = File(dir, ".unpacked")

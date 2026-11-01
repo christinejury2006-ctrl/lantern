@@ -1884,7 +1884,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         // the recorded size and checksum, and neither replaces a good file with a partial one.
         withContext(Dispatchers.Main) { restoringIds = restoringIds + book.id }
         val outcome = try {
-            downloadService.restoreDownload(book.id)
+            downloadService.restoreDownload(book.id, keepOffline = false)
         } finally {
             withContext(Dispatchers.Main) { restoringIds = restoringIds - book.id }
         }

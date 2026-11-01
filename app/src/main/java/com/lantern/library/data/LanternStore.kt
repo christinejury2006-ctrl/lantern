@@ -1684,9 +1684,12 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             // Google account cannot lose their local copy when this account signs out.
             val stillReferenced = LinkedHashSet<String>()
             keep.mapNotNullTo(stillReferenced) { it.filePath?.let { path -> runCatching { File(path).canonicalPath }.getOrNull() } }
+            val stillReferencedCovers = LinkedHashSet<String>()
+            keep.mapNotNullTo(stillReferencedCovers) { it.remoteCover?.takeUnless { value -> value.startsWith("http") }?.let { path -> runCatching { File(path).canonicalPath }.getOrNull() } }
             profiles.namespaces().filter { it != namespace }.forEach { other ->
-                BookRecords.read(profiles.file(other, "library.json"))
-                    .mapNotNullTo(stillReferenced) { it.filePath?.let { path -> runCatching { File(path).canonicalPath }.getOrNull() } }
+                val otherBooks = BookRecords.read(profiles.file(other, "library.json"))
+                otherBooks.mapNotNullTo(stillReferenced) { it.filePath?.let { path -> runCatching { File(path).canonicalPath }.getOrNull() } }
+                otherBooks.mapNotNullTo(stillReferencedCovers) { it.remoteCover?.takeUnless { value -> value.startsWith("http") }?.let { path -> runCatching { File(path).canonicalPath }.getOrNull() } }
             }
             var bytesFreed = 0L
             safeToDrop.forEach { book ->
@@ -1702,6 +1705,26 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     bytesFreed += size
                     bytesFreed += BookIo.deleteDerivedMedia(local)
                 }
+            }
+
+            // Covers share one app-private directory across profile namespaces too. Remove a
+            // thumbnail only after the reduced library is durable and no remaining profile points
+            // at it. Remote URLs are never treated as local paths, and canonical containment keeps
+            // a malformed record from turning sign-out into arbitrary file deletion.
+            val coversRoot = runCatching { BookIo.coversDir(getApplication()).canonicalPath }.getOrNull()
+            if (coversRoot != null) {
+                safeToDrop.mapNotNull { it.remoteCover?.takeUnless { value -> value.startsWith("http") } }
+                    .distinct()
+                    .forEach { coverPath ->
+                        val cover = File(coverPath)
+                        val canonical = runCatching { cover.canonicalPath }.getOrNull() ?: return@forEach
+                        if (!canonical.startsWith(coversRoot + File.separator)) return@forEach
+                        if (canonical in stillReferencedCovers || !cover.isFile) return@forEach
+                        val size = cover.length()
+                        if (runCatching { cover.delete() }.getOrDefault(false) && !cover.exists()) {
+                            bytesFreed += size
+                        }
+                    }
             }
             SyncDiag.mark(
                 "Sign out",

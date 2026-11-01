@@ -387,7 +387,7 @@ class DownloadService(private val host: DownloadHost) {
      * Order: record first, bytes second, and the record put back if the bytes will not go. Nothing
      * here can queue a remote deletion.
      */
-    suspend fun removeDownload(bookId: String): RemoveOutcome {
+    suspend fun removeDownload(bookId: String, notify: Boolean = true): RemoveOutcome {
         val book = host.latest(bookId) ?: return RemoveOutcome.NotFound
 
         // The second tap on the same button: the record already says there is no local copy, and
@@ -423,7 +423,7 @@ class DownloadService(private val host: DownloadHost) {
 
         if (!host.persist(cleared)) {
             // Nothing has been deleted, and nothing may be: the record still promises a file.
-            host.note("Could not update the library, so the download was kept.")
+            if (notify) host.note("Could not update the library, so the download was kept.")
             return RemoveOutcome.MetadataFailed
         }
 
@@ -439,12 +439,12 @@ class DownloadService(private val host: DownloadHost) {
                     "Open the book again to repair it."
             }
             host.refreshAudit()
-            host.note(reason)
+            if (notify) host.note(reason)
             return RemoveOutcome.DeleteFailed(reason)
         }
 
         host.refreshAudit()
-        host.note("\u201C${book.title.ifBlank { "Book" }}\u201D download removed. It stays in your library.")
+        if (notify) host.note("\u201C${book.title.ifBlank { "Book" }}\u201D download removed. It stays in your library.")
         return RemoveOutcome.Removed(cleared)
     }
 

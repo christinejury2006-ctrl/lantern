@@ -45,6 +45,7 @@ object BookRecords {
         // Read back with optString, so an older library.json without this key loads as "no
         // checksum recorded" rather than failing.
         .put("backupMd5", book.backupMd5)
+        .put("keepOffline", book.keepOffline)
 
     /**
      * Reads one record.
@@ -84,7 +85,9 @@ object BookRecords {
             backupAt = json.optLong("backupAt", 0L),
             backupFailed = json.optBoolean("backupFailed", false),
             backupBytes = json.optLong("backupBytes", 0L),
-            backupMd5 = json.optString("backupMd5")
+            backupMd5 = json.optString("backupMd5"),
+            // Older records default to protected so an upgrade never evicts an existing download.
+            keepOffline = json.optBoolean("keepOffline", true)
         )
     }
 

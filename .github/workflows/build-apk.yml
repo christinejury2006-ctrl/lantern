@@ -215,12 +215,31 @@ jobs:
           done
           exit $status
 
+      # The mapping is the difference between a readable bug report and `J.j at J.k.d`, and it is
+      # specific to the build that produced it: R8 renames change with every code change, so a
+      # mapping from another build cannot retrace this one. It was missing from run 266, which is
+      # why a reported crash could not be resolved from the artifacts alone. Print its identity and
+      # upload it beside the APK it belongs to.
+      - name: Publish the release mapping this build produced
+        run: |
+          mapping=app/build/outputs/mapping/release/mapping.txt
+          ls -l "$mapping"
+          echo "::notice title=Release mapping.txt SHA-256::$(sha256sum "$mapping" | cut -d' ' -f1) ($(wc -c < "$mapping") bytes)"
+          cp "$mapping" app/build/outputs/mapping/release/mapping-versionCode-$(grep -o 'const val VERSION_CODE = [0-9]*' app/build/generated/source/buildConfig/release/com/lantern/library/BuildConfig.java 2>/dev/null | grep -o '[0-9]*$' || echo unknown).txt || true
+
       - name: Upload the minified release APK
         uses: actions/upload-artifact@v4
         with:
           name: Lore-release-minified
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: warn
+
+      - name: Upload the release mapping (for retracing a crash report)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lore-release-mapping
+          path: app/build/outputs/mapping/release/mapping*.txt
+          if-no-files-found: error
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4

@@ -772,7 +772,13 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 persistBookmarksUnlocked()
             }
         }
-        b.filePath?.let { runCatching { File(it).delete() } }
+        b.filePath?.let { path ->
+            runCatching {
+                val file = File(path)
+                file.delete()
+                BookIo.deleteDerivedMedia(file)
+            }
+        }
         clearTransfer(id)
         // The card is gone; a live or failed transfer entry for it must not outlive it.
         TransferBus.clear(id)
@@ -1692,7 +1698,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 if (!canonical.startsWith(booksRoot + File.separator)) return@forEach
                 if (canonical in stillReferenced || !local.exists()) return@forEach
                 val size = local.length()
-                if (runCatching { local.delete() }.getOrDefault(false) && !local.exists()) bytesFreed += size
+                if (runCatching { local.delete() }.getOrDefault(false) && !local.exists()) {
+                    bytesFreed += size
+                    bytesFreed += BookIo.deleteDerivedMedia(local)
+                }
             }
             SyncDiag.mark(
                 "Sign out",
@@ -3596,7 +3605,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         var removed = 0
         for (candidate in victims) {
             if (remaining <= targetBytes) break
-            val size = candidate.filePath?.let { File(it).length() } ?: 0L
+            val size = candidate.filePath?.let { path ->
+                val local = File(path)
+                local.length() + BookIo.directoryBytes(BookIo.mediaDirFor(local))
+            } ?: 0L
             when (downloadService.removeDownload(candidate.id, notify = false)) {
                 is RemoveOutcome.Removed, is RemoveOutcome.AlreadyRemoved -> {
                     remaining -= size

@@ -229,6 +229,22 @@ class ProfileStore(private val app: Application) {
         return !accountId.isNullOrBlank() && owner == accountId
     }
 
+    /**
+     * Deletes one profile: its directory and its preferences.
+     *
+     * **Never called by the app.** Sign-out keeps the account's directory, because it holds work the
+     * account still owes (the transfer queue) and books that were never confirmed in the cloud.
+     * This exists so that a deliberate, explicit "forget this account on this phone" action has an
+     * implementation, and so that a test can prove the guest directory is never the target of it.
+     */
+    fun purge(namespace: String): Boolean {
+        if (namespace == Profiles.GUEST) return false
+        if (!Profiles.isValidNamespace(namespace)) return false
+        val removed = File(root, namespace).deleteRecursively()
+        preferences(namespace).edit().clear().apply()
+        return removed
+    }
+
     /** Every namespace directory that exists, for the diagnostics screen and for tests. */
     fun namespaces(): List<String> = (root.listFiles() ?: emptyArray())
         .filter { it.isDirectory && Profiles.isValidNamespace(it.name) }

@@ -1438,7 +1438,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             toast("Signed in, but Google did not return a stable account ID. Library stays on this phone.")
             return
         }
-        val target = profiles.namespaceFor(incoming)
+        val target = Profiles.namespaceFor(incoming)
         val previousNamespace = namespace
         if (previousNamespace != target) {
             // A different identity is being loaded: close the old session before anything else so
@@ -1645,7 +1645,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             val pending = UploadQueue.read(profiles.file(namespace, "upload_queue.json"))
                 .map { it.bookId }.toSet()
             val all = BookRecords.decodeAll(file.readText())
-            val keep = all.filter { book -> book.volumeId in pending || !book.isBackedUp() }
+            val keep = all.filter { book -> book.id in pending || !book.isBackedUp() }
             if (keep.size == all.size) return@runCatching
             BookRecords.write(file, keep)
             SyncDiag.mark("Sign out", "kept ${keep.size} of ${all.size} local entries")

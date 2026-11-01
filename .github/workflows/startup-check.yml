@@ -96,8 +96,12 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleRelease assembleDebug -PloreEmulatorAbi=x86_64 --no-daemon --stacktrace 2>&1 | tail -25
           ls -l app/build/outputs/apk/release/ app/build/outputs/apk/debug/
-          sha256sum app/build/outputs/mapping/release/mapping.txt
-          wc -c app/build/outputs/mapping/release/mapping.txt
+          mapping=app/build/outputs/mapping/release/mapping.txt
+          {
+            echo "commit=${GITHUB_SHA}"
+            echo "MAPPING_SHA256=$(sha256sum "$mapping" | cut -d' ' -f1)"
+            echo "MAPPING_BYTES=$(wc -c < "$mapping")"
+          } | tee mapping-id.txt
 
       - name: Retrace the reported trace with THIS build's mapping
         run: |
@@ -106,7 +110,34 @@ jobs:
           python3 tools/retrace.py "$mapping" tools/reported-crash-276.txt > retraced.txt 2>&1
           python3 tools/retrace.py "$mapping" --dump \
             J.j J.k w2.A4 w2.m3 w2.F4 R2.a j3.N B2.a q3.i q3.a o3.g > dump.txt 2>&1
-          head -40 retraced.txt
+          cat mapping-id.txt
+          cat retraced.txt
+
+      # Same channel as the launch verdict: a check run whose text can be read back with
+      #   gh api repos/<owner>/<repo>/commits/<sha>/check-runs --jq '... | .output.text'
+      # which works when run logs and artifact downloads do not.
+      - name: Publish the retrace as a check run
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          {
+            echo "===== mapping identity ====="; cat mapping-id.txt 2>/dev/null
+            echo
+            echo "===== reported trace, retraced ====="; cat retraced.txt 2>/dev/null
+            echo
+            echo "===== reverse mapping ====="; head -c 22000 dump.txt 2>/dev/null
+          } > retrace-summary.txt
+          gh api -X POST "repos/$GITHUB_REPOSITORY/check-runs" \
+            -f name="Release mapping retrace" \
+            -f head_sha="$GITHUB_SHA" \
+            -f status=completed \
+            -f conclusion=success \
+            -f "output[title]=mapping $(grep -m1 MAPPING_SHA256 mapping-id.txt 2>/dev/null)" \
+            -f "output[summary]=retraced with the mapping of this build" \
+            -f "output[text]=$(cat retrace-summary.txt)"
+          echo done
 
       # Everything is captured into boot.log and published as a check run at the end. Nothing in this
       # step is allowed to stop the transcript: a failed install has to be readable too.

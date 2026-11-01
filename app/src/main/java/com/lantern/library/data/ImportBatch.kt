@@ -152,21 +152,23 @@ class ImportBatch(private val worker: ImportWorker) {
         }
     }
 
-    /**
-     * The reader's phrase for a failure.
-     *
-     * The type name is kept, because "OutOfMemoryError" and "FileNotFoundException" send a reader
-     * (and a bug report) in two different directions, and a generic "could not import" sends them
-     * nowhere.
-     */
-    private fun Throwable.describe(): String {
-        val kind = when (this) {
-            is java.io.FileNotFoundException -> "The file could not be opened — it may have been moved or its permission revoked."
-            is SecurityException -> "This app no longer has permission to read that file."
-            is java.io.IOException -> "The file could not be read: ${message ?: "input/output error"}."
-            is OutOfMemoryError -> "The phone ran out of memory while reading this file."
-            else -> "The file could not be imported (${this.javaClass.simpleName})."
-        }
-        return kind
-    }
+}
+
+/**
+ * One line in the reader's words for a failure, naming its kind.
+ *
+ * The type name is kept, because "OutOfMemoryError" and "FileNotFoundException" send a reader (and a
+ * bug report) in two different directions, and a generic "could not import" sends them nowhere.
+ * Shared by the import batch and by the startup sync, which must both say what went wrong rather
+ * than crash or stay silent.
+ */
+internal fun Throwable.describe(): String = when (this) {
+    is java.io.FileNotFoundException ->
+        "The file could not be opened — it may have been moved or its permission revoked."
+    is SecurityException -> "This app no longer has permission to read that file."
+    is java.io.IOException -> "The file could not be read: ${message ?: "input/output error"}."
+    is OutOfMemoryError -> "The phone ran out of memory while reading this file."
+    is androidx.compose.runtime.snapshots.SnapshotApplyConflictException ->
+        "A screen state update collided with another one (${javaClass.simpleName})."
+    else -> "That did not work (${this.javaClass.simpleName})."
 }

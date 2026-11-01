@@ -163,8 +163,10 @@ jobs:
           }
 
           echo "=================== PHASE A: fresh install of the release APK ==================="
+          echo "release APK: $(ls -l "$rel")"
           adb install -r "$rel" || adb install "$rel"
           adb shell pm list packages | grep lantern
+          adb shell dumpsys package com.lantern.library | grep -E "versionCode|versionName|primaryCpuAbi" | head -5
           launch_and_watch fresh
 
           echo "=================== PHASE B: existing data, then the release APK ==================="
@@ -216,15 +218,20 @@ jobs:
           PY
 
           echo "== crash buffers =="
-          for f in crash-fresh.log crash-existing-data.log; do echo "--- $f"; cat "$f"; done
+          for f in crash-fresh.log crash-existing-data.log; do
+            echo "--- $f: $(wc -c < "$f") bytes, $(wc -l < "$f") lines"
+            grep -E "FATAL|AndroidRuntime|Exception|Snapshot" "$f" | head -20
+          done
           echo "== app log: startup-relevant lines =="
-          grep -E "lantern|AndroidRuntime|FATAL|LoreStartup|Snapshot" app-fresh.log | tail -60
-          grep -E "lantern|AndroidRuntime|FATAL|LoreStartup|Snapshot" app-existing-data.log | tail -60
+          grep -E "com.lantern|AndroidRuntime|FATAL|LoreStartup|SnapshotConflict" app-fresh.log | tail -40
+          grep -E "com.lantern|AndroidRuntime|FATAL|LoreStartup|SnapshotConflict" app-existing-data.log | tail -40
           echo "== retraced crash buffers =="
           mapping=app/build/outputs/mapping/release/mapping.txt
           python3 tools/retrace.py "$mapping" crash-fresh.log > crash-fresh-retraced.log 2>&1
           python3 tools/retrace.py "$mapping" crash-existing-data.log > crash-existing-retraced.log 2>&1
           cat crash-fresh-retraced.log crash-existing-retraced.log
+          echo "== verdict =="
+          cat startup-result.txt
           exit 0
 
       - name: Publish the startup transcript as a check run
@@ -241,10 +248,21 @@ jobs:
           if ! grep -q "PHASE existing-data ALIVE" startup-result.txt; then conclusion=failure; fi
           {
             echo "verdict: $verdict"
-            echo "preserved: $(grep -c PRESERVED boot.log) marker(s), $(grep -m1 -o 'MISSING.*' boot.log || true)"
+            echo
+            echo "===== what was installed ====="
+            grep -E "^release=|versionCode|primaryCpuAbi|Success$" boot.log | head -20
+            echo
+            echo "===== launch phases ====="
+            grep -E "== phase|PHASE |BOOTED after|device appeared" boot.log
+            echo
+            echo "===== data check ====="
+            grep -E "seeded ids|ids after|PRESERVED|MISSING|DATA CHECK" boot.log
+            echo
+            echo "===== crash buffers ====="
+            grep -E "^--- crash-|FATAL" boot.log | head -10
             echo
             echo "===== transcript (tail) ====="
-            tail -c 30000 boot.log
+            tail -c 12000 boot.log
             echo
             echo "===== retraced crash (existing data) ====="
             head -c 4000 crash-existing-retraced.log 2>/dev/null

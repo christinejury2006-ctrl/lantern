@@ -263,11 +263,30 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             if (interestsChosen) ensureRecommendations()
             if (account.signedIn && account.provider == "google" && GoogleAuth.accountId(acc) != null) {
                 viewModelScope.launch(Dispatchers.IO) {
-                    connectDrive(quiet = true, pullAccount = true)
+                    // This coroutine is launched from the view model, so an exception that escapes
+                    // it does not stay in the background: it reaches the default handler and takes
+                    // the whole app down, on launch, with nothing the reader can do about it. That
+                    // is exactly how build 276 died, when a Compose snapshot conflict was thrown
+                    // from inside the upload retry. Each step is therefore caught and reported to
+                    // the diagnosis screen instead; a failed startup sync is a thing to see, not a
+                    // thing to crash on.
+                    try {
+                        connectDrive(quiet = true, pullAccount = true)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (t: Throwable) {
+                        SyncDiag.fail("Drive on launch", t.describe())
+                    }
                     // Anything still queued from a previous run gets another try on launch, which
                     // is what "retry when connectivity returns" means for an app that is not
                     // running a foreground service.
-                    retryQueuedTransfers()
+                    try {
+                        retryQueuedTransfers()
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (t: Throwable) {
+                        SyncDiag.fail("Upload retry on launch", t.describe())
+                    }
                 }
             }
         }

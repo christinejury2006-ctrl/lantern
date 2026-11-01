@@ -3,21 +3,19 @@ name: Startup smoke test (release APK on an emulator)
 # Why this exists.
 #
 # Round 8.1 shipped a release APK that dies about a second after launch, and CI stayed green. The
-# reason CI stayed green is not subtle: every check in build-apk.yml compiles, runs JVM unit tests,
-# reads the DEX back, and verifies a signature. **Nothing ever launched the app.** A crash that only
-# happens on a device — an exception on the startup coroutine, an R8-renamed member, an asset or a
-# library that is missing at run time — is invisible to all of it.
+# reason is not subtle: every check in build-apk.yml compiles, runs JVM unit tests, reads the DEX
+# back and verifies a signature. **Nothing ever launched the app.** A crash that only happens on a
+# device - an exception on the startup coroutine, an R8-renamed member, a resource that is missing at
+# run time - is invisible to all of it.
 #
 # So this workflow does the one thing the build workflow cannot: it boots an Android runtime,
-# installs the *release* APK, launches it, and watches whether the process is still alive a few
-# seconds later. If it is not, it prints the retraced crash and fails.
+# installs the *release* APK, launches it, and checks whether the process is still alive well past
+# the one second the report mentions. If it is not, it retraces the crash with that build's own
+# mapping.txt and fails.
 #
-# It also prints the two things the build workflow used to throw away, both as run annotations that
-# are readable from the run page without downloading an artifact:
-#
-#   * the SHA-256 and size of the release mapping.txt for this commit, so a reported trace can be
-#     matched to the exact build it came from, and
-#   * the retraced reported frames themselves, using that mapping.
+# The retrace step runs before the emulator so its output is available even when the emulator is
+# slow: everything important is emitted as a run annotation (readable from the run page) rather than
+# only as an artifact.
 
 on:
   workflow_dispatch:
@@ -31,7 +29,7 @@ permissions:
 jobs:
   launch:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
 
@@ -54,10 +52,8 @@ jobs:
         with:
           packages: platform-tools
 
-      - name: Install platform, build tools and emulator
-        run: |
-          sdkmanager "platforms;android-34" "build-tools;34.0.0" "emulator" \
-            "system-images;android-34;google_apis;x86_64"
+      - name: Install platform and build tools
+        run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
 
       - name: Restore the persistent signing key
         env:
@@ -74,105 +70,107 @@ jobs:
             echo "LORE_KEY_PASSWORD=$LORE_KEY_PASSWORD"
           } >> "$GITHUB_ENV"
 
-      # The emulator image is x86_64; the app ships arm64-v8a and armeabi-v7a only, so there is no
-      # native code to load on this runtime at all. That is deliberate: it makes the run a test of
-      # the Dex the phone actually executes. It also means this step must not be mistaken for a test
-      # of the PDF renderer, which needs a real CPU.
       - name: Build the release APK the phone gets
+        timeout-minutes: 25
         env:
           GOOGLE_BOOKS_API_KEY: ${{ secrets.GOOGLE_BOOKS_API_KEY }}
           FIREBASE_WEB_CLIENT_ID: ${{ secrets.FIREBASE_WEB_CLIENT_ID }}
           LORE_BUILD_NUMBER: ${{ github.run_number }}
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tail -40
-          ls -l app/build/outputs/apk/release/
-          sha256sum app/build/outputs/mapping/release/mapping.txt
-          wc -c app/build/outputs/mapping/release/mapping.txt
+          ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tail -30
+          apk="$(ls app/build/outputs/apk/release/*.apk | head -n 1)"
+          echo "release APK: $apk"
+          "$ANDROID_HOME"/build-tools/34.0.0/aapt dump badging "$apk" | head -1
+          mapping=app/build/outputs/mapping/release/mapping.txt
+          {
+            echo "MAPPING_SHA256=$(sha256sum "$mapping" | cut -d' ' -f1)"
+            echo "MAPPING_BYTES=$(wc -c < "$mapping")"
+          } | tee mapping-id.txt
+          cat mapping-id.txt
 
+      # Everything below is printed *and* annotated: the run page is the only output channel that
+      # works in every environment, and the point of this workflow is to make the mapping readable.
       - name: Retrace the reported trace with THIS build's mapping
         run: |
           set +e
           mapping=app/build/outputs/mapping/release/mapping.txt
           python3 tools/retrace.py "$mapping" tools/reported-crash-276.txt > retraced.txt 2>&1
-          echo "----- retraced (reported trace) -----"
-          cat retraced.txt
-          echo "----- reverse mapping for the reported classes -----"
           python3 tools/retrace.py "$mapping" --dump J.j J.k w2.A4 w2.m3 w2.F4 o3.g > dump.txt 2>&1
-          cat dump.txt
-          # Run annotations are readable from the run page without any artifact download.
-          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import urllib.parse, pathlib
-          for name, path in (("Retraced reported trace", "retraced.txt"),
-                             ("Reverse mapping", "dump.txt")):
-              text = pathlib.Path(path).read_text()[:7000]
-              print(f"### {name}\n```\n{text}\n```\n")
-          PY
+          echo "----- retraced -----"; cat retraced.txt
+          echo "----- reverse mapping -----"; cat dump.txt
+          python3 tools/annotate.py notice "Mapping identity" mapping-id.txt
+          python3 tools/annotate.py notice "Reported trace, retraced with this build's mapping" retraced.txt
+          python3 tools/annotate.py notice "Reverse mapping for reported classes" dump.txt
+          {
+            echo "### Mapping identity"; echo '```'; cat mapping-id.txt; echo '```'
+            echo "### Reported trace, retraced"; echo '```'; cat retraced.txt; echo '```'
+            echo "### Reverse mapping"; echo '```'; cat dump.txt; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Boot the emulator
-        run: |
-          echo "no" | avdmanager create avd -n lore -k "system-images;android-34;google_apis;x86_64" -d pixel_6 --force
-          nohup "$ANDROID_HOME/emulator/emulator" -avd lore -no-window -no-audio -no-boot-anim \
-            -gpu swiftshader_indirect -no-snapshot -wipe-data > emulator.log 2>&1 &
-          adb wait-for-device
-          for i in $(seq 1 120); do
-            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
-              echo "booted after ${i}0s"; break
+      - name: Launch the release APK on an Android 34 emulator
+        timeout-minutes: 25
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-audio -no-boot-anim
+          script: |
+            set +e
+            apk="$(ls app/build/outputs/apk/release/*.apk | head -n 1)"
+            adb install -r "$apk" || adb install "$apk"
+            adb shell pm list packages | grep lantern
+            adb logcat -c
+            adb shell am start -W -n com.lantern.library/.MainActivity
+            # The report says "approximately one second". This waits far longer, so a slow emulator
+            # cannot be mistaken for a healthy app.
+            sleep 30
+            pid="$(adb shell pidof com.lantern.library | tr -d '\r')"
+            echo "pid after 30s: '$pid'"
+            adb logcat -d -b crash > crash.log 2>&1
+            adb logcat -d > app.log 2>&1
+            echo "----- crash buffer -----"; cat crash.log
+            echo "----- app log (filtered) -----"
+            grep -E "lantern|AndroidRuntime|FATAL|LoreStartup" app.log | tail -120
+            # The verdict is written to a file as well as to the log: the emulator is shut down when
+            # this script returns, so a later step cannot ask `adb` whether the process is alive.
+            if [ -z "$pid" ]; then
+              echo "DEAD" > startup-result.txt
+              echo "::error title=Startup crash::com.lantern.library is not running 30s after launch: the process died."
+            else
+              echo "ALIVE $pid" > startup-result.txt
+              echo "::notice title=Startup survived::com.lantern.library is still running (pid $pid) 30s after launch."
             fi
-            sleep 10
-          done
-          adb shell getprop sys.boot_completed
-          adb shell wm size
-
-      - name: Install the release APK and launch it
-        run: |
-          set +e
-          apk="$(ls app/build/outputs/apk/release/*.apk | head -n 1)"
-          adb install -r "$apk" || adb install "$apk"
-          "$ANDROID_HOME"/build-tools/34.0.0/aapt dump badging "$apk" | head -1
-          adb shell pm list packages | grep lantern
-          adb logcat -c
-          adb shell am start -W -n com.lantern.library/.MainActivity
-          # The report says "approximately one second". Wait much longer than that, so a slow
-          # emulator cannot be mistaken for a healthy app.
-          sleep 25
-          pid="$(adb shell pidof com.lantern.library | tr -d '\r')"
-          echo "pid after 25s: '$pid'"
-          if [ -z "$pid" ]; then
-            echo "::error title=Startup crash::com.lantern.library is not running 25s after launch. The process died."
-          else
-            echo "::notice title=Startup::com.lantern.library is still running (pid $pid) 25s after launch."
-          fi
-          echo "----- crash buffer -----"
-          adb logcat -d -b crash > crash.log 2>&1
-          cat crash.log
-          echo "----- app log -----"
-          adb logcat -d | grep -E "lantern|AndroidRuntime|FATAL" > app.log 2>&1
-          tail -80 app.log
-          echo "----- main thread traces if still alive -----"
-          adb shell dumpsys activity processes | grep -i "lantern" | head -5
+            exit 0
 
       - name: Retrace whatever the device actually threw
+        if: always()
         run: |
           set +e
           mapping=app/build/outputs/mapping/release/mapping.txt
+          [ -f crash.log ] || : > crash.log
+          [ -f app.log ] || : > app.log
           python3 tools/retrace.py "$mapping" crash.log > crash-retraced.txt 2>&1
-          cat crash-retraced.txt
           python3 tools/retrace.py "$mapping" app.log > app-retraced.txt 2>&1
-          grep -A12 -E "^Caused by|^FATAL|Exception" app-retraced.txt | head -60
-          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import pathlib
-          text = pathlib.Path("crash-retraced.txt").read_text()[:7000]
-          print(f"### Crash buffer, retraced\n```\n{text}\n```\n")
-          PY
+          grep -B2 -A14 -E "FATAL|Caused by|Exception" crash-retraced.txt | head -80
+          python3 tools/annotate.py notice "Device crash buffer, retraced" crash-retraced.txt
+          {
+            echo "### Device crash buffer, retraced"; echo '```'
+            head -60 crash-retraced.txt; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
+      # The gate. `if: always()` so a failure earlier in the job still reports the verdict, and the
+      # step fails when the app did not survive.
       - name: Startup must be alive to pass
+        if: always()
         run: |
-          pid="$(adb shell pidof com.lantern.library | tr -d '\r')"
-          echo "pid: $pid"
-          test -n "$pid"
+          echo "startup-result.txt: $(cat startup-result.txt 2>/dev/null)"
+          grep -q '^ALIVE' startup-result.txt
 
-      - name: Upload logs
+      - name: Upload logs and mapping
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -184,13 +182,7 @@ jobs:
             app-retraced.txt
             retraced.txt
             dump.txt
-            emulator.log
+            mapping-id.txt
+            app/build/outputs/mapping/release/mapping.txt
+            startup-result.txt
           if-no-files-found: ignore
-
-      - name: Upload mapping.txt for this exact build
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-mapping
-          path: app/build/outputs/mapping/release/mapping.txt
-          if-no-files-found: warn

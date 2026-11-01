@@ -25,6 +25,13 @@ name: Startup smoke test (release APK on an emulator)
 
 on:
   workflow_dispatch:
+    inputs:
+      # Build the release APK, print its mapping identity and retrace a trace, without waiting for an
+      # emulator. Used when a crash report has to be resolved quickly.
+      retrace_only:
+        description: "Only build and retrace; do not boot the emulator"
+        type: boolean
+        default: false
   push:
     branches:
       - "arena/**"
@@ -97,12 +104,14 @@ jobs:
           set +e
           mapping=app/build/outputs/mapping/release/mapping.txt
           python3 tools/retrace.py "$mapping" tools/reported-crash-276.txt > retraced.txt 2>&1
-          python3 tools/retrace.py "$mapping" --dump J.j J.k w2.A4 w2.m3 w2.F4 o3.g > dump.txt 2>&1
+          python3 tools/retrace.py "$mapping" --dump \
+            J.j J.k w2.A4 w2.m3 w2.F4 R2.a j3.N B2.a q3.i q3.a o3.g > dump.txt 2>&1
           head -40 retraced.txt
 
       # Everything is captured into boot.log and published as a check run at the end. Nothing in this
       # step is allowed to stop the transcript: a failed install has to be readable too.
       - name: Boot the emulator and launch the app twice
+        if: ${{ !inputs.retrace_only }}
         timeout-minutes: 40
         run: |
           exec > >(tee boot.log) 2>&1
@@ -235,7 +244,7 @@ jobs:
           exit 0
 
       - name: Publish the startup transcript as a check run
-        if: always()
+        if: always() && !inputs.retrace_only
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -281,7 +290,7 @@ jobs:
           echo "conclusion=$conclusion"
 
       - name: The app must be alive in both phases
-        if: always()
+        if: always() && !inputs.retrace_only
         run: |
           cat startup-result.txt
           grep -q "PHASE fresh ALIVE" startup-result.txt

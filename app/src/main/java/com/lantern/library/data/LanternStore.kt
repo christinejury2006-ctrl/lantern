@@ -2454,12 +2454,13 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 withContext(Dispatchers.Main) { applySnapshot(result) }
             }
         }
-        // Books that arrived from the cloud have no file here; books added locally since the pass
-        // above still owe one. Deliberately excludes anything the phone cannot read, and caps the
-        // batch so one sync cannot turn into an hour of uploads on a phone connection.
+        // The merged shelf is the source of truth: a local file is sent only if the reconciled
+        // account record says its bytes are not already verified. Paused books remain untouched.
+        // Anything without a readable local file is a restore/re-import case, not an upload.
         val stillOwed = merged.books.filter { b ->
             val file = b.filePath?.let(::File)
-            BackupRules.needsUpload(b, file != null && file.exists() && file.length() > 0L)
+            b.id !in pausedUploads &&
+                BackupRules.needsUpload(b, file != null && file.exists() && file.length() > 0L)
         }.take(40)
         var extraFailures = 0
         if (stillOwed.isNotEmpty()) {

@@ -12,7 +12,7 @@ class OfflineRetentionTest {
     @get:Rule
     val temp = TemporaryFolder()
 
-    private fun book(keepOffline: Boolean = true) = LibraryBook(
+    private fun book(keepOffline: Boolean = false) = LibraryBook(
         id = "offline-test",
         title = "Offline test",
         author = "Lore",
@@ -24,7 +24,7 @@ class OfflineRetentionTest {
 
     @Test
     fun `new books start as managed cache rather than pinned offline downloads`() {
-        val fresh = book().copy(keepOffline = false)
+        val fresh = book()
         assertFalse(fresh.keepOffline)
     }
 

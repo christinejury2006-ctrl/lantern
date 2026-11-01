@@ -338,6 +338,7 @@ internal fun LanternRoot(store: LanternStore) {
                             onBackOnShelf = { store.clearDidNotFinish(it) },
                             onRemoveDownload = { store.removeDownload(it) },
                             onRestoreDownload = { store.restoreDownload(it) },
+                            onKeepOfflineChange = { id, keep -> store.setKeepOffline(id, keep) },
                             removingIds = store.removingIds,
                             restoringIds = store.restoringIds,
                             removalBlocker = { store.downloadRemovalBlocker(it) },

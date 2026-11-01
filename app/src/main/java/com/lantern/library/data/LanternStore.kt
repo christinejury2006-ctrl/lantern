@@ -12,8 +12,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
@@ -329,8 +327,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
      * Drive files all stay exactly as they were, which is what makes signing back in a return
      * rather than a new start.
      */
-    private fun activate(target: String, accountId: String?, announce: Boolean) {
-        if (!Profiles.isValidNamespace(target)) return
+    private fun activate(target: String, accountId: String?, announce: Boolean): Int {
+        if (!Profiles.isValidNamespace(target)) return -1
         // A new generation *first*: from this line on, every answer that was already on its way
         // belongs to a session that no longer exists and will be dropped.
         val gen = session.begin(target)
@@ -340,7 +338,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             val recorded = profiles.identity(target)
             if (owner.isNullOrBlank() || (recorded != null && recorded.ownerAccountId != owner)) {
                 SyncDiag.fail("Account isolation", "refused to open $target: it belongs to another account")
-                return
+                return -1
             }
         }
         viewModelScope.launch {
@@ -399,6 +397,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+        return gen
     }
 
     /**
@@ -452,7 +451,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     private fun applyHydrated(disk: DiskHydrate, gen: Int) {
         if (!session.isCurrent(gen)) return
         readingPrefs = disk.readingPrefs
-        val owner = profiles.identity(namespace)
+        val owner = profiles.identity(namespace)?.ownerAccountId
         // `GoogleAuth.lastAccount` is whatever account the device signed into last, which is not
         // necessarily the owner of this namespace. Accepting it blindly is exactly how one
         // account's identity ends up attached to another account's shelf.
@@ -1456,11 +1455,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             .putString("name", acc.displayName.orEmpty().ifBlank { acc.email.orEmpty() })
             .putString("email", acc.email.orEmpty())
             .apply()
-        activate(target, incoming, announce = true)
+        val gen = activate(target, incoming, announce = true)
         viewModelScope.launch(Dispatchers.IO) {
-            // The Firestore mirror is the account's own record; it is written only for the account
-            // that is active now.
-            val gen = session.generation
+            // The Firestore mirror is the account's own record; it is written only for the session
+            // that is active now, so a mirror written for account A cannot land after a switch.
             if (!session.isCurrent(gen, target)) return@launch
             syncFirebaseAccount(acc, announce = true)
         }

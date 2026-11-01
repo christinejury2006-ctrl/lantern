@@ -63,5 +63,7 @@ class OfflineRetentionTest {
 
         assertEquals(100L + 900L + 4L, BookIo.directoryBytes(root))
         assertEquals(media.canonicalFile, BookIo.mediaDirFor(archive).canonicalFile)
+        assertEquals(904L, BookIo.deleteDerivedMedia(archive))
+        assertFalse("derived images should be regenerable and removable", media.exists())
     }
 }

@@ -3605,13 +3605,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         var removed = 0
         for (candidate in victims) {
             if (remaining <= targetBytes) break
-            val size = candidate.filePath?.let { path ->
-                val local = File(path)
-                local.length() + BookIo.directoryBytes(BookIo.mediaDirFor(local))
-            } ?: 0L
             when (downloadService.removeDownload(candidate.id, notify = false)) {
                 is RemoveOutcome.Removed, is RemoveOutcome.AlreadyRemoved -> {
-                    remaining -= size
+                    // Re-measure instead of assuming all derived media was deleted successfully.
+                    remaining = BookIo.directoryBytes(dir)
                     removed++
                 }
                 else -> Unit // Offline, stale, unverified or otherwise uncertain: keep the bytes.

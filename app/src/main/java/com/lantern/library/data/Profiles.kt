@@ -285,7 +285,13 @@ class ProfileStore(private val app: Application) {
         val target = Profiles.namespaceFor(ownerAccountId)
         ensure(target, ownerAccountId)
         dir(target)
-        LegacyMigrate.moveFiles(app.filesDir, dir(target), managedFiles)
+        val moved = LegacyMigrate.moveFiles(app.filesDir, dir(target), managedFiles)
+        // Logged on every build, not only debug ones: "where did my library go" has to be answerable
+        // from a reader's logcat, and this is the one moment the app moves their data.
+        android.util.Log.i(
+            "LoreProfiles",
+            "migrated $moved of ${pending.size} legacy file(s) into $target"
+        )
         migrateLegacyPreferences(target)
         // Last, so a crash above leaves the migration to be completed rather than declared done.
         runCatching { marker.writeText(target) }

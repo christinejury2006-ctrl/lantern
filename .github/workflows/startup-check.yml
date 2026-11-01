@@ -311,8 +311,11 @@ jobs:
             echo "===== launch phases ====="
             grep -E "== phase|PHASE |BOOTED after|device appeared" boot.log
             echo
+            echo "===== profile migration (3.7.0) ====="
+            grep -E "where the shelf went|legacy library|files/library.json|files/profiles|LoreProfiles" boot.log | head -20
+            echo
             echo "===== data check ====="
-            grep -E "seeded ids|ids after|PRESERVED|MISSING|DATA CHECK" boot.log
+            grep -E "seeded ids|ids after|PRESERVED|MISSING|DATA CHECK|^\[" boot.log | head -6
             echo
             echo "===== crash buffers ====="
             grep -E "^--- crash-|FATAL" boot.log | head -10

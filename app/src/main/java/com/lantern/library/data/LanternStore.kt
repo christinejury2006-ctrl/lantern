@@ -1640,15 +1640,52 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     private fun purgeBackedUpCache(namespace: String) {
         if (namespace == Profiles.GUEST) return
         runCatching {
-            val file = profiles.file(namespace, "library.json")
-            if (!file.exists()) return@runCatching
+            val libraryFile = profiles.file(namespace, "library.json")
+            if (!libraryFile.exists()) return@runCatching
             val pending = UploadQueue.read(profiles.file(namespace, "upload_queue.json"))
                 .map { it.bookId }.toSet()
-            val all = BookRecords.decodeAll(file.readText())
-            val keep = all.filter { book -> book.id in pending || !book.isBackedUp() }
+            val all = BookRecords.decodeAll(libraryFile.readText())
+            // A record is removed from this phone only when its cloud copy is confirmed and the
+            // local bytes still match the exact size (and checksum, when recorded). A stale or
+            // unverified file stays in the profile; signing out must never turn it into data loss.
+            val safeToDrop = all.filter { book ->
+                if (book.id in pending || !book.isBackedUp()) return@filter false
+                val path = book.filePath ?: return@filter true
+                val local = File(path)
+                if (!local.exists()) return@filter true
+                if (DownloadRules.removeBlocker(book, local.length()) != null) return@filter false
+                book.backupMd5.isBlank() || BookFiles.md5(local).equals(book.backupMd5, ignoreCase = true)
+            }
+            val safeIds = safeToDrop.map { it.id }.toSet()
+            val keep = all.filterNot { it.id in safeIds }
             if (keep.size == all.size) return@runCatching
-            BookRecords.write(file, keep)
-            SyncDiag.mark("Sign out", "kept ${keep.size} of ${all.size} local entries")
+            if (!BookRecords.write(libraryFile, keep)) {
+                SyncDiag.fail("Sign out", "could not persist the reduced local library; book files were kept")
+                return@runCatching
+            }
+
+            // Book bytes are shared under externalFilesDir/books across profile namespaces. Delete
+            // only files no other profile still references, so identical ids in Guest/another
+            // Google account cannot lose their local copy when this account signs out.
+            val stillReferenced = LinkedHashSet<String>()
+            keep.mapNotNullTo(stillReferenced) { it.filePath?.let { path -> runCatching { File(path).canonicalPath }.getOrNull() } }
+            profiles.namespaces().filter { it != namespace }.forEach { other ->
+                BookRecords.read(profiles.file(other, "library.json"))
+                    .mapNotNullTo(stillReferenced) { it.filePath?.let { path -> runCatching { File(path).canonicalPath }.getOrNull() } }
+            }
+            var bytesFreed = 0L
+            safeToDrop.forEach { book ->
+                val path = book.filePath ?: return@forEach
+                val local = File(path)
+                val canonical = runCatching { local.canonicalPath }.getOrNull() ?: return@forEach
+                if (canonical in stillReferenced || !local.exists()) return@forEach
+                val size = local.length()
+                if (runCatching { local.delete() }.getOrDefault(false) && !local.exists()) bytesFreed += size
+            }
+            SyncDiag.mark(
+                "Sign out",
+                "kept ${keep.size} of ${all.size} local entries; freed ${bytesFreed / (1024 * 1024)} MB of verified book files"
+            )
         }.onFailure { SyncDiag.fail("Sign out", it.describe()) }
     }
 
@@ -3503,36 +3540,49 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     }
 
     private suspend fun maybeEvictCache(keepId: String?) {
+        // Lore is cloud-first: keep a modest on-device reading cache, not the entire library.
+        // Eviction is deliberately conservative and goes through DownloadService, which checks
+        // the account still has the exact book, validates its size/checksum, persists filePath=null
+        // before deleting bytes, and rolls the record back if deletion fails.
         val dir = BookIo.booksDir(getApplication())
-        val used = dir.listFiles()?.sumOf { it.length() } ?: 0L
-        val free = dir.usableSpace
-        val needEvict = (used > 512L * 1024 * 1024 && free < 256L * 1024 * 1024) ||
-            used > 1536L * 1024 * 1024 ||
-            free < 80L * 1024 * 1024
-        if (!needEvict) return
-        val snapshot = synchronized(libraryLock) { books.toList() }
-        val victims = snapshot
-            .filter { it.id != keepId }
-            .filter { !it.driveFileId.isNullOrBlank() }
-            .filter { it.filePath?.let { p -> File(p).exists() } == true }
-            .sortedBy { it.lastReadAt }
-        val cleared = ArrayList<String>()
-        var remainingUsed = used
-        for (b in victims) {
-            if (remainingUsed < 256L * 1024 * 1024 && free + (used - remainingUsed) > 200L * 1024 * 1024) break
-            val f = b.filePath?.let { File(it) } ?: continue
-            val size = f.length()
-            if (runCatching { f.delete() }.getOrDefault(false)) {
-                remainingUsed -= size
-                cleared += b.id
+        val used = dir.listFiles()?.filter { it.isFile }?.sumOf { it.length() } ?: 0L
+        val targetBytes = 192L * 1024 * 1024
+        val cacheLimit = 256L * 1024 * 1024
+        if (used <= cacheLimit) return
+        val now = System.currentTimeMillis()
+        val protectedRecentlyOpened = 30L * 60L * 1000L
+        val busy = uploadingIds + restoringIds + removingIds
+        val victims = synchronized(libraryLock) { books.toList() }
+            .filter { it.id != keepId && it.id !in busy }
+            .filter { it.lastReadAt == 0L || now - it.lastReadAt > protectedRecentlyOpened }
+            .filter { book ->
+                val local = book.filePath?.let(::File) ?: return@filter false
+                local.isFile && local.length() > 0L &&
+                    DownloadRules.removeBlocker(book, local.length()) == null &&
+                    (book.backupMd5.isBlank() ||
+                        BookFiles.md5(local).equals(book.backupMd5, ignoreCase = true))
+            }
+            .sortedWith(compareBy<LibraryBook> { it.lastReadAt }.thenByDescending {
+                it.filePath?.let { path -> File(path).length() } ?: 0L
+            })
+        var remaining = used
+        var removed = 0
+        for (candidate in victims) {
+            if (remaining <= targetBytes) break
+            val size = candidate.filePath?.let { File(it).length() } ?: 0L
+            when (downloadService.removeDownload(candidate.id, notify = false)) {
+                is RemoveOutcome.Removed, is RemoveOutcome.AlreadyRemoved -> {
+                    remaining -= size
+                    removed++
+                }
+                else -> Unit // Offline, stale, unverified or otherwise uncertain: keep the bytes.
             }
         }
-        if (cleared.isEmpty()) return
-        withContext(Dispatchers.Main) {
-            cleared.forEach { id ->
-                val latest = book(id) ?: return@forEach
-                upsert(latest.copy(filePath = null))
-            }
+        if (removed > 0) {
+            SyncDiag.mark(
+                "Book cache",
+                "removed $removed verified download(s); ${(used - remaining) / (1024 * 1024)} MB reclaimed"
+            )
         }
     }
 

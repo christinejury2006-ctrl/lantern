@@ -432,6 +432,15 @@ class DownloadTest {
         assertTrue("an explicit restore is an offline-download choice", after.keepOffline)
     }
 
+    @Test
+    fun `reader-triggered restore remains temporary cache`() {
+        val removed = removedBook()
+        val outcome = runBlockingTest { service.restoreDownload(removed.id, keepOffline = false) }
+
+        assertTrue("expected Restored, got $outcome", outcome is RestoreOutcome.Restored)
+        assertFalse("opening a cloud-only book must not pin its cache", host.library[removed.id]!!.keepOffline)
+    }
+
     // 3
     @Test
     fun `the restored bytes match the recorded size and checksum`() {

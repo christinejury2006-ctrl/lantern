@@ -121,10 +121,17 @@ object BookRecords {
         val tmp = File(file.parentFile, file.name + ".tmp")
         runCatching { tmp.writeText(encodeAll(books)) }.getOrElse { return false }
         if (!tmp.renameTo(file)) {
-            runCatching { tmp.copyTo(file, overwrite = true) }
+            val copied = runCatching {
+                tmp.copyTo(file, overwrite = true)
+                true
+            }.getOrDefault(false)
             runCatching { tmp.delete() }
+            if (!copied) return false
         }
-        return true
+        // Sign-out cleanup relies on this return value before deleting any physical book bytes.
+        // Verify the exact serialized shelf landed, rather than treating a failed fallback copy as
+        // success and potentially removing files while the old metadata still points at them.
+        return runCatching { file.exists() && file.readText() == encodeAll(books) }.getOrDefault(false)
     }
 
     /** Reads a namespace's library file without any app state. */

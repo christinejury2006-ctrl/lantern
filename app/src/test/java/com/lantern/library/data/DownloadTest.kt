@@ -370,7 +370,7 @@ class DownloadTest {
     // 14
     @Test
     fun `removing twice is safe and idempotent`() {
-        val book = verifiedBook()
+        val book = verifiedBook().copy(keepOffline = true)
         val first = runBlockingTest { service.removeDownload(book.id) }
         assertTrue(first is RemoveOutcome.Removed)
 

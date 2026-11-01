@@ -1405,6 +1405,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     }
 
     fun openForReading(book: LibraryBook, then: (LibraryBook?) -> Unit) {
+        recentBookOpens[book.id] = System.currentTimeMillis()
         viewModelScope.launch {
             // A book restored onto a new phone has no file yet: pull it from the account
             // instead of making the user import it again.
@@ -1678,6 +1679,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 val path = book.filePath ?: return@forEach
                 val local = File(path)
                 val canonical = runCatching { local.canonicalPath }.getOrNull() ?: return@forEach
+                val booksRoot = runCatching { BookIo.booksDir(getApplication()).canonicalPath }.getOrNull()
+                    ?: return@forEach
+                if (!canonical.startsWith(booksRoot + File.separator)) return@forEach
                 if (canonical in stillReferenced || !local.exists()) return@forEach
                 val size = local.length()
                 if (runCatching { local.delete() }.getOrDefault(false) && !local.exists()) bytesFreed += size
@@ -2981,6 +2985,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     var restoringIds by mutableStateOf<Set<String>>(emptySet())
         private set
 
+    /** Recent opens are protected from background cache cleanup while the reader is using them. */
+    private val recentBookOpens = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
     /**
      * Uploads the reader paused.
      *
@@ -3557,7 +3564,11 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         val busy = uploadingIds + restoringIds + removingIds
         val victims = synchronized(libraryLock) { books.toList() }
             .filter { it.id != keepId && it.id !in busy }
-            .filter { it.lastReadAt == 0L || now - it.lastReadAt > protectedRecentlyOpened }
+            .filter { book ->
+                val openedAt = recentBookOpens[book.id] ?: 0L
+                (openedAt == 0L || now - openedAt > protectedRecentlyOpened) &&
+                    (book.lastReadAt == 0L || now - book.lastReadAt > protectedRecentlyOpened)
+            }
             .filter { book ->
                 val local = book.filePath?.let(::File) ?: return@filter false
                 local.isFile && local.length() > 0L &&

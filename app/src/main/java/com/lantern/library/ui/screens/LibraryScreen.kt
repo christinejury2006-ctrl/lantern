@@ -107,6 +107,8 @@ fun LibraryScreen(
     onRemoveDownload: (String) -> Unit = {},
     /** Fetches the bytes back from the account. */
     onRestoreDownload: (String) -> Unit = {},
+    /** Persists whether a complete local copy is protected from automatic cache cleanup. */
+    onKeepOfflineChange: (String, Boolean) -> Unit = { _, _ -> },
     /** Book ids whose download is being removed / restored right now. */
     removingIds: Set<String> = emptySet(),
     restoringIds: Set<String> = emptySet(),
@@ -309,6 +311,17 @@ fun LibraryScreen(
                         }
                         target.id in pausedUploads -> TextButton(onClick = { menuFor = null; onResumeUpload(target.id) }) {
                             Text("Resume upload", color = palette.ink)
+                        }
+                    }
+                    if (target.format != com.lantern.library.data.BookFormat.TEXT && target.localFileAvailable) {
+                        TextButton(onClick = {
+                            menuFor = null
+                            onKeepOfflineChange(target.id, !target.keepOffline)
+                        }) {
+                            Text(
+                                if (target.keepOffline) "Allow automatic cleanup" else "Keep downloaded offline",
+                                color = palette.ink
+                            )
                         }
                     }
                     when (DownloadUi.actionFor(target, localBytes)) {

@@ -472,7 +472,7 @@ class DownloadService(private val host: DownloadHost) {
         // into something that passes a size check and fails a checksum, or worse, nearly passes.
         if (!bookIds.add(book.id)) return RestoreOutcome.Busy
         val outcome = try {
-            streamInto(book)
+            streamInto(book, keepOffline)
         } finally {
             bookIds.remove(book.id)
         }
@@ -483,7 +483,7 @@ class DownloadService(private val host: DownloadHost) {
     }
 
     /** The transfer half: resume, download, pause, retry, and only then verify and commit. */
-    private suspend fun streamInto(book: LibraryBook): RestoreOutcome {
+    private suspend fun streamInto(book: LibraryBook, keepOffline: Boolean): RestoreOutcome {
         val dest = File(host.booksDir, BookFiles.cacheNameFor(book.id, book.format))
         val temp = File(host.booksDir, dest.name + ".restore")
 

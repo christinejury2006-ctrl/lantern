@@ -561,6 +561,25 @@ object BookIo {
      * are skipped: they cannot be drawn without an SVG renderer, and a missing illustration is
      * better than a broken page.
      */
+    /** Directory containing images extracted from this EPUB. It is regenerable from the archive. */
+    fun mediaDirFor(book: File): File = File(book.parentFile, "media_" + book.name)
+
+    /** Recursively measures book storage, including EPUB media and interrupted temporary files. */
+    fun directoryBytes(root: File): Long {
+        if (!root.exists()) return 0L
+        if (root.isFile) return root.length()
+        return root.listFiles()?.sumOf { child -> directoryBytes(child) } ?: 0L
+    }
+
+    /** Removes only derived EPUB images; the original archive remains the source of truth. */
+    fun deleteDerivedMedia(book: File): Long {
+        val dir = mediaDirFor(book)
+        if (!dir.exists()) return 0L
+        val bytes = directoryBytes(dir)
+        runCatching { dir.deleteRecursively() }
+        return if (!dir.exists()) bytes else 0L
+    }
+
     private fun unpackMedia(zip: ZipFile, book: File): Map<String, File> {
         val dir = File(book.parentFile, "media_" + book.name)
         val done = File(dir, ".unpacked")

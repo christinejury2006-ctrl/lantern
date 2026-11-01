@@ -111,3 +111,50 @@ class BackupRulesTest {
         assertFalse(BackupRules.restorable(b))
     }
 }
+
+    @Test
+    fun `cloud backup confirmation is applied before upload decisions on sign in`() {
+        val file = java.io.File.createTempFile("lore-signin-reconcile", ".epub")
+        try {
+            file.writeBytes(ByteArray(256))
+            // The local profile has a stale record, as can happen after a sign-out/cache cycle.
+            val localBook = book(filePath = file.absolutePath)
+            // Drive's account snapshot is authoritative evidence that these exact bytes already exist.
+            val cloudBook = book(
+                driveFileId = "drive-existing",
+                backupAt = 1_700_000_000_000L,
+                filePath = null
+            ).copy(backupBytes = 256L)
+
+            fun snapshot(books: List<LibraryBook>) = AccountSnapshot(
+                updatedAt = 1_700_000_000_000L,
+                userId = "account-1",
+                books = books,
+                bookmarks = emptyList(),
+                libraryAppearance = AppearLook.libraryDefault,
+                readerAppearance = AppearLook.readerDefault,
+                prefs = ReadingPrefs(),
+                libraryAppearAt = 0L,
+                readerAppearAt = 0L,
+                prefsAt = 0L,
+                bookOrder = books.map { it.id }
+            )
+
+            val reconciled = AccountSync.merge(
+                snapshot(listOf(localBook)),
+                snapshot(listOf(cloudBook))
+            )
+            val restored = reconciled.books.single()
+
+            assertEquals("drive-existing", restored.driveFileId)
+            assertTrue(restored.backupAt > 0L)
+            assertEquals(256L, restored.backupBytes)
+            assertFalse(
+                "A local file with a verified cloud copy must not be uploaded again",
+                BackupRules.needsUpload(restored, localFileExists = true)
+            )
+        } finally {
+            file.delete()
+        }
+    }
+

@@ -8,9 +8,9 @@ enum class AppearFill { Solid, Ombre }
 
 data class AppearLook(
     val fill: AppearFill = AppearFill.Ombre,
-    val solidArgb: Long = 0xFFE8B8F4,
-    val ombreStartArgb: Long = 0xFFE8B8F4,
-    val ombreEndArgb: Long = 0xFF6ED4C8,
+    val solidArgb: Long = 0xFFF3F4F6,
+    val ombreStartArgb: Long = 0xFFF3F4F6,
+    val ombreEndArgb: Long = 0xFFE5E7EB,
     val wallpaperId: String? = null,
     val wallpaperUrl: String? = null,
     val wallpaperOpacity: Float = 0.32f,
@@ -22,35 +22,38 @@ data class AppearLook(
 
     companion object {
         val libraryDefault = AppearLook(
-            fill = AppearFill.Ombre,
-            solidArgb = 0xFFE8B8F4,
-            ombreStartArgb = 0xFFE8B8F4,
-            ombreEndArgb = 0xFF6ED4C8,
+            fill = AppearFill.Solid,
+            solidArgb = 0xFFF3F4F6,
+            ombreStartArgb = 0xFFF3F4F6,
+            ombreEndArgb = 0xFFE5E7EB,
             wallpaperOpacity = 0.32f,
             overlay = 0.22f
         )
         val readerDefault = AppearLook(
-            fill = AppearFill.Ombre,
-            solidArgb = 0xFFEDE4F6,
-            ombreStartArgb = 0xFFE8B8F4,
-            ombreEndArgb = 0xFF6ED4C8,
+            fill = AppearFill.Solid,
+            solidArgb = 0xFFF8F8F7,
+            ombreStartArgb = 0xFFF8F8F7,
+            ombreEndArgb = 0xFFE5E7EB,
             wallpaperOpacity = 0.50f,
             overlay = 0.18f,
             chromeOpacity = 0.5f
         )
         val darkDefault = AppearLook(
-            fill = AppearFill.Ombre,
-            solidArgb = 0xFF3A4454,
-            ombreStartArgb = 0xFF3E4A5C,
-            ombreEndArgb = 0xFF2B2430,
+            fill = AppearFill.Solid,
+            solidArgb = 0xFF202124,
+            ombreStartArgb = 0xFF202124,
+            ombreEndArgb = 0xFF303134,
             wallpaperOpacity = 0.28f,
             overlay = 0.42f
         )
     }
 
     fun resolvedFor(dark: Boolean): AppearLook {
-        val factoryLight = sameFills(libraryDefault) || sameFills(readerDefault)
-        val factoryDark = sameFills(darkDefault)
+        val legacyLibrary = AppearLook(fill = AppearFill.Ombre, solidArgb = 0xFFE8B8F4, ombreStartArgb = 0xFFE8B8F4, ombreEndArgb = 0xFF6ED4C8)
+        val legacyReader = AppearLook(fill = AppearFill.Ombre, solidArgb = 0xFFEDE4F6, ombreStartArgb = 0xFFE8B8F4, ombreEndArgb = 0xFF6ED4C8)
+        val legacyDark = AppearLook(fill = AppearFill.Ombre, solidArgb = 0xFF3A4454, ombreStartArgb = 0xFF3E4A5C, ombreEndArgb = 0xFF2B2430)
+        val factoryLight = sameFills(libraryDefault) || sameFills(readerDefault) || sameFills(legacyLibrary) || sameFills(legacyReader)
+        val factoryDark = sameFills(darkDefault) || sameFills(legacyDark)
         return when {
             dark && factoryLight -> copy(
                 solidArgb = darkDefault.solidArgb,
@@ -90,14 +93,9 @@ data class WallpaperChoice(
 
 object WallpaperCatalog {
     val items: List<WallpaperChoice> = listOf(
-        WallpaperChoice("aurora_purple", "Aurora Purple", R.drawable.wp_aurora_purple),
-        WallpaperChoice("aurora_teal", "Aurora Teal", R.drawable.wp_aurora_teal),
-        WallpaperChoice("paper_cream", "Paper Cream", R.drawable.wp_paper_cream),
-        WallpaperChoice("dusk_slate", "Dusk Slate", R.drawable.wp_dusk_slate),
-        WallpaperChoice("mist_lilac", "Mist Lilac", R.drawable.wp_mist_lilac),
-        WallpaperChoice("night_ink", "Night Ink", R.drawable.wp_night_ink),
-        WallpaperChoice("forest_haze", "Forest Haze", R.drawable.wp_forest_haze),
-        WallpaperChoice("shore_gold", "Shore Gold", R.drawable.wp_shore_gold)
+        WallpaperChoice("paper_cream", "Warm Paper", R.drawable.wp_paper_cream),
+        WallpaperChoice("dusk_slate", "Slate Glass", R.drawable.wp_dusk_slate),
+        WallpaperChoice("night_ink", "Ink Glass", R.drawable.wp_night_ink)
     )
 
     fun find(id: String?): WallpaperChoice? =

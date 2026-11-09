@@ -2,6 +2,9 @@ name: Build debug APK
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - feature/glass-reader-upgrades
 
 jobs:
   build:
@@ -24,6 +27,26 @@ jobs:
       - name: Install Android platform 34
         run: |
           sdkmanager "platforms;android-34" "build-tools;34.0.0" "build-tools;30.0.3"
+
+      - name: Configure stable update signing key (optional)
+        env:
+          LORE_KEYSTORE_BASE64: ${{ secrets.LORE_KEYSTORE_BASE64 }}
+          LORE_KEYSTORE_PASSWORD: ${{ secrets.LORE_KEYSTORE_PASSWORD }}
+          LORE_KEY_ALIAS: ${{ secrets.LORE_KEY_ALIAS }}
+          LORE_KEY_PASSWORD: ${{ secrets.LORE_KEY_PASSWORD }}
+        run: |
+          if [ -n "$LORE_KEYSTORE_BASE64" ] && [ -n "$LORE_KEYSTORE_PASSWORD" ] && [ -n "$LORE_KEY_ALIAS" ] && [ -n "$LORE_KEY_PASSWORD" ]; then
+            echo "$LORE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/lore-update-key.jks"
+            {
+              echo "LORE_KEYSTORE_PATH=$RUNNER_TEMP/lore-update-key.jks"
+              echo "LORE_KEYSTORE_PASSWORD=$LORE_KEYSTORE_PASSWORD"
+              echo "LORE_KEY_ALIAS=$LORE_KEY_ALIAS"
+              echo "LORE_KEY_PASSWORD=$LORE_KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+            echo "Stable signing key configured."
+          else
+            echo "Stable signing key secrets are not configured; this APK will use the runner's default debug key and may not update an existing install."
+          fi
 
       - name: Build debug APK
         env:

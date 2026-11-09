@@ -39,14 +39,14 @@ import kotlin.math.min
 
 private val PosterOmbre = Brush.verticalGradient(
     listOf(
-        Color(0xFFC29BFB),
-        Color(0xFFBE9EFB),
-        Color(0xFFB5A5FB),
-        Color(0xFFA8AAFA),
-        Color(0xFF99BEF5),
-        Color(0xFF82C9EF),
-        Color(0xFF76D7E8),
-        Color(0xFF71DCE6)
+        Color(0xFFF3F4F6),
+        Color(0xFFE5E7EB),
+        Color(0xFFD1D5DB),
+        Color(0xFFBFC5CC),
+        Color(0xFF9CA3AF),
+        Color(0xFF9CA3AF),
+        Color(0xFF6B7280),
+        Color(0xFF4B5563)
     )
 )
 
@@ -141,7 +141,7 @@ private fun LorePosterScene(
         val writeT = ((ms - 1850f) / 1400f).coerceIn(0f, 1f)
         val sparkT = smooth(((ms - 3150f) / 300f).coerceIn(0f, 1f))
 
-        drawRect(Color(0xFFC8A1F3))
+        drawRect(Color(0xFFF3F4F6))
         drawRect(PosterOmbre, alpha = ombreT)
 
         if (body == null) return@Canvas

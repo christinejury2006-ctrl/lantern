@@ -93,6 +93,7 @@ fun ReadingNookScreen(
     onLibrary: () -> Unit,
     onRefreshPicks: () -> Unit,
     onNotifications: () -> Unit,
+    unreadNotifications: Int = 0,
     /** Live upload progress, keyed by book. Read-only: the shelf never writes sync state. */
     transfers: Map<String, TransferProgress> = emptyMap(),
     /** Why a book is not backed up, when the retry queue knows — shown in the detail sheet. */
@@ -122,7 +123,7 @@ fun ReadingNookScreen(
 
     NookBackdrop(palette) {
         Column(Modifier.fillMaxSize()) {
-            NookHeader(palette, account, onNotifications)
+            NookHeader(palette, account, onNotifications, unreadNotifications)
             // The editor's picks sit above the shelf and stay there: they are the one part of the
             // page that is about books the reader does not own yet, and it should not disappear
             // the moment they start scrolling their own.
@@ -274,7 +275,8 @@ private fun PicksBar(
 private fun NookHeader(
     palette: NookPalette,
     account: CloudAccount,
-    onNotifications: () -> Unit
+    onNotifications: () -> Unit,
+    unreadNotifications: Int
 ) {
     Column(Modifier.fillMaxWidth().padding(top = 26.dp, bottom = 16.dp)) {
         Row(
@@ -316,6 +318,17 @@ private fun NookHeader(
                         tint = palette.ink,
                         modifier = Modifier.align(Alignment.Center).size(18.dp)
                     )
+                    if (unreadNotifications > 0) {
+                        Box(
+                            Modifier.align(Alignment.TopEnd).padding(top = 1.dp, end = 1.dp)
+                                .clip(CircleShape).background(palette.accent).padding(horizontal = 4.dp, vertical = 1.dp)
+                        ) {
+                            Text(
+                                if (unreadNotifications > 99) "99+" else unreadNotifications.toString(),
+                                color = palette.ink, fontSize = 8.sp, fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                     if (account.signedIn && !account.driveConnected) {
                         // A signed-in account with Drive not yet granted is the one state that
                         // needs saying out loud: sync will not run until it is.

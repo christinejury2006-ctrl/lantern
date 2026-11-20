@@ -14,6 +14,9 @@ import androidx.core.content.ContextCompat
 import com.lantern.library.MainActivity
 import com.lantern.library.R
 import com.google.firebase.messaging.FirebaseMessaging
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
+import java.security.MessageDigest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONArray
@@ -159,6 +162,21 @@ object NotificationCenter {
     }
 
     fun savedToken(): String? = app?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)?.getString(TOKEN, null)
+
+    /** Stores this device token under the authenticated Firebase UID for trusted server delivery. */
+    fun registerDeviceToken() {
+        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
+        refreshToken { token ->
+            if (token.isNullOrBlank()) return@refreshToken
+            val hash = MessageDigest.getInstance("SHA-256").digest(token.toByteArray())
+                .joinToString("") { "%02x".format(it) }
+            runCatching {
+                FirebaseFirestore.getInstance().collection("users").document(uid)
+                    .collection("devices").document(hash)
+                    .set(mapOf("token" to token, "platform" to "android", "updatedAt" to System.currentTimeMillis()))
+            }
+        }
+    }
 
     fun refreshToken(onResult: (String?) -> Unit = {}) {
         FirebaseMessaging.getInstance().token

@@ -30,7 +30,8 @@ class LoreMessagingService : FirebaseMessagingService() {
             body = data["body"] ?: message.notification?.body.orEmpty(),
             eventId = data["event_id"] ?: data["eventId"].orEmpty(),
             target = data["target"].orEmpty(),
-            showSystem = true
+            showSystem = true,
+            relayToCloud = false
         )
     }
 }

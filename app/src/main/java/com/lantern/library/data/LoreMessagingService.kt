@@ -14,6 +14,7 @@ class LoreMessagingService : FirebaseMessagingService() {
         super.onNewToken(token)
         NotificationCenter.initialize(applicationContext)
         NotificationCenter.saveToken(token)
+        NotificationCenter.registerDeviceToken()
         // Token registration is intentionally left to the authenticated account-sync endpoint.
         // The token is persisted locally so registration can be retried after the user signs in.
     }

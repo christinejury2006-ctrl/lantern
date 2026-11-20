@@ -123,6 +123,17 @@ object NotificationCenter {
         mutablePreferences.value = decodePreferences(prefs.getString(SETTINGS, null))
     }
 
+    fun postCurrent(
+        category: LoreNoticeCategory,
+        title: String,
+        body: String,
+        eventId: String = "",
+        target: String = ""
+    ): LoreNotification? {
+        val context = app ?: return null
+        return post(context, category, title, body, eventId, target)
+    }
+
     fun post(
         context: Context,
         category: LoreNoticeCategory,

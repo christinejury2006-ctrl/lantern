@@ -872,6 +872,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             wantToRead.removeAll(removed.toSet())
             persistWantToRead()
             persistWantToReadDeletedAt()
+            markLocalChanged()
         }
     }
 

@@ -18,6 +18,7 @@ object FirestoreAccountRepository {
     private const val MAX_DOCUMENT_CHARS = 850_000
 
     suspend fun signIn(account: GoogleSignInAccount) = withContext(Dispatchers.IO) {
+        NotificationCenter.unregisterDeviceToken()
         check(BuildConfig.FIREBASE_WEB_CLIENT_ID.isNotBlank()) {
             "Firebase Google OAuth client ID is not configured."
         }
@@ -59,7 +60,8 @@ object FirestoreAccountRepository {
 
     fun isSignedIn(): Boolean = FirebaseAuth.getInstance().currentUser != null
 
-    fun signOut() {
+    suspend fun signOut() {
+        NotificationCenter.unregisterDeviceToken()
         FirebaseAuth.getInstance().signOut()
     }
 }

@@ -5,7 +5,7 @@ This replaces the Firebase Cloud Function trigger. It does not require Firebase 
 ## Deploy
 
 1. Create a Cloudflare account and stay on the Workers Free plan.
-2. In Google Cloud Console for Firebase project `lore-digital-library`, create a dedicated service account for the relay. Grant only the permissions needed to read Firestore documents and send Firebase Cloud Messaging messages (Firestore read access and Firebase Cloud Messaging API send permission). Do not use an Owner account key.
+2. In Google Cloud Console for Firebase project `lore-digital-library`, create a dedicated service account for the relay. Grant only these roles to the service account: **Cloud Datastore Viewer** (\`roles/datastore.viewer\`) for reading the user's Firestore settings/device tokens, and **Firebase Cloud Messaging API Admin** (\`roles/firebasecloudmessaging.admin\`) for sending FCM messages. Do not use an Owner account key.
 3. Enable the Firebase Cloud Messaging API for the project.
 4. Install Wrangler locally and run `npx wrangler secret put FIREBASE_PROJECT_ID`, `GOOGLE_CLIENT_EMAIL`, and `GOOGLE_PRIVATE_KEY`. For the project ID use `lore-digital-library`. Paste the private key only into Cloudflare's secret prompt, never into source control or ChatGPT.
 5. Run `npm install` and `npx wrangler deploy` from this directory. Copy the resulting `https://...workers.dev` URL.

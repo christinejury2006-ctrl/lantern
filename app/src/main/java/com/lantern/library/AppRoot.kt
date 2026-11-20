@@ -30,6 +30,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -65,6 +66,8 @@ import com.lantern.library.ui.screens.ProfileScreen
 import com.lantern.library.ui.screens.ReadingNookScreen
 import com.lantern.library.ui.screens.ReaderScreen
 import com.lantern.library.ui.screens.SearchScreen
+import com.lantern.library.ui.screens.NotificationsScreen
+import com.lantern.library.data.NotificationCenter
 import com.lantern.library.ui.theme.Ink
 import com.lantern.library.ui.theme.LanternTheme
 import com.lantern.library.ui.theme.Brass
@@ -87,6 +90,7 @@ private sealed class Route {
     object Library : Route()
     object Search : Route()
     object Profile : Route()
+    object Notifications : Route()
     data class Reader(val id: String) : Route()
 }
 
@@ -256,6 +260,7 @@ internal fun LanternRoot(store: LanternStore) {
         // behaves. Opening the page is one tap from there.
         details = book
     }
+    val notificationItems by NotificationCenter.items.collectAsState()
     val needsOnboarding = !store.interestsChosen
     LanternTheme(theme) {
         // The shell is two regions, not two layers.
@@ -300,7 +305,8 @@ internal fun LanternRoot(store: LanternStore) {
                             onOpenPick = { pick -> details = pick },
                             onLibrary = { tab = Route.Library },
                             onRefreshPicks = { store.refreshForYou() },
-                            onNotifications = { tab = Route.Profile },
+                            onNotifications = { tab = Route.Notifications },
+                            unreadNotifications = notificationItems.count { it.unread },
                             // Live per-book byte progress. Reading the bus here (not the library) is what
                             // keeps a transfer from recomposing or re-flowing the shelf.
                             transfers = com.lantern.library.data.TransferBus.states,
@@ -367,6 +373,20 @@ internal fun LanternRoot(store: LanternStore) {
                                 readerBack = Route.Search
                                 store.fetchEdition(edition) { ready ->
                                     tab = Route.Reader(ready.id)
+                                }
+                            }
+                        )
+                        Route.Notifications -> NotificationsScreen(
+                            onBack = { tab = Route.Home },
+                            onOpenTarget = { target ->
+                                when {
+                                    target == "library" -> tab = Route.Library
+                                    target == "profile" || target == "account" -> tab = Route.Profile
+                                    target.startsWith("reader:") -> {
+                                        val id = target.removePrefix("reader:")
+                                        if (store.book(id) != null) { readerBack = Route.Home; tab = Route.Reader(id) }
+                                    }
+                                    else -> tab = Route.Home
                                 }
                             }
                         )
@@ -475,7 +495,7 @@ private fun BottomBar(theme: ReaderTheme, current: Route, onTab: (Route) -> Unit
         is Route.Home, is Route.Reader -> "home"
         is Route.Search -> "explore"
         is Route.Library -> "library"
-        is Route.Profile -> "you"
+        is Route.Profile, is Route.Notifications -> "you"
     }
     NookBottomBar(
         palette = nookPalette(theme),

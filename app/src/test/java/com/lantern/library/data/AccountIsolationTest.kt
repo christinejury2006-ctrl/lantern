@@ -193,6 +193,10 @@ class AccountIsolationTest {
             "sign-out must end the session before it hands the screen back",
             signOut.contains("endSession")
         )
+        assertFalse(
+            "sign-out must preserve the account library and local book files",
+            signOut.contains("purgeBackedUpCache")
+        )
     }
 
     @Test

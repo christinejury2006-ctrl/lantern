@@ -68,6 +68,7 @@ object NotificationCenter {
     private const val ITEMS = "items"
     private const val SETTINGS = "settings"
     private const val TOKEN = "fcm_token"
+    private const val SEEN_EVENTS = "seen_events"
     private const val CHANNEL = "lore_updates"
     private const val MAX_HISTORY = 250
     private val lock = Any()
@@ -102,15 +103,20 @@ object NotificationCenter {
         if (!prefs.categoryEnabled(category)) return null
         val key = eventId.ifBlank { "${category.key}:${title.trim()}:${body.trim()}" }
         val notice = synchronized(lock) {
-            mutableItems.value.firstOrNull { it.eventId == key }?.let { return@synchronized null }
+            val storage = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val seen = storage.getStringSet(SEEN_EVENTS, emptySet()).orEmpty()
+            if (key in seen) return@synchronized null
+            storage.edit().putStringSet(SEEN_EVENTS, (seen + key).takeLast(500).toSet()).apply()
             LoreNotification(
-                id = key.hashCode().toUInt().toString(),
+                id = Integer.toHexString(key.hashCode()),
                 eventId = key,
                 category = category,
                 title = title.ifBlank { "Lore update" },
                 body = body,
                 target = target
-            ).also { saveItems(mutableItems.value + it) }
+            ).also {
+                if (prefs.inAppEnabled) saveItems(mutableItems.value + it)
+            }
         } ?: return null
         if (showSystem && prefs.pushEnabled) showSystem(context, notice)
         return notice

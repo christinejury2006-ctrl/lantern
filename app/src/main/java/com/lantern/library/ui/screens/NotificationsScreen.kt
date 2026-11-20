@@ -23,6 +23,13 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -46,6 +53,10 @@ fun NotificationsScreen(onBack: () -> Unit, onOpenTarget: (String) -> Unit) {
     val prefs by NotificationCenter.preferences.collectAsState()
     var settings by remember { mutableStateOf(false) }
     var clearConfirm by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val pushPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        NotificationCenter.updatePreferences { it.copy(pushEnabled = granted) }
+    }
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp),
@@ -83,9 +94,13 @@ fun NotificationsScreen(onBack: () -> Unit, onOpenTarget: (String) -> Unit) {
             title = { Text("Notification settings") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    PreferenceSwitch("All notifications", prefs.enabled) { NotificationCenter.updatePreferences { it.copy(enabled = it) } }
+                    PreferenceSwitch("All notifications", prefs.enabled) { enabled -> NotificationCenter.updatePreferences { current -> current.copy(enabled = enabled) } }
                     PreferenceSwitch("In-app inbox", prefs.inAppEnabled) { NotificationCenter.updatePreferences { it.copy(inAppEnabled = it) } }
-                    PreferenceSwitch("Android push", prefs.pushEnabled) { NotificationCenter.updatePreferences { it.copy(pushEnabled = it) } }
+                    PreferenceSwitch("Android push", prefs.pushEnabled) { enabled ->
+                        if (!enabled) NotificationCenter.updatePreferences { it.copy(pushEnabled = false) }
+                        else if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) pushPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        else NotificationCenter.updatePreferences { it.copy(pushEnabled = true) }
+                    }
                     LoreNoticeCategory.entries.forEach { category ->
                         PreferenceSwitch(category.label, prefs.categories[category] ?: (category != LoreNoticeCategory.REMINDERS)) { enabled ->
                             NotificationCenter.updatePreferences { it.copy(categories = it.categories + (category to enabled)) }

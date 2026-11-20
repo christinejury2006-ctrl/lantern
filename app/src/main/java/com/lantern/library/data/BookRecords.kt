@@ -20,6 +20,22 @@ import java.io.File
  */
 object BookRecords {
 
+    /**
+     * Backward-compatible retention migration.
+     *
+     * Older records did not store the reader's offline choice. Treat them as cache-managed only
+     * when the record already proves a completed Drive backup; otherwise preserve the local copy.
+     */
+    fun keepOffline(json: JSONObject): Boolean {
+        if (json.has("keepOffline")) return json.optBoolean("keepOffline", true)
+        val hasVerifiedRemoteCopy =
+            json.optLong("backupAt", 0L) > 0L &&
+                !json.optBoolean("pendingUpload", false) &&
+                !json.optBoolean("backupFailed", false) &&
+                json.optString("driveFileId").isNotBlank()
+        return !hasVerifiedRemoteCopy
+    }
+
     fun encode(book: LibraryBook): JSONObject = JSONObject()
         .put("id", book.id)
         .put("title", book.title)
@@ -87,7 +103,7 @@ object BookRecords {
             backupBytes = json.optLong("backupBytes", 0L),
             backupMd5 = json.optString("backupMd5"),
             // Older records default to protected so an upgrade never evicts an existing download.
-            keepOffline = json.optBoolean("keepOffline", true)
+            keepOffline = keepOffline(json)
         )
     }
 

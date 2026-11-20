@@ -12,6 +12,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.lantern.library.MainActivity
+import com.lantern.library.BuildConfig
 import com.lantern.library.R
 import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.auth.FirebaseAuth
@@ -23,6 +24,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONArray
 import org.json.JSONObject
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import java.io.IOException
 
 enum class LoreNoticeCategory(val key: String, val label: String) {
     LIBRARY("library", "Library updates"),
@@ -80,6 +89,7 @@ object NotificationCenter {
     private const val CHANNEL = "lore_updates"
     private const val MAX_HISTORY = 250
     private val lock = Any()
+    private val relayHttpClient = OkHttpClient()
     @Volatile private var app: Context? = null
     @Volatile private var activePrefsName: String = "lore_notifications_v1_guest"
     @Volatile private var activeUid: String? = null
@@ -242,21 +252,43 @@ object NotificationCenter {
             ), SetOptions.merge())
     }
 
+    /**
+     * Optional remote delivery through the Spark-compatible Cloudflare relay.
+     * The endpoint is intentionally unset in source: local inbox/system notifications keep working
+     * until the owner deploys the Worker and supplies LORE_NOTIFICATION_RELAY_URL at build time.
+     */
     private fun relayEvent(notice: LoreNotification) {
-        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
-        if (activeUid != uid) return
-        val eventKey = MessageDigest.getInstance("SHA-256").digest(notice.eventId.toByteArray())
-            .joinToString("") { "%02x".format(it) }
-        FirebaseFirestore.getInstance().collection("users").document(uid)
-            .collection("notificationEvents").document(eventKey)
-            .set(mapOf(
-                "eventId" to notice.eventId,
-                "category" to notice.category.key,
-                "title" to notice.title,
-                "body" to notice.body,
-                "target" to notice.target,
-                "createdAt" to notice.createdAt
-            ))
+        val endpoint = BuildConfig.LORE_NOTIFICATION_RELAY_URL.trim()
+        if (endpoint.isBlank()) return
+        val user = FirebaseAuth.getInstance().currentUser ?: return
+        if (activeUid != user.uid) return
+        user.getIdToken(false).addOnSuccessListener { result ->
+            val idToken = result.token ?: return@addOnSuccessListener
+            val payload = JSONObject()
+                .put("eventId", notice.eventId)
+                .put("category", notice.category.key)
+                .put("title", notice.title)
+                .put("body", notice.body)
+                .put("target", notice.target)
+            val request = Request.Builder()
+                .url(endpoint)
+                .header("Authorization", "Bearer $idToken")
+                .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+                .build()
+            relayHttpClient.newCall(request).enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    android.util.Log.w("LoreNotifications", "Remote notification relay unavailable", e)
+                }
+                override fun onResponse(call: Call, response: Response) {
+                    response.close()
+                    if (!response.isSuccessful) {
+                        android.util.Log.w("LoreNotifications", "Remote notification relay returned ${response.code}")
+                    }
+                }
+            })
+        }.addOnFailureListener { error ->
+            android.util.Log.w("LoreNotifications", "Could not authenticate notification relay request", error)
+        }
     }
 
     fun saveToken(token: String) {

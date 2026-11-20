@@ -1651,7 +1651,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 DriveLibrary.clearCachedFolder()
-                purgeBackedUpCache(leaving)
+                // Preserve the account namespace and local files across sign-out.
+                // Verified cache eviction happens after a successful account snapshot.
                 FirestoreAccountRepository.signOut()
                 GoogleAuth.signOutAndClearToken(activity, getApplication())
             } catch (cancelled: CancellationException) {
@@ -3841,7 +3842,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     o.optBoolean("dnf", false), o.optLong("backupAt", 0L), o.optBoolean("backupFailed", false),
                     o.optLong("backupBytes", 0L), backupMd5 = o.optString("backupMd5"),
                     // Missing on older records: protect existing local downloads after upgrade.
-                    keepOffline = o.optBoolean("keepOffline", true)
+                    keepOffline = BookRecords.keepOffline(o)
                 )
             }
         }

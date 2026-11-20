@@ -1642,8 +1642,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
      * * books that this account has not finished backing up stay on disk, because discarding them
      *   on sign-out would lose data the reader believes is safe (and a sign-out is not a request to
      *   delete anything);
-     * * books that are confirmed backed up are dropped from the local library, so the account's
-     *   cached shelf is not left lying around; the cloud copy is untouched and restores it.
+     * * the account's library records and local files remain in their namespace, so signing
+     *   back in is a return to the same library rather than a cloud re-download.
      */
     fun signOut(activity: android.app.Activity) {
         val leaving = namespace

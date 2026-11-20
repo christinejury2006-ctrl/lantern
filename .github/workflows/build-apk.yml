@@ -108,6 +108,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOOGLE_BOOKS_API_KEY: ${{ secrets.GOOGLE_BOOKS_API_KEY }}
+          LORE_NOTIFICATION_RELAY_URL: ${{ vars.LORE_NOTIFICATION_RELAY_URL }}
           LORE_BUILD_NUMBER: ${{ github.run_number }}
         run: |
           chmod +x gradlew

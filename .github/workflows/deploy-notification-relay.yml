@@ -81,3 +81,10 @@ jobs:
             gh api --method POST "repos/$GITHUB_REPOSITORY/actions/variables" -f name=LORE_NOTIFICATION_RELAY_URL -f value="$WORKER_URL" >/dev/null
             echo "Created repository variable LORE_NOTIFICATION_RELAY_URL."
           fi
+
+      - name: Rebuild Lore with the deployed relay URL
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run build-apk.yml --ref "$GITHUB_REF_NAME"
+          echo "Queued the Lore APK build for $GITHUB_REF_NAME with the deployed relay URL."

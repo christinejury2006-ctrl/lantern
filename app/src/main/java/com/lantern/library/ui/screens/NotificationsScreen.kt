@@ -54,7 +54,9 @@ fun NotificationsScreen(onBack: () -> Unit, onOpenTarget: (String) -> Unit) {
     val items by NotificationCenter.items.collectAsState()
     val prefs by NotificationCenter.preferences.collectAsState()
     var settings by remember { mutableStateOf(false) }
+    var showHistory by remember { mutableStateOf(false) }
     var clearConfirm by remember { mutableStateOf(false) }
+    val visibleItems = if (showHistory) items else items.filterNot { it.dismissed }
     val context = LocalContext.current
     val pushPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         NotificationCenter.updatePreferences { it.copy(pushEnabled = granted) }
@@ -68,20 +70,25 @@ fun NotificationsScreen(onBack: () -> Unit, onOpenTarget: (String) -> Unit) {
             Text("Notifications", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
             TextButton(onClick = { settings = true }) { Text("Settings") }
         }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = { NotificationCenter.markAllRead() }) { Text("Mark all read") }
-            TextButton(onClick = { clearConfirm = true }) { Text("Clear history") }
-            Text("${items.count { it.unread }} unread", modifier = Modifier.align(Alignment.CenterVertically), style = MaterialTheme.typography.labelMedium)
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { showHistory = false }) { Text(if (showHistory) "Inbox" else "Inbox ✓") }
+            TextButton(onClick = { showHistory = true }) { Text(if (showHistory) "History ✓" else "History") }
+            TextButton(onClick = { NotificationCenter.markAllRead() }) { Text("Read all") }
+            Spacer(Modifier.weight(1f))
+            Text("${items.count { it.unread }} unread", style = MaterialTheme.typography.labelMedium)
         }
-        if (items.isEmpty()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 0.dp), horizontalArrangement = Arrangement.End) {
+            TextButton(onClick = { clearConfirm = true }) { Text("Clear history") }
+        }
+        if (visibleItems.isEmpty()) {
             Column(Modifier.weight(1f).fillMaxWidth().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                 Icon(Icons.Filled.Notifications, null, modifier = Modifier.size(42.dp))
-                Text("You're all caught up", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp))
-                Text("Library, sync and account updates will appear here.", style = MaterialTheme.typography.bodyMedium)
+                Text(if (showHistory) "No notification history yet" else "You're all caught up", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp))
+                Text(if (showHistory) "New notifications will be saved here." else "Dismissed notifications remain in History.", style = MaterialTheme.typography.bodyMedium)
             }
         } else {
             LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                items(items, key = { it.id }) { notice ->
+                items(visibleItems, key = { it.id }) { notice ->
                     NoticeCard(notice, onOpen = {
                         NotificationCenter.markRead(notice.id)
                         if (notice.target.isNotBlank()) onOpenTarget(notice.target)

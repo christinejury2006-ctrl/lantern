@@ -15,6 +15,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -25,6 +33,8 @@ import com.lantern.library.data.LibraryBook
 import com.lantern.library.data.ReaderTheme
 import com.lantern.library.data.ReadingPrefs
 import com.lantern.library.data.CloudPanel
+import com.lantern.library.data.StorageUsage
+import com.lantern.library.data.StorageUsageSnapshot
 import com.lantern.library.data.TransferProgress
 import com.lantern.library.ui.components.AuroraOrb
 import com.lantern.library.ui.components.GlassSurface
@@ -64,6 +74,12 @@ fun ProfileScreen(
     pausedUploads: Set<String> = emptySet()
 ) {
     val palette = nookPalette(prefs.theme)
+    val context = LocalContext.current
+    var storage by remember { mutableStateOf(StorageUsageSnapshot(0L, 0)) }
+    val storageKey = books.map { it.filePath to it.backupBytes }
+    LaunchedEffect(storageKey, transfers) {
+        storage = withContext(Dispatchers.IO) { StorageUsage.measure(context) }
+    }
     // Every number on the panel comes from the same function, so they add up by construction.
     val metrics = CloudPanel.metrics(
         books = books,
@@ -87,6 +103,29 @@ fun ProfileScreen(
                     color = palette.mute,
                     fontSize = 13.sp
                 )
+            }
+
+            NookSectionTitle("On this device", palette)
+            Spacer(Modifier.height(10.dp))
+            GlassSurface(
+                palette,
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                shape = RoundedCornerShape(22.dp)
+            ) {
+                Column(Modifier.padding(18.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(storage.displaySize(), color = palette.ink, fontSize = 24.sp, fontWeight = FontWeight.SemiBold)
+                            Text("${storage.files} app files and cached items", color = palette.mute, fontSize = 11.sp)
+                        }
+                        Text("LOCAL", color = palette.accent, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "This is measured from Lore's private files and cache folders. Books stored only in your cloud account are not counted; offline downloads and temporary cached files are.",
+                        color = palette.mute, fontSize = 11.sp
+                    )
+                }
             }
 
             NookSectionTitle("Account", palette)

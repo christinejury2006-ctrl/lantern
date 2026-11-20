@@ -267,6 +267,7 @@ internal fun LanternRoot(store: LanternStore) {
         when {
             request.target.isBlank() -> tab = Route.Notifications
             request.target == "library" -> tab = Route.Library
+            request.target == "home" -> tab = Route.Home
             request.target == "profile" || request.target == "account" -> tab = Route.Profile
             request.target.startsWith("reader:") -> {
                 val id = request.target.removePrefix("reader:")

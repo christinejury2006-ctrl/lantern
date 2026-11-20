@@ -24,7 +24,6 @@ async function googleAccessToken(env: Env): Promise<string> {
   const assertion = await new SignJWT({ scope: "https://www.googleapis.com/auth/firebase.messaging https://www.googleapis.com/auth/datastore" })
     .setProtectedHeader({ alg: "RS256", typ: "JWT" })
     .setIssuer(env.GOOGLE_CLIENT_EMAIL)
-    .setSubject(env.GOOGLE_CLIENT_EMAIL)
     .setAudience("https://oauth2.googleapis.com/token")
     .setIssuedAt(now).setExpirationTime(now + 3600).sign(key);
   const response = await fetch("https://oauth2.googleapis.com/token", {

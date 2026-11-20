@@ -30,7 +30,8 @@ data class AccountSnapshot(
      */
     val deletions: List<Tombstone> = emptyList(),
     /** Saved-for-later discoveries are account data, not a device-only list. */
-    val wantToRead: List<DiscoveryBook> = emptyList()
+    val wantToRead: List<DiscoveryBook> = emptyList(),
+    val wantToReadDeletedAt: Map<String, Long> = emptyMap()
 )
 
 object AccountSync {
@@ -39,11 +40,12 @@ object AccountSync {
      *
      * 1 — books, bookmarks, appearance, prefs.
      * 2 — adds `deletions` (tombstones) and a per-book `backupBytes` (the size that was verified).
-     * 3 — adds saved-for-later discoveries (`wantToRead`), while remaining readable by v2 clients.
+     * 3 — adds saved-for-later discoveries (`wantToRead`).
+     * 4 — adds saved-for-later deletion timestamps so removals sync without resurrection.
      *     Readable both ways: a v1 snapshot simply has neither, and a v2 one is read by any build
      *     that understands the fields it cares about.
      */
-    const val SCHEMA = 3
+    const val SCHEMA = 4
     const val STATE_LORE_ID = "account_state"
     const val STATE_FILE_NAME = "lore_account.json"
 
@@ -65,6 +67,8 @@ object AccountSync {
         snap.bookOrder.forEach { order.put(it) }
         val saved = JSONArray()
         snap.wantToRead.forEach { saved.put(Recommendations.toJson(it)) }
+        val savedDeleted = JSONObject()
+        snap.wantToReadDeletedAt.forEach { (id, at) -> if (id.isNotBlank()) savedDeleted.put(id, at) }
         val deleted = JSONArray()
         Deletions.prune(snap.deletions).forEach { t ->
             deleted.put(JSONObject().put("id", t.bookId).put("at", t.deletedAt))
@@ -77,6 +81,7 @@ object AccountSync {
             .put("books", books)
             .put("bookmarks", marks)
             .put("wantToRead", saved)
+            .put("wantToReadDeletedAt", savedDeleted)
             .put("bookOrder", order)
             .put("libraryAppearance", snap.libraryAppearance.forCloud().toJson().put("updatedAt", snap.libraryAppearAt))
             .put("readerAppearance", snap.readerAppearance.forCloud().toJson().put("updatedAt", snap.readerAppearAt))
@@ -118,6 +123,14 @@ object AccountSync {
                 val row = savedArr.optJSONObject(i) ?: continue
                 Recommendations.parseBook(row)?.let { saved += it }
             }
+            val savedDeletedObj = o.optJSONObject("wantToReadDeletedAt") ?: JSONObject()
+            val savedDeleted = LinkedHashMap<String, Long>()
+            val deletedKeys = savedDeletedObj.keys()
+            while (deletedKeys.hasNext()) {
+                val id = deletedKeys.next()
+                val at = savedDeletedObj.optLong(id, 0L)
+                if (id.isNotBlank() && at > 0L) savedDeleted[id] = at
+            }
             val delArr = o.optJSONArray("deletions") ?: JSONArray()
             val deletions = ArrayList<Tombstone>(delArr.length())
             for (i in 0 until delArr.length()) {
@@ -144,7 +157,8 @@ object AccountSync {
                 prefsAt = prefsObj?.optLong("updatedAt", 0L) ?: 0L,
                 bookOrder = order,
                 deletions = Deletions.prune(deletions),
-                wantToRead = saved
+                wantToRead = saved,
+                wantToReadDeletedAt = savedDeleted
             )
         }.getOrNull()
     }
@@ -202,6 +216,10 @@ object AccountSync {
             val prev = marks[key]
             if (prev == null || m.updatedAt >= prev.updatedAt) marks[key] = m
         }
+        val savedDeleted = LinkedHashMap<String, Long>()
+        (cloud.wantToReadDeletedAt + local.wantToReadDeletedAt).forEach { (id, at) ->
+            savedDeleted[id] = maxOf(savedDeleted[id] ?: 0L, at)
+        }
         val savedById = LinkedHashMap<String, DiscoveryBook>()
         (cloud.wantToRead + local.wantToRead).forEach { pick ->
             val previous = savedById[pick.volumeId]
@@ -223,7 +241,8 @@ object AccountSync {
             prefsAt = prefsAt,
             bookOrder = mergedBooks.map { it.id },
             deletions = stones,
-            wantToRead = savedById.values.sortedByDescending { it.savedAt }
+            wantToRead = savedById.values.filter { it.savedAt > (savedDeleted[it.volumeId] ?: 0L) }.sortedByDescending { it.savedAt },
+            wantToReadDeletedAt = savedDeleted
         )
     }
 

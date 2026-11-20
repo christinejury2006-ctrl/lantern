@@ -23,6 +23,7 @@ class MainActivity : ComponentActivity() {
             it.remove()
         }
         super.onCreate(savedInstanceState)
+        com.lantern.library.data.NotificationCenter.consumeIntent(intent)
         StartupTrace.mark("super.onCreate")
 
         // One inset owner, stated once.
@@ -52,6 +53,12 @@ class MainActivity : ComponentActivity() {
             handoff.viewTreeObserver.addOnDrawListener(listener)
             handoff.invalidate()
         }
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        com.lantern.library.data.NotificationCenter.consumeIntent(intent)
     }
 
     private fun startCompose() {

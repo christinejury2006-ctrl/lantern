@@ -19,7 +19,7 @@ type NoticeEvent = {
  * Lore persists the event locally before showing the Android notification.
  */
 export const deliverLoreNotification = onDocumentCreated(
-  "users/{uid}/notificationEvents/{eventKey}",
+  { document: "users/{uid}/notificationEvents/{eventKey}", retry: true },
   async (event) => {
     const uid = event.params.uid;
     const notice = event.data?.data() as NoticeEvent | undefined;
@@ -54,15 +54,21 @@ export const deliverLoreNotification = onDocumentCreated(
     });
 
     const stale: Promise<unknown>[] = [];
+    let retryNeeded = false;
     result.responses.forEach((response, index) => {
+      if (response.success) return;
       if (
-        !response.success &&
-        (response.error?.code === "messaging/registration-token-not-registered" ||
-          response.error?.code === "messaging/invalid-registration-token")
+        response.error?.code === "messaging/registration-token-not-registered" ||
+        response.error?.code === "messaging/invalid-registration-token"
       ) {
         stale.push(valid[index].ref.delete());
+      } else {
+        retryNeeded = true;
       }
     });
     await Promise.all(stale);
+    // A retry can re-send to devices that already received this event. The client event id makes
+    // delivery idempotent, so retrying is safer than silently losing the other devices' push.
+    if (retryNeeded) throw new Error("One or more FCM deliveries failed transiently.");
   }
 );

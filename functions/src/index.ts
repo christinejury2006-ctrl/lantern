@@ -45,6 +45,7 @@ export const deliverLoreNotification = onDocumentCreated(
       tokens: valid.map((item) => item.token),
       data: {
         event_id: notice.eventId,
+        recipient_uid: uid,
         category: notice.category,
         title: notice.title ?? "Lore update",
         body: notice.body ?? "",

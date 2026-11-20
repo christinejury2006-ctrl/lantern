@@ -873,6 +873,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         if (wantToRead.any { Recommendations.sameWork(it, book) }) return
         wantToRead.add(0, book.copy(savedAt = System.currentTimeMillis()))
         persistWantToRead()
+        markLocalChanged()
         dropFromRecommendations { Recommendations.sameWork(it, book) }
         toast("Saved to Want to Read")
     }
@@ -880,6 +881,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         val removed = wantToRead.removeAll { Recommendations.sameWork(it, book) }
         if (!removed) return
         persistWantToRead()
+        markLocalChanged()
         toast("Removed from Want to Read")
     }
     fun saveInterests(ids: List<String>) {
@@ -2093,7 +2095,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             readerAppearAt = readerAppearAt,
             prefsAt = prefsAt,
             bookOrder = bookList.map { it.id },
-            deletions = deletions()
+            deletions = deletions(),
+            wantToRead = wantToRead.toList()
         )
     }
 
@@ -2746,6 +2749,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 books.addAll(ordered)
                 persistBooksUnlocked()
             }
+            wantToRead.clear()
+            wantToRead.addAll(snap.wantToRead)
+            persistWantToRead()
             synchronized(bookmarksLock) {
                 bookmarkRecords.clear()
                 bookmarkRecords.addAll(snap.bookmarks)

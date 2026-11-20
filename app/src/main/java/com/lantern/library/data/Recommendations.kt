@@ -88,6 +88,15 @@ object Recommendations {
             return emptyList()
         }
         val cached = synchronized(cacheLock) { readUnlocked(context, interestKey, dir) }
+        // Offline is not an empty recommendation result. Keep the last successful shelf visible
+        // and, crucially, do not write an empty response over the only cached copy.
+        if (!RecDiag.online) {
+            RecDiag.cacheHit = !cached?.books.isNullOrEmpty()
+            RecDiag.cacheSize = cached?.books?.size ?: 0
+            RecDiag.skip = "offline; using saved recommendations"
+            RecDiag.log("offline fallback n=${cached?.books?.size ?: 0}")
+            return cached?.books.orEmpty()
+        }
         if (!forceRefresh && cached != null && cached.books.isNotEmpty() && !isExpired(cached.lastRefreshAt)) {
             RecDiag.cacheHit = true
             RecDiag.cacheSize = cached.books.size
@@ -126,9 +135,10 @@ object Recommendations {
             }
         }
         if (built.isNullOrEmpty()) {
-            RecDiag.log("built empty, not restoring pool")
-            persistHistory(context, interestKey, cached, emptyList(), nextGen, dir)
-            return emptyList()
+            // A transient outage or a temporarily empty catalogue must never erase a previously
+            // successful set. Preserve the on-disk cache and keep showing it until a refresh works.
+            RecDiag.log("built empty; retaining cached pool n=${cached?.books?.size ?: 0}")
+            return cached?.books.orEmpty()
         }
         RecDiag.log("finalIds=${built.map { it.volumeId }.joinToString(",")}")
         synchronized(cacheLock) {

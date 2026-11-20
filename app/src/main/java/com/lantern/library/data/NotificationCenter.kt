@@ -82,6 +82,7 @@ object NotificationCenter {
     private val lock = Any()
     @Volatile private var app: Context? = null
     @Volatile private var activePrefsName: String = "lore_notifications_v1_guest"
+    @Volatile private var activeUid: String? = null
     private val mutableItems = MutableStateFlow<List<LoreNotification>>(emptyList())
     val items: StateFlow<List<LoreNotification>> = mutableItems
     private val mutablePreferences = MutableStateFlow(LoreNotificationPreferences())
@@ -94,7 +95,8 @@ object NotificationCenter {
             if (app != null) return
             app = context.applicationContext
             createChannel(context.applicationContext)
-            activePrefsName = profilePrefsName(FirebaseAuth.getInstance().currentUser?.uid)
+            activeUid = FirebaseAuth.getInstance().currentUser?.uid
+            activePrefsName = profilePrefsName(activeUid)
             loadLocalProfile(context.applicationContext)
         }
     }
@@ -105,6 +107,7 @@ object NotificationCenter {
         synchronized(lock) {
             val next = profilePrefsName(uid)
             if (next == activePrefsName) return
+            activeUid = uid
             activePrefsName = next
             loadLocalProfile(context)
         }
@@ -200,9 +203,12 @@ object NotificationCenter {
 
     fun loadRemotePreferences() {
         val user = FirebaseAuth.getInstance().currentUser ?: return
-        FirebaseFirestore.getInstance().collection("users").document(user.uid)
+        val uid = user.uid
+        val expectedPrefs = profilePrefsName(uid)
+        FirebaseFirestore.getInstance().collection("users").document(uid)
             .collection("notificationSettings").document("default")
             .get().addOnSuccessListener { snapshot ->
+                if (FirebaseAuth.getInstance().currentUser?.uid != uid) return@addOnSuccessListener
                 val data = snapshot.data ?: return@addOnSuccessListener
                 val categories = data["categories"] as? Map<*, *>
                 val next = LoreNotificationPreferences(
@@ -214,6 +220,7 @@ object NotificationCenter {
                     }
                 )
                 synchronized(lock) {
+                    if (activePrefsName != expectedPrefs || activeUid != uid) return@synchronized
                     mutablePreferences.value = next
                     app?.getSharedPreferences(activePrefsName, Context.MODE_PRIVATE)?.edit()
                         ?.putString(SETTINGS, encodePreferences(next).toString())?.apply()
@@ -223,6 +230,7 @@ object NotificationCenter {
 
     private fun syncRemotePreferences(prefs: LoreNotificationPreferences) {
         val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
+        if (activeUid != uid) return
         val categories = prefs.categories.mapKeys { it.key.key }
         FirebaseFirestore.getInstance().collection("users").document(uid)
             .collection("notificationSettings").document("default")
@@ -236,6 +244,7 @@ object NotificationCenter {
 
     private fun relayEvent(notice: LoreNotification) {
         val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
+        if (activeUid != uid) return
         val eventKey = MessageDigest.getInstance("SHA-256").digest(notice.eventId.toByteArray())
             .joinToString("") { "%02x".format(it) }
         FirebaseFirestore.getInstance().collection("users").document(uid)
@@ -259,6 +268,7 @@ object NotificationCenter {
     /** Stores this device token under the authenticated Firebase UID for trusted server delivery. */
     fun registerDeviceToken() {
         val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
+        setAccount(uid)
         loadRemotePreferences()
         refreshToken { token ->
             if (token.isNullOrBlank()) return@refreshToken

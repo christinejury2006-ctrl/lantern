@@ -1,5 +1,6 @@
 package com.lantern.library.data
 
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import com.lantern.library.data.LoreNoticeCategory
@@ -23,6 +24,11 @@ class LoreMessagingService : FirebaseMessagingService() {
         super.onMessageReceived(message)
         NotificationCenter.initialize(applicationContext)
         val data = message.data
+        // A stale device token must never put a previous account's private notification into
+        // the guest inbox after sign-out or an account switch.
+        val recipient = data["recipient_uid"]
+        val activeUid = FirebaseAuth.getInstance().currentUser?.uid
+        if (recipient.isNullOrBlank() || recipient != activeUid) return
         NotificationCenter.post(
             context = applicationContext,
             category = LoreNoticeCategory.from(data["category"]),

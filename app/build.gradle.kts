@@ -123,6 +123,7 @@ dependencies {
     implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
     implementation("com.google.firebase:firebase-auth-ktx")
     implementation("com.google.firebase:firebase-firestore-ktx")
+    implementation("com.google.firebase:firebase-messaging-ktx")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
     val composeBom = platform("androidx.compose:compose-bom:2023.10.01")
     implementation(composeBom)

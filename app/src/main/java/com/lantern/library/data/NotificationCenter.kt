@@ -33,6 +33,8 @@ enum class LoreNoticeCategory(val key: String, val label: String) {
     }
 }
 
+data class NotificationOpenRequest(val notificationId: String, val target: String)
+
 data class LoreNotification(
     val id: String,
     val eventId: String,
@@ -77,6 +79,8 @@ object NotificationCenter {
     val items: StateFlow<List<LoreNotification>> = mutableItems
     private val mutablePreferences = MutableStateFlow(LoreNotificationPreferences())
     val preferences: StateFlow<LoreNotificationPreferences> = mutablePreferences
+    private val mutablePendingOpen = MutableStateFlow<NotificationOpenRequest?>(null)
+    val pendingOpen: StateFlow<NotificationOpenRequest?> = mutablePendingOpen
 
     fun initialize(context: Context) {
         synchronized(lock) {
@@ -121,6 +125,18 @@ object NotificationCenter {
         if (showSystem && prefs.pushEnabled) showSystem(context, notice)
         return notice
     }
+
+    fun consumeIntent(intent: Intent?) {
+        if (intent?.hasExtra("lore_notification_id") != true) return
+        val id = intent.getStringExtra("lore_notification_id").orEmpty()
+        val target = intent.getStringExtra("lore_notification_target").orEmpty()
+        if (id.isNotBlank()) markRead(id)
+        mutablePendingOpen.value = NotificationOpenRequest(id, target)
+        intent.removeExtra("lore_notification_id")
+        intent.removeExtra("lore_notification_target")
+    }
+
+    fun clearPendingOpen() { mutablePendingOpen.value = null }
 
     fun markRead(id: String) = update(id) { it.copy(readAt = System.currentTimeMillis()) }
     fun dismiss(id: String) = update(id) { it.copy(dismissed = true, readAt = it.readAt.takeIf { at -> at > 0L } ?: System.currentTimeMillis()) }

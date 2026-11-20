@@ -16,7 +16,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -64,7 +64,7 @@ fun NotificationsScreen(onBack: () -> Unit, onOpenTarget: (String) -> Unit) {
             Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            TextButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
+            TextButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, contentDescription = "Back") }
             Text("Notifications", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
             TextButton(onClick = { settings = true }) { Text("Settings") }
         }
@@ -97,7 +97,7 @@ fun NotificationsScreen(onBack: () -> Unit, onOpenTarget: (String) -> Unit) {
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     PreferenceSwitch("All notifications", prefs.enabled) { enabled -> NotificationCenter.updatePreferences { current -> current.copy(enabled = enabled) } }
-                    PreferenceSwitch("In-app inbox", prefs.inAppEnabled) { NotificationCenter.updatePreferences { it.copy(inAppEnabled = it) } }
+                    PreferenceSwitch("In-app inbox", prefs.inAppEnabled) { enabled -> NotificationCenter.updatePreferences { current -> current.copy(inAppEnabled = enabled) } }
                     PreferenceSwitch("Android push", prefs.pushEnabled) { enabled ->
                         if (!enabled) NotificationCenter.updatePreferences { it.copy(pushEnabled = false) }
                         else if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) pushPermission.launch(Manifest.permission.POST_NOTIFICATIONS)

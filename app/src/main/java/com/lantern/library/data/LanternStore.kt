@@ -1511,11 +1511,6 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             .putString("email", acc.email.orEmpty())
             .apply()
         val gen = activate(target, incoming, announce = true)
-        NotificationCenter.post(
-            getApplication(), LoreNoticeCategory.ACCOUNT, "Account signed in",
-            "Lore is now using ${acc.displayName.orEmpty().ifBlank { acc.email.orEmpty() }}.",
-            "account:signed-in:${incoming}:${System.currentTimeMillis()}", "profile"
-        )
         viewModelScope.launch(Dispatchers.IO) {
             // The Firestore mirror is the account's own record; it is written only for the session
             // that is active now, so a mirror written for account A cannot land after a switch.

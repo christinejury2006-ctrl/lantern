@@ -2278,13 +2278,11 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 val result = UploadPool.shared.run(token, remaining, uploadListener)
                 confirmed.putAll(result.confirmed)
                 failed += result.failed
-                // A book another transfer already owns is neither done nor broken. Say so, so it
-                // stays in the queue instead of looking finished because nothing was reported.
+                // A book another transfer already owns is neither done nor broken. Do not turn
+                // this harmless single-flight skip into a failed upload: that used to reset the
+                // backup stamp and queue a second upload after the owner had already succeeded.
                 result.skipped.forEach { book ->
-                    failed += book to DriveLibrary.TransferFailure(
-                        book.id, book.title, "upload",
-                        "another transfer for this book is already running", retryable = true
-                    )
+                    SyncDiag.mark("Upload already running", "${book.title.ifBlank { "Untitled" }} is being handled by another transfer")
                 }
                 if (!result.unauthorized) break
                 // A refused token is worth exactly one more attempt with a fresh one.

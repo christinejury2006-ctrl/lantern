@@ -1368,6 +1368,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 CommitUserBookResult.ACCEPTED -> {
                     clearWantForTitle(incoming.title)
                     toast("Saved ${book.title}")
+                    NotificationCenter.post(getApplication(), LoreNoticeCategory.DOWNLOADS, "Download complete", "${book.title} is ready in your library.", "download:${incoming.id}:${incoming.addedAt}", "reader:${incoming.id}")
                     then?.invoke(incoming)
                 }
                 CommitUserBookResult.NO_STORAGE -> {
@@ -1412,6 +1413,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 CommitUserBookResult.ACCEPTED -> {
                     clearWantForTitle(book.title)
                     toast("Added ${book.title}")
+                    NotificationCenter.post(getApplication(), LoreNoticeCategory.DOWNLOADS, "Download complete", "${book.title} is ready in your library.", "edition:${book.id}:${book.addedAt}", "reader:${book.id}")
                     then?.invoke(book)
                 }
                 CommitUserBookResult.NO_STORAGE -> {
@@ -1479,6 +1481,11 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             .putString("email", acc.email.orEmpty())
             .apply()
         val gen = activate(target, incoming, announce = true)
+        NotificationCenter.post(
+            getApplication(), LoreNoticeCategory.ACCOUNT, "Account signed in",
+            "Lore is now using ${acc.displayName.orEmpty().ifBlank { acc.email.orEmpty() }}.",
+            "account:signed-in:${incoming}:${System.currentTimeMillis()}", "profile"
+        )
         viewModelScope.launch(Dispatchers.IO) {
             // The Firestore mirror is the account's own record; it is written only for the session
             // that is active now, so a mirror written for account A cannot land after a switch.
@@ -2374,6 +2381,11 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         )
         clearTransfer(bookId)
         refreshBackupAudit()
+        NotificationCenter.post(
+            getApplication(), LoreNoticeCategory.SYNC, "Backup complete",
+            "${latest.title} is safely backed up to your account.",
+            "backup:${bookId}:${latest.backupAt}", "library"
+        )
     }
 
     /** What one batch managed to confirm (id -> bytes) and what failed, with reasons. */
@@ -2645,6 +2657,13 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     .apply()
                 account = account.copy(lastSyncAt = at)
                 if (announce) {
+                    NotificationCenter.post(
+                        getApplication(), LoreNoticeCategory.SYNC, "Library synced",
+                        if (pending == 0) "Your books and reading data are up to date."
+                        else "$pending book(s) are still waiting to upload.",
+                        "sync:${GoogleAuth.accountId(getApplication<Application>()).orEmpty()}:$at",
+                        "library"
+                    )
                     toast(
                         when {
                             pending == 0 -> "Account sync complete"
@@ -3316,7 +3335,13 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             }
             withContext(Dispatchers.Main) {
                 when (outcome) {
-                    is RestoreOutcome.Restored -> Unit
+                    is RestoreOutcome.Restored -> {
+                        NotificationCenter.post(
+                            getApplication(), LoreNoticeCategory.DOWNLOADS, "Book restored",
+                            "${outcome.book.title} is available offline again.",
+                            "restore:${bookId}:${System.currentTimeMillis()}", "reader:$bookId"
+                        )
+                    }
                     is RestoreOutcome.AlreadyAvailable -> toast("This book is already on this phone.")
                     is RestoreOutcome.Refused -> toast(outcome.blocker.message)
                     is RestoreOutcome.Failed -> toast("Could not restore this book: ${outcome.reason}")

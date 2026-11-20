@@ -138,6 +138,17 @@ class AccountSyncMergeTest {
     }
 
     @Test
+    fun `saved for later picks merge across devices without duplicates`() {
+        val first = DiscoveryBook(volumeId = "pick-1", title = "A Story", savedAt = 100L)
+        val second = DiscoveryBook(volumeId = "pick-2", title = "Another Story", savedAt = 200L)
+        val local = snapshot(listOf(book("a"))).copy(wantToRead = listOf(first))
+        val cloud = snapshot(listOf(book("a"))).copy(wantToRead = listOf(first.copy(savedAt = 150L), second))
+        val merged = AccountSync.merge(local, cloud)
+        assertEquals(setOf("pick-1", "pick-2"), merged.wantToRead.map { it.volumeId }.toSet())
+        assertEquals(150L, merged.wantToRead.first { it.volumeId == "pick-1" }.savedAt)
+    }
+
+    @Test
     fun `a merge with no cloud copy is just the phone's own library`() {
         val local = snapshot(listOf(book("a"), book("b")))
         val merged = AccountSync.merge(local, null)

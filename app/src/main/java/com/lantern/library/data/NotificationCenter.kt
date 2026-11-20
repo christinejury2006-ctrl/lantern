@@ -105,7 +105,8 @@ object NotificationCenter {
         body: String,
         eventId: String = "",
         target: String = "",
-        showSystem: Boolean = true
+        showSystem: Boolean = true,
+        relayToCloud: Boolean = true
     ): LoreNotification? {
         initialize(context)
         val prefs = mutablePreferences.value
@@ -128,7 +129,7 @@ object NotificationCenter {
             }
         } ?: return null
         if (showSystem && prefs.pushEnabled) showSystem(context, notice)
-        if (prefs.pushEnabled) relayEvent(notice)
+        if (relayToCloud && prefs.pushEnabled) relayEvent(notice)
         return notice
     }
 

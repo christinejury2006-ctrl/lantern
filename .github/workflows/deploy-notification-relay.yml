@@ -75,7 +75,7 @@ jobs:
         run: |
           set -euo pipefail
           endpoint="repos/$GITHUB_REPOSITORY/actions/variables/LORE_NOTIFICATION_RELAY_URL"
-          if gh api --method PUT "$endpoint" -f name=LORE_NOTIFICATION_RELAY_URL -f value="$WORKER_URL" >/dev/null 2>&1; then
+          if gh api --method PATCH "$endpoint" -f name=LORE_NOTIFICATION_RELAY_URL -f value="$WORKER_URL" >/dev/null 2>&1; then
             echo "Updated repository variable LORE_NOTIFICATION_RELAY_URL."
           else
             gh api --method POST "repos/$GITHUB_REPOSITORY/actions/variables" -f name=LORE_NOTIFICATION_RELAY_URL -f value="$WORKER_URL" >/dev/null

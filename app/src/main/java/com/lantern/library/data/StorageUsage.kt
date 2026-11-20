@@ -15,7 +15,7 @@ data class StorageUsageSnapshot(val bytes: Long, val files: Int) {
 /** Measures the app's actual private data and cache directories, not a guessed sum of book sizes. */
 object StorageUsage {
     fun measure(context: Context): StorageUsageSnapshot {
-        val roots = listOfNotNull(context.filesDir, context.cacheDir, context.externalCacheDir).distinctBy { it.absolutePath }
+        val roots = listOfNotNull(context.dataDir, context.externalCacheDir).distinctBy { it.absolutePath }
         var bytes = 0L
         var files = 0
         roots.forEach { root ->

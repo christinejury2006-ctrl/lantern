@@ -1652,8 +1652,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             try {
                 DriveLibrary.clearCachedFolder()
                 purgeBackedUpCache(leaving)
-                GoogleAuth.signOutAndClearToken(activity, getApplication())
                 FirestoreAccountRepository.signOut()
+                GoogleAuth.signOutAndClearToken(activity, getApplication())
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (t: Throwable) {

@@ -355,16 +355,16 @@ fun ReaderScreen(
     }
     // Scrolling mode (EPUB without swipe pages, and PDF without swipe pages) reports the page it
     // has scrolled to.
-    LaunchedEffect(scrollState, pageCount, prefs.swipeMode, book.format, ready) {
-        if (prefs.swipeMode || book.format == BookFormat.PDF || !ready) return@LaunchedEffect
+    LaunchedEffect(scrollState, pageCount, prefs.swipeMode, book.format, ready, placeRestored) {
+        if (!placeRestored || prefs.swipeMode || book.format == BookFormat.PDF || !ready) return@LaunchedEffect
         snapshotFlow { scrollState.value to scrollState.maxValue }.collect { (value, max) ->
             if (max <= 0 || pageCount <= 0) return@collect
             val page = ((value.toFloat() / max.toFloat()) * (pageCount - 1).coerceAtLeast(0)).toInt()
             onProgress(page, pageCount)
         }
     }
-    LaunchedEffect(pdfList, pageCount, prefs.swipeMode, book.format, ready) {
-        if (prefs.swipeMode || book.format != BookFormat.PDF || !ready) return@LaunchedEffect
+    LaunchedEffect(pdfList, pageCount, prefs.swipeMode, book.format, ready, placeRestored) {
+        if (!placeRestored || prefs.swipeMode || book.format != BookFormat.PDF || !ready) return@LaunchedEffect
         snapshotFlow { pdfList.firstVisibleItemIndex }.collect { index ->
             onProgress(index.coerceIn(0, (pageCount - 1).coerceAtLeast(0)), pageCount)
         }
@@ -388,11 +388,13 @@ fun ReaderScreen(
         val frac = if (pageCount <= 1) 0f else book.currentPage.toFloat() / (pageCount - 1).coerceAtLeast(1)
         val target = (frac * scrollState.maxValue).toInt().coerceIn(0, scrollState.maxValue)
         if (kotlin.math.abs(scrollState.value - target) > 8) scrollState.scrollTo(target)
+        placeRestored = true
     }
     LaunchedEffect(book.id, ready, prefs.swipeMode, book.format, pageCount) {
         if (!ready || prefs.swipeMode || book.format != BookFormat.PDF || pageCount <= 0) return@LaunchedEffect
         val target = book.currentPage.coerceIn(0, pageCount - 1)
         if (pdfList.firstVisibleItemIndex != target) pdfList.scrollToItem(target)
+        placeRestored = true
     }
 
     val menuOpen = menu != ReaderMenu.None

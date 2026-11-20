@@ -261,6 +261,21 @@ internal fun LanternRoot(store: LanternStore) {
         details = book
     }
     val notificationItems by NotificationCenter.items.collectAsState()
+    val pendingNotificationOpen by NotificationCenter.pendingOpen.collectAsState()
+    LaunchedEffect(pendingNotificationOpen, store.books) {
+        val request = pendingNotificationOpen ?: return@LaunchedEffect
+        when {
+            request.target.isBlank() -> tab = Route.Notifications
+            request.target == "library" -> tab = Route.Library
+            request.target == "profile" || request.target == "account" -> tab = Route.Profile
+            request.target.startsWith("reader:") -> {
+                val id = request.target.removePrefix("reader:")
+                if (store.book(id) != null) { readerBack = Route.Home; tab = Route.Reader(id) } else return@LaunchedEffect
+            }
+            else -> tab = Route.Notifications
+        }
+        NotificationCenter.clearPendingOpen()
+    }
     val needsOnboarding = !store.interestsChosen
     LanternTheme(theme) {
         // The shell is two regions, not two layers.

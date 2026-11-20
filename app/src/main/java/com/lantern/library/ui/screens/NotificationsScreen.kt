@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -72,7 +74,7 @@ fun NotificationsScreen(onBack: () -> Unit, onOpenTarget: (String) -> Unit) {
             Text("${items.count { it.unread }} unread", modifier = Modifier.align(Alignment.CenterVertically), style = MaterialTheme.typography.labelMedium)
         }
         if (items.isEmpty()) {
-            Column(Modifier.fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            Column(Modifier.weight(1f).fillMaxWidth().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                 Icon(Icons.Filled.Notifications, null, modifier = Modifier.size(42.dp))
                 Text("You're all caught up", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp))
                 Text("Library, sync and account updates will appear here.", style = MaterialTheme.typography.bodyMedium)
@@ -93,7 +95,7 @@ fun NotificationsScreen(onBack: () -> Unit, onOpenTarget: (String) -> Unit) {
             onDismissRequest = { settings = false },
             title = { Text("Notification settings") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     PreferenceSwitch("All notifications", prefs.enabled) { enabled -> NotificationCenter.updatePreferences { current -> current.copy(enabled = enabled) } }
                     PreferenceSwitch("In-app inbox", prefs.inAppEnabled) { NotificationCenter.updatePreferences { it.copy(inAppEnabled = it) } }
                     PreferenceSwitch("Android push", prefs.pushEnabled) { enabled ->

@@ -122,7 +122,7 @@ fun ProfileScreen(
                     }
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "This is measured from Lore's private files and cache folders. Books stored only in your cloud account are not counted; offline downloads and temporary cached files are.",
+                        "This is measured from Lore's private app data and cache folders. Books stored only in your cloud account are not counted; offline downloads and temporary cached files are.",
                         color = palette.mute, fontSize = 11.sp
                     )
                 }

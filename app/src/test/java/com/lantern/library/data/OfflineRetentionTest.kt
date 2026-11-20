@@ -37,13 +37,51 @@ class OfflineRetentionTest {
     }
 
     @Test
-    fun `older records default to protected offline downloads`() {
+    fun `legacy records with a verified Drive copy migrate to managed cache`() {
+        val oldRecord = BookRecords.encode(
+            book().copy(
+                driveFileId = "drive-file-123",
+                backupAt = 1_700_000_000_000L,
+                backupBytes = 4096L
+            )
+        ).apply { remove("keepOffline") }
+
+        val decoded = BookRecords.decode(oldRecord)
+
+        assertEquals(false, decoded?.keepOffline)
+    }
+
+    @Test
+    fun `legacy records without a verified Drive copy remain protected`() {
         val oldRecord = BookRecords.encode(book()).apply { remove("keepOffline") }
         val decoded = BookRecords.decode(oldRecord)
 
         assertEquals(true, decoded?.keepOffline)
     }
 
+    @Test
+    fun `legacy records with pending or failed backups remain protected`() {
+        val pending = BookRecords.encode(
+            book().copy(driveFileId = "drive-file-123", backupAt = 100L, pendingUpload = true)
+        ).apply { remove("keepOffline") }
+        val failed = BookRecords.encode(
+            book().copy(driveFileId = "drive-file-123", backupAt = 100L, backupFailed = true)
+        ).apply { remove("keepOffline") }
+
+        assertEquals(true, BookRecords.decode(pending)?.keepOffline)
+        assertEquals(true, BookRecords.decode(failed)?.keepOffline)
+    }
+
+    @Test
+    fun `explicit offline retention choice always wins over migration`() {
+        val pinned = BookRecords.encode(
+            book(keepOffline = true).copy(
+                driveFileId = "drive-file-123",
+                backupAt = 1_700_000_000_000L
+            )
+        )
+        assertEquals(true, BookRecords.decode(pinned)?.keepOffline)
+    }
     @Test
     fun `library file round trip preserves the retention choice`() {
         val file = temp.newFile("library.json")

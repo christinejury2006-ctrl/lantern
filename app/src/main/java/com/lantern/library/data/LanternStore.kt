@@ -785,6 +785,11 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         journalDone(id)
         toast("Removed from library")
         markLocalChanged()
+        NotificationCenter.post(
+            getApplication(), LoreNoticeCategory.LIBRARY, "Book removed",
+            "${b.title} was removed from this library.",
+            "library:removed:$id:${System.currentTimeMillis()}", "library"
+        )
         // 3. The account's copy waits for the snapshot to carry the deletion first.
         val driveId = b.driveFileId
         if (!driveId.isNullOrBlank()) addPendingDelete(driveId)
@@ -2123,6 +2128,11 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                         backupBytes = verified.second
                     )
                 )
+                NotificationCenter.post(
+                    getApplication(), LoreNoticeCategory.SYNC, "Backup complete",
+                    "${latest.title} is safely backed up to your account.",
+                    "backup:$bookId:$now", "library"
+                )
                 clearTransfer(bookId)
             }
             batch.failed.forEach { (book, failure) ->
@@ -2381,12 +2391,13 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     /** Writes one book's verified outcome to its record. Idempotent, and never invents a stamp. */
     private fun recordVerified(bookId: String, driveFileId: String, bytes: Long) {
         val latest = book(bookId) ?: return
+        val verifiedAt = System.currentTimeMillis()
         upsert(
             latest.copy(
                 driveFileId = driveFileId,
                 pendingUpload = false,
                 backupFailed = false,
-                backupAt = System.currentTimeMillis(),
+                backupAt = verifiedAt,
                 backupBytes = bytes
             )
         )
@@ -2395,7 +2406,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         NotificationCenter.post(
             getApplication(), LoreNoticeCategory.SYNC, "Backup complete",
             "${latest.title} is safely backed up to your account.",
-            "backup:${bookId}:${latest.backupAt}", "library"
+            "backup:${bookId}:$verifiedAt", "library"
         )
     }
 

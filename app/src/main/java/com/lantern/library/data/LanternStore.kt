@@ -928,6 +928,14 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 RecDiag.log(RecDiag.summary())
                 StartupTrace.mark("ensureRecommendations done n=${list.size} failed=${list.isEmpty()}")
                 if (list.isEmpty()) forYouFailed = true
+                else if (force && RecDiag.online) {
+                    val day = System.currentTimeMillis() / 86_400_000L
+                    NotificationCenter.post(
+                        getApplication(), LoreNoticeCategory.RECOMMENDATIONS,
+                        "Fresh recommendations", "New picks are ready on your Reading Nook.",
+                        "recommendations:$day", "home"
+                    )
+                }
                 // Diagnostics stay in logcat: a debug build used to show this as a toast,
                 // which landed on top of the shelf as a grey card full of HTTP codes.
             } catch (cancelled: CancellationException) {

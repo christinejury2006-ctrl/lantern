@@ -28,8 +28,16 @@ object FirestoreAccountRepository {
         }
         val credential = GoogleAuthProvider.getCredential(idToken, null)
         FirebaseAuth.getInstance().signInWithCredential(credential).await()
-        NotificationCenter.setAccount(FirebaseAuth.getInstance().currentUser?.uid)
+        val user = FirebaseAuth.getInstance().currentUser
+        NotificationCenter.setAccount(user?.uid)
         NotificationCenter.registerDeviceToken()
+        if (user != null) {
+            NotificationCenter.postCurrent(
+                LoreNoticeCategory.ACCOUNT, "Account signed in",
+                "Lore is now connected to your account.",
+                "account:signed-in:${user.uid}:${System.currentTimeMillis()}", "profile"
+            )
+        }
     }
 
     suspend fun readSnapshot(): String? = withContext(Dispatchers.IO) {

@@ -930,6 +930,14 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 if (list.isEmpty()) forYouFailed = true
                 // Diagnostics stay in logcat: a debug build used to show this as a toast,
                 // which landed on top of the shelf as a grey card full of HTTP codes.
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                // Discovery is optional. A failed request must never take down the reader or
+                // replace an already-rendered cached shelf with an empty state.
+                RecDiag.log("ensureRecommendations failed ${failure.javaClass.simpleName}")
+                forYouFailed = true
+                StartupTrace.mark("ensureRecommendations failed ${failure.javaClass.simpleName}")
             } finally {
                 forYouBusy = false
             }
@@ -1643,6 +1651,11 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         UploadScheduler.cancelAccount(ctx, owner)
         if (!keepOnDisk) runCatching { profiles.purge(namespace) }
         clearActiveState()
+        // Detach the old identity in memory immediately. Sign-out performs token revocation and
+        // cache cleanup asynchronously; the old account header must not remain visible while
+        // that work is in progress.
+        account = CloudAccount()
+        googleAccountKey = null
         hydrated = false
     }
 

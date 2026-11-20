@@ -27,6 +27,7 @@ object FirestoreAccountRepository {
         }
         val credential = GoogleAuthProvider.getCredential(idToken, null)
         FirebaseAuth.getInstance().signInWithCredential(credential).await()
+        NotificationCenter.registerDeviceToken()
     }
 
     suspend fun readSnapshot(): String? = withContext(Dispatchers.IO) {

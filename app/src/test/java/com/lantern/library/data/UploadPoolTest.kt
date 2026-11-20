@@ -130,10 +130,13 @@ class UploadPoolTest {
          * actually allowed through at once, which is the thing under test.
          */
         private fun enter(loreId: String, name: String, bytes: ByteArray, replacing: String?): DriveLibrary.Raw? {
-            uploadEntered[loreId]?.countDown()
             uploadOrder += loreId
+            // Count the upload as in-flight before opening the test gate. Signalling first lets
+            // the coordinator release the other upload before this thread increments the counter,
+            // making a genuinely concurrent pair look sequential under fast scheduling.
             val live = inFlight.incrementAndGet()
             maxInFlight.accumulateAndGet(live) { a, b -> maxOf(a, b) }
+            uploadEntered[loreId]?.countDown()
             try {
                 failUpload[loreId]?.let { code ->
                     return DriveLibrary.Raw(code, """{"error":{"code":$code}}""".toByteArray())

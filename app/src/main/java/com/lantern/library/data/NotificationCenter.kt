@@ -152,7 +152,7 @@ object NotificationCenter {
             val storage = context.getSharedPreferences(activePrefsName, Context.MODE_PRIVATE)
             val seen = storage.getStringSet(SEEN_EVENTS, emptySet()).orEmpty()
             if (key in seen) return@synchronized null
-            storage.edit().putStringSet(SEEN_EVENTS, (seen + key).takeLast(500).toSet()).apply()
+            storage.edit().putStringSet(SEEN_EVENTS, (seen + key).toList().takeLast(500).toSet()).apply()
             LoreNotification(
                 id = Integer.toHexString(key.hashCode()),
                 eventId = key,

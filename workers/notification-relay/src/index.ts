@@ -10,6 +10,7 @@ interface Notice {
 }
 const jwks = createRemoteJWKSet(new URL("https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com"));
 const allowedCategories = new Set(["library", "sync", "downloads", "account", "recommendations", "reminders"]);
+let cachedGoogleToken: { value: string; expiresAt: number } | undefined;
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), {
   status, headers: { "content-type": "application/json", "cache-control": "no-store" }
 });
@@ -18,6 +19,7 @@ const boolField = (fields: Record<string, any>, key: string, fallback: boolean) 
   typeof fields?.[key]?.booleanValue === "boolean" ? fields[key].booleanValue : fallback;
 
 async function googleAccessToken(env: Env): Promise<string> {
+  if (cachedGoogleToken && cachedGoogleToken.expiresAt > Date.now() + 60_000) return cachedGoogleToken.value;
   const pem = env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n");
   const key = await importPKCS8(pem, "RS256");
   const now = Math.floor(Date.now() / 1000);
@@ -33,6 +35,7 @@ async function googleAccessToken(env: Env): Promise<string> {
   if (!response.ok) throw new Error("Google service authentication failed.");
   const data = await response.json() as { access_token?: string };
   if (!data.access_token) throw new Error("Google did not return an access token.");
+  cachedGoogleToken = { value: data.access_token, expiresAt: Date.now() + 3_500_000 };
   return data.access_token;
 }
 

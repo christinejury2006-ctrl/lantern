@@ -49,6 +49,7 @@ android {
         }
         buildConfigField("String", "GOOGLE_BOOKS_API_KEY", "\"${escapeBuildConfig(resolveGoogleBooksApiKey())}\"")
         buildConfigField("String", "FIREBASE_WEB_CLIENT_ID", "\"${escapeBuildConfig(resolveFirebaseWebClientId())}\"")
+        buildConfigField("String", "LORE_NOTIFICATION_RELAY_URL", "\"${escapeBuildConfig(resolveNotificationRelayUrl())}\"")
     }
 
     // A stable signing key is what makes "download the new APK and install it" update the
@@ -239,4 +240,18 @@ fun webClientIdFromGoogleServices(): String {
     } catch (_: Exception) {
         ""
     }
+}
+
+
+/** Optional HTTPS endpoint for the Spark-compatible remote notification relay. */
+fun resolveNotificationRelayUrl(): String {
+    System.getenv("LORE_NOTIFICATION_RELAY_URL")?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+    (findProperty("LORE_NOTIFICATION_RELAY_URL") as? String)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+    val file = rootProject.file("local.properties")
+    if (file.exists()) {
+        val props = Properties()
+        file.inputStream().use { props.load(it) }
+        props.getProperty("LORE_NOTIFICATION_RELAY_URL")?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+    }
+    return ""
 }

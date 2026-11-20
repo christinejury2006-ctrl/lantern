@@ -1,0 +1,4 @@
+name = "lore-notification-relay"
+main = "src/index.ts"
+compatibility_date = "2026-11-20"
+workers_dev = true

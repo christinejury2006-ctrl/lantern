@@ -28,6 +28,7 @@ object FirestoreAccountRepository {
         }
         val credential = GoogleAuthProvider.getCredential(idToken, null)
         FirebaseAuth.getInstance().signInWithCredential(credential).await()
+        NotificationCenter.setAccount(FirebaseAuth.getInstance().currentUser?.uid)
         NotificationCenter.registerDeviceToken()
     }
 
@@ -63,5 +64,6 @@ object FirestoreAccountRepository {
     suspend fun signOut() {
         NotificationCenter.unregisterDeviceToken()
         FirebaseAuth.getInstance().signOut()
+        NotificationCenter.setAccount(null)
     }
 }

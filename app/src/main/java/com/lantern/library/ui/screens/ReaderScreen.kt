@@ -424,6 +424,21 @@ fun ReaderScreen(
             onProgress(target, pageCount)
         }
     }
+    // Hardware volume keys turn pages only while the reader is on screen. The system keeps
+    // normal volume control everywhere else in Lore.
+    DisposableEffect(book.id, pageCount, prefs.swipeMode, book.format) {
+        ReaderVolumeController.bind { forward ->
+            val current = when {
+                prefs.swipeMode -> pager.currentPage
+                book.format == BookFormat.PDF -> pdfList.firstVisibleItemIndex
+                scrollState.maxValue > 0 && pageCount > 1 ->
+                    ((scrollState.value.toFloat() / scrollState.maxValue) * (pageCount - 1)).toInt()
+                else -> 0
+            }
+            go(current + if (forward) 1 else -1)
+        }
+        onDispose { ReaderVolumeController.clear() }
+    }
     fun goToChapter(index: Int) {
         if (index < 0) return
         if (book.format == BookFormat.PDF) {

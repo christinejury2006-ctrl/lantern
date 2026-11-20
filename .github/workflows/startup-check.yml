@@ -241,8 +241,11 @@ jobs:
 
           echo "=================== PHASE C: cold launch with airplane mode enabled ==================="
           adb shell am force-stop com.lantern.library
-          adb shell settings put global airplane_mode_on 1
-          adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true
+          # Toggle both radios through the emulator's supported service commands. Sending the
+          # protected AIRPLANE_MODE broadcast from the shell UID is denied on current Android 14
+          # images, which previously aborted the test before the offline launch was reached.
+          adb shell svc wifi disable
+          adb shell svc data disable
           sleep 3
           adb logcat -c
           adb shell am start -W -n com.lantern.library/.MainActivity
@@ -257,8 +260,8 @@ jobs:
             echo "PHASE offline ALIVE $offline_pid" | tee -a startup-result.txt
           fi
           # Reconnect after the offline cold-start check. The same process must survive the change.
-          adb shell settings put global airplane_mode_on 0
-          adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false
+          adb shell svc wifi enable
+          adb shell svc data enable
           sleep 10
           reconnected_pid="$(adb shell pidof com.lantern.library | tr -d '\r')"
           echo "== phase reconnect: pid = '$reconnected_pid'"

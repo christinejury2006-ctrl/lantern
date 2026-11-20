@@ -17,6 +17,7 @@ import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import java.security.MessageDigest
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONArray
@@ -175,6 +176,17 @@ object NotificationCenter {
                     .collection("devices").document(hash)
                     .set(mapOf("token" to token, "platform" to "android", "updatedAt" to System.currentTimeMillis()))
             }
+        }
+    }
+
+    suspend fun unregisterDeviceToken() {
+        val user = FirebaseAuth.getInstance().currentUser ?: return
+        runCatching {
+            val token = FirebaseMessaging.getInstance().token.await()
+            val hash = MessageDigest.getInstance("SHA-256").digest(token.toByteArray())
+                .joinToString("") { "%02x".format(it) }
+            FirebaseFirestore.getInstance().collection("users").document(user.uid)
+                .collection("devices").document(hash).delete().await()
         }
     }
 

@@ -61,6 +61,11 @@ class MainActivity : ComponentActivity() {
         com.lantern.library.data.NotificationCenter.consumeIntent(intent)
     }
 
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (com.lantern.library.data.ReaderVolumeController.consume(event.keyCode, event.action, event.repeatCount)) return true
+        return super.dispatchKeyEvent(event)
+    }
+
     private fun startCompose() {
         if (composeStarted) return
         composeStarted = true

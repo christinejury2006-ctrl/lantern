@@ -72,6 +72,7 @@ data class LoreNotificationPreferences(
  */
 object NotificationCenter {
     private const val PREFS = "lore_notifications_v1"
+    private const val DEVICE_PREFS = "lore_fcm_device"
     private const val ITEMS = "items"
     private const val SETTINGS = "settings"
     private const val TOKEN = "fcm_token"
@@ -80,6 +81,7 @@ object NotificationCenter {
     private const val MAX_HISTORY = 250
     private val lock = Any()
     @Volatile private var app: Context? = null
+    @Volatile private var activePrefsName: String = "lore_notifications_v1_guest"
     private val mutableItems = MutableStateFlow<List<LoreNotification>>(emptyList())
     val items: StateFlow<List<LoreNotification>> = mutableItems
     private val mutablePreferences = MutableStateFlow(LoreNotificationPreferences())
@@ -92,10 +94,33 @@ object NotificationCenter {
             if (app != null) return
             app = context.applicationContext
             createChannel(context.applicationContext)
-            val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            mutableItems.value = decodeItems(prefs.getString(ITEMS, null))
-            mutablePreferences.value = decodePreferences(prefs.getString(SETTINGS, null))
+            activePrefsName = profilePrefsName(FirebaseAuth.getInstance().currentUser?.uid)
+            loadLocalProfile(context.applicationContext)
         }
+    }
+
+    /** Notification history and preferences follow the Firebase identity, never the last person in the app. */
+    fun setAccount(uid: String?) {
+        val context = app ?: return
+        synchronized(lock) {
+            val next = profilePrefsName(uid)
+            if (next == activePrefsName) return
+            activePrefsName = next
+            loadLocalProfile(context)
+        }
+    }
+
+    private fun profilePrefsName(uid: String?): String {
+        if (uid.isNullOrBlank()) return "lore_notifications_v1_guest"
+        val hash = MessageDigest.getInstance("SHA-256").digest(uid.toByteArray())
+            .joinToString("") { "%02x".format(it) }.take(24)
+        return "lore_notifications_v1_$hash"
+    }
+
+    private fun loadLocalProfile(context: Context) {
+        val prefs = context.getSharedPreferences(activePrefsName, Context.MODE_PRIVATE)
+        mutableItems.value = decodeItems(prefs.getString(ITEMS, null))
+        mutablePreferences.value = decodePreferences(prefs.getString(SETTINGS, null))
     }
 
     fun post(
@@ -113,7 +138,7 @@ object NotificationCenter {
         if (!prefs.categoryEnabled(category)) return null
         val key = eventId.ifBlank { "${category.key}:${title.trim()}:${body.trim()}" }
         val notice = synchronized(lock) {
-            val storage = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val storage = context.getSharedPreferences(activePrefsName, Context.MODE_PRIVATE)
             val seen = storage.getStringSet(SEEN_EVENTS, emptySet()).orEmpty()
             if (key in seen) return@synchronized null
             storage.edit().putStringSet(SEEN_EVENTS, (seen + key).takeLast(500).toSet()).apply()
@@ -156,7 +181,7 @@ object NotificationCenter {
         synchronized(lock) {
             val next = transform(mutablePreferences.value)
             mutablePreferences.value = next
-            app?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)?.edit()
+            app?.getSharedPreferences(activePrefsName, Context.MODE_PRIVATE)?.edit()
                 ?.putString(SETTINGS, encodePreferences(next).toString())?.apply()
             syncRemotePreferences(next)
         }
@@ -179,7 +204,7 @@ object NotificationCenter {
                 )
                 synchronized(lock) {
                     mutablePreferences.value = next
-                    app?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)?.edit()
+                    app?.getSharedPreferences(activePrefsName, Context.MODE_PRIVATE)?.edit()
                         ?.putString(SETTINGS, encodePreferences(next).toString())?.apply()
                 }
             }
@@ -215,10 +240,10 @@ object NotificationCenter {
     }
 
     fun saveToken(token: String) {
-        app?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)?.edit()?.putString(TOKEN, token)?.apply()
+        app?.getSharedPreferences(DEVICE_PREFS, Context.MODE_PRIVATE)?.edit()?.putString(TOKEN, token)?.apply()
     }
 
-    fun savedToken(): String? = app?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)?.getString(TOKEN, null)
+    fun savedToken(): String? = app?.getSharedPreferences(DEVICE_PREFS, Context.MODE_PRIVATE)?.getString(TOKEN, null)
 
     /** Stores this device token under the authenticated Firebase UID for trusted server delivery. */
     fun registerDeviceToken() {
@@ -262,7 +287,7 @@ object NotificationCenter {
     private fun saveItems(items: List<LoreNotification>) {
         val next = items.sortedByDescending { it.createdAt }.take(MAX_HISTORY)
         mutableItems.value = next
-        app?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)?.edit()
+        app?.getSharedPreferences(activePrefsName, Context.MODE_PRIVATE)?.edit()
             ?.putString(ITEMS, encodeItems(next).toString())?.apply()
     }
 

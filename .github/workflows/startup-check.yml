@@ -239,6 +239,35 @@ jobs:
           adb install -r "$rel" || adb install "$rel"
           launch_and_watch existing-data
 
+          echo "=================== PHASE C: cold launch with airplane mode enabled ==================="
+          adb shell am force-stop com.lantern.library
+          adb shell settings put global airplane_mode_on 1
+          adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true
+          sleep 3
+          adb logcat -c
+          adb shell am start -W -n com.lantern.library/.MainActivity
+          sleep 20
+          offline_pid="$(adb shell pidof com.lantern.library | tr -d '\r')"
+          echo "== phase offline: pid after 20s = '$offline_pid'"
+          adb logcat -d -b crash > crash-offline.log 2>&1
+          adb logcat -d > app-offline.log 2>&1
+          if [ -z "$offline_pid" ]; then
+            echo "PHASE offline DEAD" | tee -a startup-result.txt
+          else
+            echo "PHASE offline ALIVE $offline_pid" | tee -a startup-result.txt
+          fi
+          # Reconnect after the offline cold-start check. The same process must survive the change.
+          adb shell settings put global airplane_mode_on 0
+          adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false
+          sleep 10
+          reconnected_pid="$(adb shell pidof com.lantern.library | tr -d '\r')"
+          echo "== phase reconnect: pid = '$reconnected_pid'"
+          if [ -z "$reconnected_pid" ]; then
+            echo "PHASE reconnect DEAD" | tee -a startup-result.txt
+          else
+            echo "PHASE reconnect ALIVE $reconnected_pid" | tee -a startup-result.txt
+          fi
+
           echo "=================== was the seeded library kept? ==================="
           adb shell am force-stop com.lantern.library
           # Read the app's own data back through the debug build (same package, same key, data kept).
@@ -315,6 +344,8 @@ jobs:
           if grep -q DEAD startup-result.txt; then conclusion=failure; else conclusion=success; fi
           if ! grep -q "PHASE fresh ALIVE" startup-result.txt; then conclusion=failure; fi
           if ! grep -q "PHASE existing-data ALIVE" startup-result.txt; then conclusion=failure; fi
+          if ! grep -q "PHASE offline ALIVE" startup-result.txt; then conclusion=failure; fi
+          if ! grep -q "PHASE reconnect ALIVE" startup-result.txt; then conclusion=failure; fi
           {
             echo "verdict: $verdict"
             echo
@@ -332,6 +363,9 @@ jobs:
             echo
             echo "===== crash buffers ====="
             grep -E "^--- crash-|FATAL" boot.log | head -10
+            echo
+            echo "===== offline crash buffer ====="
+            grep -E "FATAL|AndroidRuntime|Exception" crash-offline.log 2>/dev/null | head -20
             echo
             echo "===== transcript (tail) ====="
             tail -c 12000 boot.log
@@ -358,3 +392,5 @@ jobs:
           cat startup-result.txt
           grep -q "PHASE fresh ALIVE" startup-result.txt
           grep -q "PHASE existing-data ALIVE" startup-result.txt
+          grep -q "PHASE offline ALIVE" startup-result.txt
+          grep -q "PHASE reconnect ALIVE" startup-result.txt

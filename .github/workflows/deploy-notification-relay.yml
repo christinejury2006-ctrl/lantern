@@ -68,20 +68,6 @@ jobs:
           echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "Deployed Lore notification relay: $url"
 
-      - name: Configure Lore Android build variable
-        env:
-          WORKER_URL: ${{ steps.deploy.outputs.url }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          endpoint="repos/$GITHUB_REPOSITORY/actions/variables/LORE_NOTIFICATION_RELAY_URL"
-          if gh api --method PATCH "$endpoint" -f name=LORE_NOTIFICATION_RELAY_URL -f value="$WORKER_URL" >/dev/null 2>&1; then
-            echo "Updated repository variable LORE_NOTIFICATION_RELAY_URL."
-          else
-            gh api --method POST "repos/$GITHUB_REPOSITORY/actions/variables" -f name=LORE_NOTIFICATION_RELAY_URL -f value="$WORKER_URL" >/dev/null
-            echo "Created repository variable LORE_NOTIFICATION_RELAY_URL."
-          fi
-
       - name: Rebuild Lore with the deployed relay URL
         shell: bash
         run: |

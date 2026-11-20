@@ -172,7 +172,7 @@ object NotificationCenter {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val notification = NotificationCompat.Builder(context, CHANNEL)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle(notice.title)
             .setContentText(notice.body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(notice.body))

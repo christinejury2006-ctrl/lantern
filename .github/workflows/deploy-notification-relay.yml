@@ -1,0 +1,83 @@
+name: Deploy Lore notification relay
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workers/notification-relay
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      GOOGLE_CLIENT_EMAIL: ${{ secrets.LORE_GOOGLE_CLIENT_EMAIL }}
+      GOOGLE_PRIVATE_KEY: ${{ secrets.LORE_GOOGLE_PRIVATE_KEY }}
+      FIREBASE_PROJECT_ID: lore-digital-library
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out the selected branch
+        uses: actions/checkout@v4
+
+      - name: Validate deployment credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID GOOGLE_CLIENT_EMAIL GOOGLE_PRIVATE_KEY; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error title=Missing deployment secret::$name is not configured in repository Actions secrets."
+              exit 1
+            fi
+          done
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install relay dependencies
+        run: npm install
+
+      - name: Type-check relay
+        run: npm run typecheck
+
+      - name: Set Cloudflare Worker secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "$FIREBASE_PROJECT_ID" | npx wrangler secret put FIREBASE_PROJECT_ID
+          printf '%s' "$GOOGLE_CLIENT_EMAIL" | npx wrangler secret put GOOGLE_CLIENT_EMAIL
+          printf '%s' "$GOOGLE_PRIVATE_KEY" | npx wrangler secret put GOOGLE_PRIVATE_KEY
+
+      - name: Deploy Worker
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy 2>&1 | tee "$RUNNER_TEMP/lore-worker-deploy.log"
+          url="$(grep -Eo 'https://[A-Za-z0-9.-]+\.workers\.dev' "$RUNNER_TEMP/lore-worker-deploy.log" | tail -1 || true)"
+          if [[ -z "$url" ]]; then
+            echo "::error title=Worker URL not found::Wrangler did not print a workers.dev URL. Check the deployment output and configure LORE_NOTIFICATION_RELAY_URL manually."
+            exit 1
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "Deployed Lore notification relay: $url"
+
+      - name: Configure Lore Android build variable
+        env:
+          WORKER_URL: ${{ steps.deploy.outputs.url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="repos/$GITHUB_REPOSITORY/actions/variables/LORE_NOTIFICATION_RELAY_URL"
+          if gh api --method PUT "$endpoint" -f name=LORE_NOTIFICATION_RELAY_URL -f value="$WORKER_URL" >/dev/null 2>&1; then
+            echo "Updated repository variable LORE_NOTIFICATION_RELAY_URL."
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/actions/variables" -f name=LORE_NOTIFICATION_RELAY_URL -f value="$WORKER_URL" >/dev/null
+            echo "Created repository variable LORE_NOTIFICATION_RELAY_URL."
+          fi

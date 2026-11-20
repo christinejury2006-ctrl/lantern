@@ -28,7 +28,9 @@ data class AccountSnapshot(
      * Part of the snapshot because a deletion is a user action that has to travel between devices;
      * without it the merge can only ever be a union, and a union puts deleted books back.
      */
-    val deletions: List<Tombstone> = emptyList()
+    val deletions: List<Tombstone> = emptyList(),
+    /** Saved-for-later discoveries are account data, not a device-only list. */
+    val wantToRead: List<DiscoveryBook> = emptyList()
 )
 
 object AccountSync {
@@ -37,10 +39,11 @@ object AccountSync {
      *
      * 1 — books, bookmarks, appearance, prefs.
      * 2 — adds `deletions` (tombstones) and a per-book `backupBytes` (the size that was verified).
+     * 3 — adds saved-for-later discoveries (`wantToRead`), while remaining readable by v2 clients.
      *     Readable both ways: a v1 snapshot simply has neither, and a v2 one is read by any build
      *     that understands the fields it cares about.
      */
-    const val SCHEMA = 2
+    const val SCHEMA = 3
     const val STATE_LORE_ID = "account_state"
     const val STATE_FILE_NAME = "lore_account.json"
 
@@ -60,6 +63,8 @@ object AccountSync {
         }
         val order = JSONArray()
         snap.bookOrder.forEach { order.put(it) }
+        val saved = JSONArray()
+        snap.wantToRead.forEach { saved.put(Recommendations.toJson(it)) }
         val deleted = JSONArray()
         Deletions.prune(snap.deletions).forEach { t ->
             deleted.put(JSONObject().put("id", t.bookId).put("at", t.deletedAt))
@@ -71,6 +76,7 @@ object AccountSync {
             .put("accountId", snap.userId)
             .put("books", books)
             .put("bookmarks", marks)
+            .put("wantToRead", saved)
             .put("bookOrder", order)
             .put("libraryAppearance", snap.libraryAppearance.forCloud().toJson().put("updatedAt", snap.libraryAppearAt))
             .put("readerAppearance", snap.readerAppearance.forCloud().toJson().put("updatedAt", snap.readerAppearAt))
@@ -106,6 +112,12 @@ object AccountSync {
                 val id = orderArr.optString(i)
                 if (id.isNotBlank()) order += id
             }
+            val savedArr = o.optJSONArray("wantToRead") ?: JSONArray()
+            val saved = ArrayList<DiscoveryBook>(savedArr.length())
+            for (i in 0 until savedArr.length()) {
+                val row = savedArr.optJSONObject(i) ?: continue
+                Recommendations.parseBook(row)?.let { saved += it }
+            }
             val delArr = o.optJSONArray("deletions") ?: JSONArray()
             val deletions = ArrayList<Tombstone>(delArr.length())
             for (i in 0 until delArr.length()) {
@@ -131,7 +143,8 @@ object AccountSync {
                 readerAppearAt = readObj?.optLong("updatedAt", 0L) ?: 0L,
                 prefsAt = prefsObj?.optLong("updatedAt", 0L) ?: 0L,
                 bookOrder = order,
-                deletions = Deletions.prune(deletions)
+                deletions = Deletions.prune(deletions),
+                wantToRead = saved
             )
         }.getOrNull()
     }
@@ -142,7 +155,8 @@ object AccountSync {
             return local.copy(
                 updatedAt = maxOf(local.updatedAt, System.currentTimeMillis()),
                 books = Deletions.alive(local.books, stones),
-                deletions = stones
+                deletions = stones,
+                wantToRead = local.wantToRead
             )
         }
         // A deletion is a statement, not an absence. Both sides' statements are kept, the newest
@@ -188,6 +202,11 @@ object AccountSync {
             val prev = marks[key]
             if (prev == null || m.updatedAt >= prev.updatedAt) marks[key] = m
         }
+        val savedById = LinkedHashMap<String, DiscoveryBook>()
+        (cloud.wantToRead + local.wantToRead).forEach { pick ->
+            val previous = savedById[pick.volumeId]
+            if (previous == null || pick.savedAt >= previous.savedAt) savedById[pick.volumeId] = pick
+        }
         val libAt = if (local.libraryAppearAt >= cloud.libraryAppearAt) local.libraryAppearAt else cloud.libraryAppearAt
         val readAt = if (local.readerAppearAt >= cloud.readerAppearAt) local.readerAppearAt else cloud.readerAppearAt
         val prefsAt = if (local.prefsAt >= cloud.prefsAt) local.prefsAt else cloud.prefsAt
@@ -203,7 +222,8 @@ object AccountSync {
             readerAppearAt = readAt,
             prefsAt = prefsAt,
             bookOrder = mergedBooks.map { it.id },
-            deletions = stones
+            deletions = stones,
+            wantToRead = savedById.values.sortedByDescending { it.savedAt }
         )
     }
 

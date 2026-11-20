@@ -149,6 +149,26 @@ class AccountSyncMergeTest {
     }
 
     @Test
+    fun `removing a saved pick on one device prevents it returning from the other`() {
+        val saved = DiscoveryBook(volumeId = "pick-1", title = "A Story", savedAt = 100L)
+        val local = snapshot(listOf(book("a"))).copy(wantToReadDeletedAt = mapOf("pick-1" to 200L))
+        val cloud = snapshot(listOf(book("a"))).copy(wantToRead = listOf(saved))
+        val merged = AccountSync.merge(local, cloud)
+        assertTrue(merged.wantToRead.isEmpty())
+        assertEquals(200L, merged.wantToReadDeletedAt["pick-1"])
+    }
+
+    @Test
+    fun `saving a pick again after its removal restores it across devices`() {
+        val local = snapshot(listOf(book("a"))).copy(
+            wantToRead = listOf(DiscoveryBook(volumeId = "pick-1", title = "A Story", savedAt = 300L)),
+            wantToReadDeletedAt = mapOf("pick-1" to 200L)
+        )
+        val cloud = snapshot(listOf(book("a"))).copy(wantToReadDeletedAt = mapOf("pick-1" to 200L))
+        assertEquals(listOf("pick-1"), AccountSync.merge(local, cloud).wantToRead.map { it.volumeId })
+    }
+
+    @Test
     fun `a merge with no cloud copy is just the phone's own library`() {
         val local = snapshot(listOf(book("a"), book("b")))
         val merged = AccountSync.merge(local, null)

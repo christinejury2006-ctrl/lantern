@@ -118,6 +118,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     private val bookmarksLock = Any()
     val books = mutableStateListOf<LibraryBook>()
     val wantToRead = mutableStateListOf<DiscoveryBook>()
+    private var wantToReadDeletedAt: MutableMap<String, Long> = mutableMapOf()
     var forYou by mutableStateOf<List<DiscoveryBook>>(emptyList())
         private set
     var readingPrefs by mutableStateOf(ReadingPrefs())
@@ -409,6 +410,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     private fun clearActiveState() {
         synchronized(libraryLock) { books.clear() }
         wantToRead.clear()
+        wantToReadDeletedAt.clear()
         forYou = emptyList()
         forYouBusy = false
         forYouFailed = false
@@ -473,6 +475,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         }
         wantToRead.clear()
         wantToRead.addAll(disk.want)
+        wantToReadDeletedAt = readWantToReadDeletedAt()
         interestsChosen = disk.interestsChosen
         interests = disk.interests
         libraryAppearance = disk.libraryAppearance
@@ -862,8 +865,14 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     private fun clearWantForTitle(title: String) {
         val key = Recommendations.normalize(title)
         if (key.isEmpty()) return
-        val removed = wantToRead.removeAll { Recommendations.normalize(it.title) == key }
-        if (removed) persistWantToRead()
+        val removed = wantToRead.filter { Recommendations.normalize(it.title) == key }
+        if (removed.isNotEmpty()) {
+            val at = System.currentTimeMillis()
+            removed.forEach { wantToReadDeletedAt[it.volumeId] = at }
+            wantToRead.removeAll(removed.toSet())
+            persistWantToRead()
+            persistWantToReadDeletedAt()
+        }
     }
 
     fun isWantToRead(book: DiscoveryBook) = wantToRead.any { Recommendations.sameWork(it, book) }
@@ -876,6 +885,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     }
     fun addWantToRead(book: DiscoveryBook) {
         if (wantToRead.any { Recommendations.sameWork(it, book) }) return
+        wantToReadDeletedAt.remove(book.volumeId)
+        persistWantToReadDeletedAt()
         wantToRead.add(0, book.copy(savedAt = System.currentTimeMillis()))
         persistWantToRead()
         markLocalChanged()
@@ -883,9 +894,13 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         toast("Saved to Want to Read")
     }
     fun removeWantToRead(book: DiscoveryBook) {
-        val removed = wantToRead.removeAll { Recommendations.sameWork(it, book) }
-        if (!removed) return
+        val removed = wantToRead.filter { Recommendations.sameWork(it, book) }
+        if (removed.isEmpty()) return
+        val at = System.currentTimeMillis()
+        removed.forEach { wantToReadDeletedAt[it.volumeId] = at }
+        wantToRead.removeAll(removed.toSet())
         persistWantToRead()
+        persistWantToReadDeletedAt()
         markLocalChanged()
         toast("Removed from Want to Read")
     }
@@ -2101,7 +2116,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             prefsAt = prefsAt,
             bookOrder = bookList.map { it.id },
             deletions = deletions(),
-            wantToRead = wantToRead.toList()
+            wantToRead = wantToRead.toList(),
+            wantToReadDeletedAt = wantToReadDeletedAt.toMap()
         )
     }
 
@@ -2762,7 +2778,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             }
             wantToRead.clear()
             wantToRead.addAll(snap.wantToRead)
+            wantToReadDeletedAt = snap.wantToReadDeletedAt.toMutableMap()
             persistWantToRead()
+            persistWantToReadDeletedAt()
             synchronized(bookmarksLock) {
                 bookmarkRecords.clear()
                 bookmarkRecords.addAll(snap.bookmarks)
@@ -3910,6 +3928,27 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         val arr = JSONArray()
         wantToRead.forEach { arr.put(Recommendations.toJson(it)) }
         runCatching { wantFile.writeText(arr.toString()) }
+    }
+
+    private fun readWantToReadDeletedAt(): MutableMap<String, Long> {
+        val raw = prefs.getString("want_to_read_deleted_at", null) ?: return mutableMapOf()
+        return runCatching {
+            val o = JSONObject(raw)
+            val out = mutableMapOf<String, Long>()
+            val keys = o.keys()
+            while (keys.hasNext()) {
+                val id = keys.next()
+                val at = o.optLong(id, 0L)
+                if (id.isNotBlank() && at > 0L) out[id] = at
+            }
+            out
+        }.getOrDefault(mutableMapOf())
+    }
+
+    private fun persistWantToReadDeletedAt() {
+        val json = JSONObject()
+        wantToReadDeletedAt.forEach { (id, at) -> if (id.isNotBlank() && at > 0L) json.put(id, at) }
+        prefs.edit().putString("want_to_read_deleted_at", json.toString()).apply()
     }
 
     private fun readBookmarksFile(): List<SavedBookmark> {

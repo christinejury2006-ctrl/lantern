@@ -16,6 +16,7 @@ import com.lantern.library.R
 import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.SetOptions
 import java.security.MessageDigest
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -127,6 +128,7 @@ object NotificationCenter {
             }
         } ?: return null
         if (showSystem && prefs.pushEnabled) showSystem(context, notice)
+        if (prefs.pushEnabled) relayEvent(notice)
         return notice
     }
 
@@ -155,7 +157,60 @@ object NotificationCenter {
             mutablePreferences.value = next
             app?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)?.edit()
                 ?.putString(SETTINGS, encodePreferences(next).toString())?.apply()
+            syncRemotePreferences(next)
         }
+    }
+
+    fun loadRemotePreferences() {
+        val user = FirebaseAuth.getInstance().currentUser ?: return
+        FirebaseFirestore.getInstance().collection("users").document(user.uid)
+            .collection("notificationSettings").document("default")
+            .get().addOnSuccessListener { snapshot ->
+                val data = snapshot.data ?: return@addOnSuccessListener
+                val categories = data["categories"] as? Map<*, *>
+                val next = LoreNotificationPreferences(
+                    enabled = data["enabled"] as? Boolean ?: true,
+                    inAppEnabled = mutablePreferences.value.inAppEnabled,
+                    pushEnabled = data["pushEnabled"] as? Boolean ?: true,
+                    categories = LoreNoticeCategory.entries.associateWith { category ->
+                        categories?.get(category.key) as? Boolean ?: (category != LoreNoticeCategory.REMINDERS)
+                    }
+                )
+                synchronized(lock) {
+                    mutablePreferences.value = next
+                    app?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)?.edit()
+                        ?.putString(SETTINGS, encodePreferences(next).toString())?.apply()
+                }
+            }
+    }
+
+    private fun syncRemotePreferences(prefs: LoreNotificationPreferences) {
+        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
+        val categories = prefs.categories.mapKeys { it.key.key }
+        FirebaseFirestore.getInstance().collection("users").document(uid)
+            .collection("notificationSettings").document("default")
+            .set(mapOf(
+                "enabled" to prefs.enabled,
+                "pushEnabled" to prefs.pushEnabled,
+                "categories" to categories,
+                "updatedAt" to System.currentTimeMillis()
+            ), SetOptions.merge())
+    }
+
+    private fun relayEvent(notice: LoreNotification) {
+        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
+        val eventKey = MessageDigest.getInstance("SHA-256").digest(notice.eventId.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        FirebaseFirestore.getInstance().collection("users").document(uid)
+            .collection("notificationEvents").document(eventKey)
+            .set(mapOf(
+                "eventId" to notice.eventId,
+                "category" to notice.category.key,
+                "title" to notice.title,
+                "body" to notice.body,
+                "target" to notice.target,
+                "createdAt" to notice.createdAt
+            ))
     }
 
     fun saveToken(token: String) {
@@ -167,6 +222,7 @@ object NotificationCenter {
     /** Stores this device token under the authenticated Firebase UID for trusted server delivery. */
     fun registerDeviceToken() {
         val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
+        loadRemotePreferences()
         refreshToken { token ->
             if (token.isNullOrBlank()) return@refreshToken
             val hash = MessageDigest.getInstance("SHA-256").digest(token.toByteArray())

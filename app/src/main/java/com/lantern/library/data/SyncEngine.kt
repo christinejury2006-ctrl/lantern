@@ -496,14 +496,22 @@ object BackupAudit {
     }
 
     /** Counts over the books the account can hold, so "2 verified" means two actual files. */
-    fun counts(books: List<LibraryBook>, uploading: Set<String>, online: Boolean = true): Counts {
+    fun counts(
+        books: List<LibraryBook>,
+        uploading: Set<String>,
+        online: Boolean = true,
+        queued: Set<String> = emptySet(),
+        transfers: Map<String, TransferProgress> = emptyMap()
+    ): Counts {
         var verified = 0
         var pending = 0
         var failed = 0
         var restore = 0
         var localOnly = 0
         books.forEach { book ->
-            when (badge(book, book.id in uploading, online)) {
+            val transfer = transfers[book.id]
+                ?: if (book.id in uploading) TransferProgress.preparing(book.id, 0L) else null
+            when (badge(book, transfer, online, book.id in queued)) {
                 BackupBadge.VERIFIED -> verified++
                 // A paused transfer is still owed to the account, so it counts as pending — but it
                 // never counts as verified, and the shelf shows it differently.

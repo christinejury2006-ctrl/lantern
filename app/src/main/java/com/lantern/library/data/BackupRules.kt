@@ -42,9 +42,14 @@ object BackupRules {
         if (!eligible(book)) return false
         if (!localFileExists) return false
         val recorded = book.backupBytes
-        if (recorded <= 0L) return false
         val file = book.filePath?.let { java.io.File(it) } ?: return false
-        return file.exists() && file.length() != recorded
+        if (!file.exists()) return false
+        // Old confirmations without a recorded checksum must be re-confirmed. The upload
+        // pool can recognise the existing remote bytes and avoid sending them again.
+        if (recorded <= 0L || book.backupMd5.isBlank()) return true
+        if (file.length() != recorded) return true
+        val currentMd5 = BookFiles.md5(file)
+        return currentMd5.isBlank() || !currentMd5.equals(book.backupMd5, ignoreCase = true)
     }
 
     /**

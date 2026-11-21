@@ -87,11 +87,12 @@ fun ProfileScreen(
     val palette = nookPalette(prefs.theme)
     val context = LocalContext.current
     var storage by remember { mutableStateOf(StorageUsageSnapshot(0L, 0)) }
+    var storageRefresh by remember { mutableStateOf(0) }
     val storageKey = books.map { Triple(it.filePath, it.backupBytes, it.remoteCover) }
     // Directory walks can touch hundreds of megabytes. Refresh when the library's
     // stored-file/cover inventory changes or this screen is re-entered, not on every
     // transfer-progress tick.
-    LaunchedEffect(storageKey) {
+    LaunchedEffect(storageKey, storageRefresh) {
         storage = withContext(Dispatchers.IO) { StorageUsage.measure(context) }
     }
     // Every number on the panel comes from the same function, so they add up by construction.
@@ -142,6 +143,8 @@ fun ProfileScreen(
                     StorageLine("Temporary cache", storage.cacheSize(), palette)
                     StorageLine("App data and settings", storage.internalSize(), palette)
                     StorageLine("Other app files", storage.otherSize(), palette)
+                    Spacer(Modifier.height(10.dp))
+                    NookButton(palette, "Refresh storage breakdown", { storageRefresh += 1 }, filled = false)
                     Spacer(Modifier.height(8.dp))
                     Text(
                         "The total includes Lore's internal data, app-specific files (including the books folder), and cache. Cloud-only books are not stored on this phone and are not counted.",

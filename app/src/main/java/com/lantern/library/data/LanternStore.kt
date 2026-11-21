@@ -2138,7 +2138,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                         pendingUpload = false,
                         backupFailed = false,
                         backupAt = now,
-                        backupBytes = verified.second
+                        backupBytes = verified.second,
+                        backupMd5 = batch.checksums[bookId] ?: latest.backupMd5
                     )
                 )
                 NotificationCenter.post(
@@ -2239,6 +2240,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     private suspend fun uploadBatch(todo: List<LibraryBook>): BatchResult {
         if (todo.isEmpty()) return BatchResult(emptyMap(), emptyList())
         val confirmed = LinkedHashMap<String, Pair<String, Long>>()
+        val checksums = LinkedHashMap<String, String>()
         val failed = ArrayList<Pair<LibraryBook, DriveLibrary.TransferFailure>>()
 
         // Say "Uploading" only while it is true, and for the books that are actually going.
@@ -2278,6 +2280,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 }
                 val result = UploadPool.shared.run(token, remaining, uploadListener)
                 confirmed.putAll(result.confirmed)
+                checksums.putAll(result.checksums)
                 failed += result.failed
                 // A book another transfer already owns is neither done nor broken. Do not turn
                 // this harmless single-flight skip into a failed upload: that used to reset the
@@ -2307,7 +2310,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         // One entry per book, and the most recent reason wins: the second round's answer is the
         // one the reader needs. Two failures for one book would also make the counts lie.
         val deduped = failed.reversed().distinctBy { it.first.id }.reversed()
-        return BatchResult(confirmed, deduped)
+        return BatchResult(confirmed, deduped, checksums)
     }
 
     /** A Drive token, or null if this device cannot get one right now. */
@@ -2425,7 +2428,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     /** What one batch managed to confirm (id -> bytes) and what failed, with reasons. */
     private data class BatchResult(
         val confirmed: Map<String, Pair<String, Long>>,
-        val failed: List<Pair<LibraryBook, DriveLibrary.TransferFailure>>
+        val failed: List<Pair<LibraryBook, DriveLibrary.TransferFailure>>,
+        val checksums: Map<String, String> = emptyMap()
     )
 
     /**
@@ -2644,7 +2648,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                                 pendingUpload = false,
                                 backupFailed = false,
                                 backupAt = at,
-                                backupBytes = verified.second
+                                backupBytes = verified.second,
+                                backupMd5 = batch.checksums[b.id] ?: b.backupMd5
                             )
                         } else b
                     }

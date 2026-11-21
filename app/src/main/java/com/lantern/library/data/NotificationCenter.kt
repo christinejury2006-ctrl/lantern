@@ -360,8 +360,8 @@ object NotificationCenter {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val notification = NotificationCompat.Builder(context, CHANNEL)
-            .setSmallIcon(R.drawable.lore_icon)
-            .setLargeIcon(BitmapFactory.decodeResource(context.resources, R.mipmap.ic_launcher))
+            .setSmallIcon(R.drawable.ic_lore_notification)
+            .setLargeIcon(BitmapFactory.decodeResource(context.resources, R.drawable.lore_icon))
             .setContentTitle(notice.title)
             .setContentText(notice.body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(notice.body))

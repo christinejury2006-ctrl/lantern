@@ -3557,6 +3557,46 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * Removes every eligible local book copy for a cloud-first library.
+     *
+     * This is an explicit reader action, so it does not apply the automatic cache's
+     * recently-opened grace period. It still never overrides an explicit offline pin,
+     * and DownloadService re-verifies the remote copy and local checksum before deletion.
+     */
+    fun freeUpPhoneStorage() {
+        if (!account.signedIn || !account.driveConnected || namespace == Profiles.GUEST) {
+            toast("Connect your Google Drive account before freeing phone storage.")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val candidates = synchronized(libraryLock) { books.toList() }
+                .filter { it.format == BookFormat.EPUB || it.format == BookFormat.PDF }
+                .filter { it.filePath != null && !it.keepOffline }
+                .filter { it.id !in uploadingIds && it.id !in restoringIds && it.id !in removingIds }
+            var removed = 0
+            var kept = 0
+            for (candidate in candidates) {
+                withContext(Dispatchers.Main) { removingIds = removingIds + candidate.id }
+                val outcome = try {
+                    downloadService.removeDownload(candidate.id, notify = false)
+                } finally {
+                    withContext(Dispatchers.Main) { removingIds = removingIds - candidate.id }
+                }
+                when (outcome) {
+                    is RemoveOutcome.Removed, is RemoveOutcome.AlreadyRemoved -> removed++
+                    else -> kept++
+                }
+            }
+            withContext(Dispatchers.Main) {
+                refreshBackupAudit()
+                val suffix = if (kept > 0) " $kept file(s) stayed because backup verification or another safety check was incomplete." else ""
+                toast(if (removed > 0) "Freed phone storage: removed $removed verified download(s).$suffix"
+                    else "No downloads were safe to remove yet.$suffix")
+            }
+        }
+    }
+
+    /**
      * Fetches a removed book's bytes back from the account.
      *
      * Verified against the recorded size and checksum before it replaces anything, so a truncated

@@ -2864,9 +2864,17 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             synchronized(libraryLock) { books.associateBy { it.id } }
         }
         val outcomes = withDriveOutcome { token, _ ->
+            // Recover cover IDs from Drive's stable appProperties in one request. This repairs
+            // older account snapshots whose cover id was lost while leaving the image in Drive.
+            val coverIndex = when (val index = DriveLibrary.listCoverIds(token)) {
+                is DriveOutcome.Ok -> index.value
+                DriveOutcome.Unauthorized -> return@withDriveOutcome DriveOutcome.Unauthorized
+                DriveOutcome.Failed -> emptyMap()
+            }
             val ids = LinkedHashMap<String, String>()
             val paths = LinkedHashMap<String, String>()
             var failed = 0
+            var unavailable = 0
             snapshot.books.forEach { cloudBook ->
                 val local = localById[cloudBook.id]
                 val currentCover = local?.remoteCover ?: cloudBook.remoteCover
@@ -2874,32 +2882,38 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     !value.startsWith("http://") && !value.startsWith("https://") &&
                         File(value).exists() && File(value).length() > 40L
                 }?.let(::File)
+                val knownCoverId = cloudBook.driveCoverFileId
+                    ?: local?.driveCoverFileId
+                    ?: coverIndex[cloudBook.id]
                 if (localCover != null) {
-                    when (val uploaded = DriveLibrary.uploadCover(token, cloudBook.id, localCover, cloudBook.driveCoverFileId ?: local?.driveCoverFileId)) {
+                    when (val uploaded = DriveLibrary.uploadCover(token, cloudBook.id, localCover, knownCoverId)) {
                         is DriveOutcome.Ok -> ids[cloudBook.id] = uploaded.value
                         else -> failed++
                     }
-                } else {
-                    val coverId = cloudBook.driveCoverFileId ?: local?.driveCoverFileId
-                    if (!coverId.isNullOrBlank()) {
-                        val dest = File(BookIo.coversDir(getApplication()), "${cloudBook.id}.jpg")
-                        when (val restored = DriveLibrary.downloadCover(token, coverId, dest)) {
-                            is DriveOutcome.Ok -> {
-                                paths[cloudBook.id] = restored.value
-                                ids[cloudBook.id] = coverId
-                            }
-                            else -> failed++
+                } else if (!knownCoverId.isNullOrBlank()) {
+                    val dest = File(BookIo.coversDir(getApplication()), "${cloudBook.id}.jpg")
+                    when (val restored = DriveLibrary.downloadCover(token, knownCoverId, dest)) {
+                        is DriveOutcome.Ok -> {
+                            paths[cloudBook.id] = restored.value
+                            ids[cloudBook.id] = knownCoverId
                         }
+                        else -> failed++
                     }
+                } else {
+                    // No cover file or Drive reference exists. Do not restore the entire book just
+                    // to manufacture a jacket; leave this visible in diagnostics instead.
+                    unavailable++
                 }
             }
-            DriveOutcome.Ok(Triple(ids, paths, failed))
+            DriveOutcome.Ok(Triple(ids, paths, failed to unavailable))
         }
         val value = when (outcomes) {
             is DriveOutcome.Ok -> outcomes.value
             else -> return snapshot
         }
-        val (ids, paths, failed) = value
+        val (ids, paths, counts) = value
+        val (failed, unavailable) = counts
+        val coverIndex = if (ids.isEmpty()) emptyMap() else ids
         withContext(Dispatchers.Main) {
             synchronized(libraryLock) {
                 for (index in books.indices) {
@@ -2913,8 +2927,11 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 persistBooksUnlocked()
             }
         }
-        if (ids.isNotEmpty() || paths.isNotEmpty() || failed > 0) {
-            SyncDiag.mark("Cover assets", "${ids.size} uploaded/verified or restored; $failed failed")
+        if (ids.isNotEmpty() || paths.isNotEmpty() || failed > 0 || unavailable > 0) {
+            SyncDiag.mark(
+                "Cover assets",
+                "${ids.size} uploaded/verified or restored; $failed failed; $unavailable have no recoverable cover in Drive"
+            )
         }
         return snapshot.copy(books = snapshot.books.map { book ->
             book.copy(

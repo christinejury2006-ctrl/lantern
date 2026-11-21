@@ -268,7 +268,7 @@ data class ReadingPrefs(
     val swipeMode: Boolean = true,
     val landscape: Boolean = false,
     val highlightColor: Long = 0xFFFFF59D,
-    val useMobileData: Boolean = true
+    val useMobileData: Boolean = false
 )
 
 data class CloudAccount(

@@ -179,18 +179,101 @@ object BookRecords {
      * Written to a temporary and renamed, so a process killed mid-write leaves the previous file
      * intact rather than a truncated shelf. Returns true when the record was found and written.
      */
-    fun update(file: File, bookId: String, transform: (LibraryBook) -> LibraryBook): Boolean {
-        val current = read(file)
-        val at = current.indexOfFirst { it.id == bookId }
-        if (at < 0) return false
-        val next = current.toMutableList()
-        next[at] = transform(current[at])
-        val tmp = File(file.parentFile, file.name + ".tmp")
-        runCatching { tmp.writeText(encodeAll(next)) }.getOrElse { return false }
-        if (!tmp.renameTo(file)) {
-            runCatching { tmp.copyTo(file, overwrite = true) }
-            runCatching { tmp.delete() }
+    fun update(file: File, bookId: String, transform: (LibraryBook) -> LibraryBook): Boolean =
+        synchronized(file.absolutePath.intern()) {
+            val current = read(file)
+            val at = current.indexOfFirst { it.id == bookId }
+            if (at < 0) return@synchronized false
+            val next = current.toMutableList()
+            next[at] = transform(current[at])
+            val expected = encodeAll(next)
+            val tmp = File(file.parentFile, file.name + ".tmp")
+            runCatching { tmp.writeText(expected) }.getOrElse { return@synchronized false }
+            if (!tmp.renameTo(file)) {
+                val copied = runCatching {
+                    tmp.copyTo(file, overwrite = true)
+                    true
+                }.getOrDefault(false)
+                runCatching { tmp.delete() }
+                if (!copied) return@synchronized false
+            }
+            runCatching { file.exists() && file.readText() == expected }.getOrDefault(false)
         }
-        return true
+}
+
+/**
+ * Releases a just-uploaded original from the phone only after its exact bytes have been verified
+ * by Drive and the verified metadata has been durably written. Explicit offline pins always win.
+ *
+ * The metadata is changed before deleting bytes. If deletion fails, the old path is restored so
+ * the shelf never claims a local download is missing when it is still present.
+ */
+object VerifiedUploadRetention {
+    enum class Outcome { RELEASED, KEPT_OFFLINE, NOT_ELIGIBLE, STALE_LOCAL, METADATA_FAILED, DELETE_FAILED }
+
+    fun release(
+        libraryFile: File,
+        bookId: String,
+        driveFileId: String,
+        bytes: Long,
+        md5: String
+    ): Outcome {
+        val before = BookRecords.read(libraryFile).firstOrNull { it.id == bookId }
+            ?: return Outcome.NOT_ELIGIBLE
+        if (before.keepOfflineExplicit && before.keepOffline) return Outcome.KEPT_OFFLINE
+        if (before.origin == BookOrigin.BUNDLED ||
+            (before.format != BookFormat.PDF && before.format != BookFormat.EPUB)) {
+            return Outcome.NOT_ELIGIBLE
+        }
+        val path = before.filePath ?: return Outcome.NOT_ELIGIBLE
+        val local = File(path)
+        if (!local.isFile || local.length() != bytes || bytes <= 0L ||
+            md5.isBlank() || !BookFiles.md5(local).equals(md5, ignoreCase = true)) {
+            return Outcome.STALE_LOCAL
+        }
+
+        val cleared = BookRecords.update(libraryFile, bookId) { latest ->
+            if (latest.filePath != path || (latest.keepOfflineExplicit && latest.keepOffline)) {
+                latest
+            } else {
+                latest.copy(
+                    filePath = null,
+                    driveFileId = driveFileId,
+                    pendingUpload = false,
+                    backupFailed = false,
+                    backupAt = latest.backupAt.coerceAtLeast(System.currentTimeMillis()),
+                    backupBytes = bytes,
+                    backupMd5 = md5,
+                    keepOffline = false
+                )
+            }
+        }
+        if (!cleared) return Outcome.METADATA_FAILED
+        val after = BookRecords.read(libraryFile).firstOrNull { it.id == bookId }
+            ?: return Outcome.METADATA_FAILED
+        if (after.filePath != null) {
+            return if (after.keepOfflineExplicit && after.keepOffline) Outcome.KEPT_OFFLINE
+            else Outcome.METADATA_FAILED
+        }
+        if (after.driveFileId != driveFileId || after.backupBytes != bytes ||
+            !after.backupMd5.equals(md5, ignoreCase = true) || after.backupAt <= 0L ||
+            after.pendingUpload || after.backupFailed) {
+            // The record did not retain the exact confirmation that authorises deletion.
+            BookRecords.update(libraryFile, bookId) { latest ->
+                if (latest.filePath == null) latest.copy(filePath = path) else latest
+            }
+            return Outcome.METADATA_FAILED
+        }
+
+        if (local.delete() && !local.exists()) {
+            BookIo.deleteDerivedMedia(local)
+            return Outcome.RELEASED
+        }
+
+        // Bytes remain, so put the path back. A later cleanup can safely retry.
+        BookRecords.update(libraryFile, bookId) { latest ->
+            if (latest.filePath == null) latest.copy(filePath = path) else latest
+        }
+        return Outcome.DELETE_FAILED
     }
 }

@@ -662,8 +662,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     /** Persists whether this local copy is protected from automatic cache cleanup. */
     fun setKeepOffline(bookId: String, keep: Boolean) {
         val current = book(bookId) ?: return
-        if (current.keepOffline == keep) return
-        upsert(current.copy(keepOffline = keep))
+        if (current.keepOffline == keep && current.keepOfflineExplicit) return
+        upsert(current.copy(keepOffline = keep, keepOfflineExplicit = true))
         toast(if (keep) "Saved for offline reading" else "Eligible for automatic storage cleanup")
     }
 

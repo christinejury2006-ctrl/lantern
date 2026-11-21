@@ -554,6 +554,16 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         val themeName = prefs.getString("theme", "LIGHT") ?: "LIGHT"
         val appTheme = if (themeName == "DARK") ReaderTheme.DARK else ReaderTheme.LIGHT
         val readerThemeName = prefs.getString("readerTheme", null)
+        // Earlier versions silently allowed cellular backups and exposed no control for it.
+        // Migrate that implicit default to Wi-Fi-only once; subsequent explicit choices persist.
+        val mobilePolicyMigrated = prefs.getBoolean("mobile_policy_migrated", false)
+        val useMobileData = if (mobilePolicyMigrated) prefs.getBoolean("mobile", false) else false
+        if (!mobilePolicyMigrated) {
+            prefs.edit()
+                .putBoolean("mobile", false)
+                .putBoolean("mobile_policy_migrated", true)
+                .apply()
+        }
         val loadedPrefs = ReadingPrefs(
             theme = appTheme,
             readerTheme = if (readerThemeName == "DARK") ReaderTheme.DARK
@@ -564,7 +574,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             brightness = prefs.getFloat("brightness", 0.85f),
             swipeMode = prefs.getBoolean("swipe", true),
             landscape = prefs.getBoolean("landscape", false),
-            useMobileData = prefs.getBoolean("mobile", true)
+            useMobileData = useMobileData
         )
         val storedId = prefs.getString("uid", "").orEmpty()
         val accountFromPrefs = CloudAccount(
@@ -610,6 +620,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             theme = if (next.theme == ReaderTheme.DARK) ReaderTheme.DARK else ReaderTheme.LIGHT,
             readerTheme = if (next.readerTheme == ReaderTheme.DARK) ReaderTheme.DARK else ReaderTheme.LIGHT
         )
+        val mobilePolicyChanged = readingPrefs.useMobileData != clean.useMobileData
         readingPrefs = clean
         prefsAt = System.currentTimeMillis()
         prefs.edit().putString("theme", clean.theme.name).putString("readerTheme", clean.readerTheme.name)
@@ -620,6 +631,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             .putLong("prefsAt", prefsAt)
             .apply()
         markLocalChanged()
+        if (mobilePolicyChanged) {
+            UploadScheduler.cancelNamespace(getApplication(), namespace)
+            schedulePendingUploads()
+        }
     }
 
     fun saveLibraryAppearance(next: LibraryAppearance) {
@@ -2240,6 +2255,20 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
      */
     private suspend fun uploadBatch(todo: List<LibraryBook>): BatchResult {
         if (todo.isEmpty()) return BatchResult(emptyMap(), emptyList())
+        val ctx = getApplication<Application>()
+        if (!readingPrefs.useMobileData && !UploadNetworkPolicy.isUnmetered(ctx)) {
+            SyncDiag.mark("Backup waiting for Wi-Fi", "mobile-data backups are disabled; no book bytes were sent")
+            return BatchResult(
+                emptyMap(),
+                todo.map { book ->
+                    book to DriveLibrary.TransferFailure(
+                        book.id, book.title, "upload",
+                        "Waiting for Wi-Fi. Enable mobile-data backups in Profile to upload on cellular.",
+                        retryable = true
+                    )
+                }
+            )
+        }
         val confirmed = LinkedHashMap<String, Pair<String, Long>>()
         val checksums = LinkedHashMap<String, String>()
         val failed = ArrayList<Pair<LibraryBook, DriveLibrary.TransferFailure>>()
@@ -2247,7 +2276,6 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         // Say "Uploading" only while it is true, and for the books that are actually going.
         withContext(Dispatchers.Main) { uploadingIds = uploadingIds + todo.map { it.id } }
         try {
-            val ctx = getApplication<Application>()
             // Books with no readable local file are settled here: they need a restore or a
             // re-import, and no amount of retrying will produce bytes that are not on the phone.
             var remaining = todo.filter { book ->

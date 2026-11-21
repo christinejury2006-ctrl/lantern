@@ -336,8 +336,8 @@ object AccountSync {
             // sides point at the same file, either side's stamp counts; if only one side has an
             // id, only that side's stamp is evidence.
             backupAt = backupSource?.backupAt ?: 0L,
-            pendingUpload = if (backupSource?.backupAt ?: 0L > 0L) false else local.pendingUpload || cloud.pendingUpload,
-            backupFailed = if (backupSource?.backupAt ?: 0L > 0L) false else local.backupFailed || cloud.backupFailed,
+            pendingUpload = if ((backupSource?.backupAt ?: 0L) > 0L) false else local.pendingUpload || cloud.pendingUpload,
+            backupFailed = if ((backupSource?.backupAt ?: 0L) > 0L) false else local.backupFailed || cloud.backupFailed,
             dnf = local.dnf || cloud.dnf,
             // The size is evidence about the same bytes as the stamp: take it from whichever side
             // the stamp came from, never from the other one.

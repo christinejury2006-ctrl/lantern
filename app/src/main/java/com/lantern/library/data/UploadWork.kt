@@ -511,8 +511,10 @@ class UploadWorker(
                 return
             }
             when (VerifiedUploadRetention.release(libraryFile, book.id, driveFileId, bytes, md5)) {
-                VerifiedUploadRetention.Outcome.RELEASED ->
+                VerifiedUploadRetention.Outcome.RELEASED -> {
+                    LocalBookRetentionEvents.post(namespace, book.id)
                     SyncDiag.mark("Background upload", "verified and local copy released — ${book.title}")
+                }
                 VerifiedUploadRetention.Outcome.KEPT_OFFLINE ->
                     SyncDiag.mark("Background upload", "verified; explicit offline copy retained — ${book.title}")
                 else -> SyncDiag.mark("Background upload", "verified; local copy retained pending safe cleanup — ${book.title}")

@@ -29,7 +29,6 @@ import androidx.compose.material.icons.filled.Create
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -120,6 +119,8 @@ internal fun LanternRoot(store: LanternStore) {
         if (networkAvailable && !wasOnline) {
             connectionRestored = true
             kotlinx.coroutines.delay(2_000L)
+            connectionRestored = false
+        } else if (!networkAvailable) {
             connectionRestored = false
         }
         wasOnline = networkAvailable
@@ -255,6 +256,10 @@ internal fun LanternRoot(store: LanternStore) {
     }
     fun getDiscovery(book: DiscoveryBook) {
         val owned = store.books.firstOrNull { Recommendations.inLibrary(book, listOf(it)) }
+        if (owned == null && !networkAvailable) {
+            store.toast("This action needs an internet connection.")
+            return
+        }
         if (owned != null) {
             details = null
             readerBack = tab
@@ -339,9 +344,13 @@ internal fun LanternRoot(store: LanternStore) {
                             picksBusy = store.forYouBusy,
                             picksFailed = store.forYouFailed,
                             onOpenBook = { book ->
-                                readerBack = Route.Home
-                                store.openForReading(book) { ready ->
-                                    if (ready != null) tab = Route.Reader(ready.id)
+                                if (book.filePath.isNullOrBlank() && !networkAvailable) {
+                                    store.toast("This book needs internet to restore to this phone.")
+                                } else {
+                                    readerBack = Route.Home
+                                    store.openForReading(book) { ready ->
+                                        if (ready != null) tab = Route.Reader(ready.id)
+                                    }
                                 }
                             },
                             onOpenPick = { pick -> details = pick },
@@ -372,9 +381,13 @@ internal fun LanternRoot(store: LanternStore) {
                             books = store.books,
                             theme = theme,
                             onOpen = { book ->
-                                readerBack = Route.Library
-                                store.openForReading(book) { ready ->
-                                    if (ready != null) tab = Route.Reader(ready.id)
+                                if (book.filePath.isNullOrBlank() && !networkAvailable) {
+                                    store.toast("This book needs internet to restore to this phone.")
+                                } else {
+                                    readerBack = Route.Library
+                                    store.openForReading(book) { ready ->
+                                        if (ready != null) tab = Route.Reader(ready.id)
+                                    }
                                 }
                             },
                             onRemove = { store.remove(it) },

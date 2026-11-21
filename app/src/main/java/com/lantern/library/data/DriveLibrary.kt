@@ -582,13 +582,28 @@ object DriveLibrary {
      * Uploads a derived cover independently from the book file. The stable appProperty makes
      * retries idempotent, and Drive's checksum is checked before the returned id is trusted.
      */
-    fun uploadCover(token: String, bookId: String, file: File): DriveOutcome<String> {
+    fun uploadCover(token: String, bookId: String, file: File, knownFileId: String? = null): DriveOutcome<String> {
         if (bookId.isBlank() || !file.exists() || file.length() <= 40L) return DriveOutcome.Failed
         val q = "appProperties has { key='loreCoverId' and value='${escape(bookId)}' } and trashed=false"
-        val existing = when (val lookup = query(token, q)) {
+        val existing = knownFileId?.takeIf { it.isNotBlank() } ?: when (val lookup = query(token, q)) {
             QueryOutcome.Unauthorized -> return DriveOutcome.Unauthorized
             QueryOutcome.Error -> return DriveOutcome.Failed
             is QueryOutcome.Ok -> lookup.ids.firstOrNull()
+        }
+        if (!existing.isNullOrBlank()) {
+            val checkReq = Request.Builder()
+                .url("$FILES/${enc(existing)}?fields=id,size,md5Checksum")
+                .header("Authorization", "Bearer $token")
+                .get()
+                .build()
+            val check = executeRaw(checkReq) ?: return DriveOutcome.Failed
+            if (check.code == 401) return DriveOutcome.Unauthorized
+            if (check.ok && check.body != null) {
+                val meta = JSONObject(check.body)
+                val sameSize = meta.optString("size").toLongOrNull() == file.length()
+                val sameHash = meta.optString("md5Checksum").equals(md5Of(file), ignoreCase = true)
+                if (sameSize && sameHash) return DriveOutcome.Ok(existing)
+            }
         }
         val id = if (!existing.isNullOrBlank()) {
             val req = Request.Builder()

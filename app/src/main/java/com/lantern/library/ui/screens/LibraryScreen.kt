@@ -331,8 +331,14 @@ fun LibraryScreen(
                         DownloadAction.REMOVE -> TextButton(onClick = { menuFor = null; confirmRemoveDownload = target }) {
                             Text("Remove download", color = palette.ink)
                         }
-                        DownloadAction.RESTORE -> TextButton(onClick = { menuFor = null; onRestoreDownload(target.id) }) {
-                            Text("Restore download", color = palette.ink)
+                        DownloadAction.RESTORE -> TextButton(
+                            enabled = networkAvailable,
+                            onClick = { menuFor = null; onRestoreDownload(target.id) }
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (!networkAvailable) Icon(Icons.Filled.WifiOff, "Restore needs internet", tint = palette.mute, modifier = Modifier.size(14.dp))
+                                Text("Restore download", color = if (networkAvailable) palette.ink else palette.mute, modifier = Modifier.padding(start = 6.dp))
+                            }
                         }
                         DownloadAction.NONE -> Unit
                     }

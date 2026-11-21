@@ -77,11 +77,10 @@ class UploadPool(
 ) {
     companion object {
         /**
-         * Three at a time.
+         * Four at a time.
          *
-         * Enough that a multi-book sync is not a queue of one, small enough that three
-         * simultaneous uploads on a mobile connection do not starve each other, and far below
-         * Drive's and OkHttp's limits.
+         * A measured step up from three: enough parallelism to reduce a large library's wait,
+         * while keeping mobile bandwidth, battery use, and memory pressure bounded.
          */
         const val MAX_CONCURRENT_UPLOADS = 4
         const val MAX_CONCURRENT_VERIFICATIONS = 3

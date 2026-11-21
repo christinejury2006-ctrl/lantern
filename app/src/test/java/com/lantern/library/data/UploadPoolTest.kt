@@ -234,7 +234,7 @@ class UploadPoolTest {
             events += "verifying:${book.id}"
         }
 
-        override fun onVerified(book: LibraryBook, driveFileId: String, bytes: Long) {
+        override fun onVerified(book: LibraryBook, driveFileId: String, bytes: Long, md5: String) {
             verified[book.id] = driveFileId
             events += "verified:${book.id}"
             latchFor(book.id).countDown()

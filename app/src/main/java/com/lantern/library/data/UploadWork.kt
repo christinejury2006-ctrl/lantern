@@ -439,7 +439,7 @@ class UploadWorker(
             journal(book.id, totalBytes, totalBytes)
         }
 
-        override fun onVerified(book: LibraryBook, driveFileId: String, bytes: Long) {
+        override fun onVerified(book: LibraryBook, driveFileId: String, bytes: Long, md5: String) {
             TransferBus.clear(book.id)
             val now = System.currentTimeMillis()
             BookRecords.update(libraryFile, book.id) { latest ->
@@ -448,7 +448,8 @@ class UploadWorker(
                     pendingUpload = false,
                     backupFailed = false,
                     backupAt = now,
-                    backupBytes = bytes
+                    backupBytes = bytes,
+                    backupMd5 = md5
                 )
             }
             // The books this phone has confirmed are exactly the ones whose journal entry may go.

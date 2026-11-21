@@ -486,7 +486,7 @@ class UploadWorker(
         override fun onVerified(book: LibraryBook, driveFileId: String, bytes: Long, md5: String) {
             TransferBus.clear(book.id)
             val now = System.currentTimeMillis()
-            BookRecords.update(libraryFile, book.id) { latest ->
+            val saved = BookRecords.update(libraryFile, book.id) { latest ->
                 latest.copy(
                     driveFileId = driveFileId,
                     pendingUpload = false,
@@ -497,10 +497,29 @@ class UploadWorker(
                     keepOffline = if (latest.keepOfflineExplicit) latest.keepOffline else false
                 )
             }
+            if (!saved) {
+                // The Drive copy is verified, but without a durable local record the worker must
+                // leave the source bytes and queue state alone. A retry can reconcile the record.
+                UploadQueue.note(
+                    queueFile,
+                    PendingTransfer(
+                        book.id, book.title, 1, System.currentTimeMillis(),
+                        "Drive verified the book, but Lore could not save its backup record", retryable = true
+                    )
+                )
+                SyncDiag.fail("Background upload", "verified remotely; local record write failed — ${book.title}")
+                return
+            }
+            when (VerifiedUploadRetention.release(libraryFile, book.id, driveFileId, bytes, md5)) {
+                VerifiedUploadRetention.Outcome.RELEASED ->
+                    SyncDiag.mark("Background upload", "verified and local copy released — ${book.title}")
+                VerifiedUploadRetention.Outcome.KEPT_OFFLINE ->
+                    SyncDiag.mark("Background upload", "verified; explicit offline copy retained — ${book.title}")
+                else -> SyncDiag.mark("Background upload", "verified; local copy retained pending safe cleanup — ${book.title}")
+            }
             // The books this phone has confirmed are exactly the ones whose journal entry may go.
             clearJournalEntry(book.id)
             UploadQueue.remove(queueFile, book.id)
-            SyncDiag.mark("Background upload", "verified — ${book.title}")
         }
 
         override fun onFailed(book: LibraryBook, failure: DriveLibrary.TransferFailure, reachedBytes: Long) {

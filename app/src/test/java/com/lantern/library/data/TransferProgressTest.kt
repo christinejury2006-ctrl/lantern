@@ -297,6 +297,23 @@ class TransferProgressTest {
     }
 
     @Test
+    fun `a legacy stamp without a checksum does not discard its upload journal`() {
+        val file = tempFile(8_192)
+        try {
+            val legacy = book(
+                filePath = file.absolutePath,
+                driveFileId = "d",
+                backupAt = 9L,
+                backupBytes = file.length()
+            ).copy(backupMd5 = "")
+            val journal = TransferProgress.paused(legacy.id, 4_096, file.length())
+            assertEquals(ResumeDecision.RETRY, Resumable.decide(journal, legacy, file.length()))
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
     fun `a journal entry for a deleted book is dropped, not resurrected`() {
         val journal = TransferProgress.paused("gone", 100, 1_000)
         assertEquals(ResumeDecision.ALREADY_DONE, Resumable.decide(journal, null, 1_000))

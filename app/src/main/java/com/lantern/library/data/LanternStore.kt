@@ -3974,7 +3974,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     o.optBoolean("dnf", false), o.optLong("backupAt", 0L), o.optBoolean("backupFailed", false),
                     o.optLong("backupBytes", 0L), backupMd5 = o.optString("backupMd5"),
                     // Missing on older records: protect existing local downloads after upgrade.
-                    keepOffline = BookRecords.keepOffline(o)
+                    keepOffline = BookRecords.keepOffline(o),
+                    driveCoverFileId = o.optString("driveCoverFileId").ifBlank { null }
                 )
             }
         }
@@ -4013,7 +4014,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     .put("format", b.format.name).put("origin", b.origin.name).put("filePath", b.filePath ?: "").put("remoteEpub", b.remoteEpub ?: "")
                     .put("pageCount", b.pageCount).put("currentPage", b.currentPage).put("finished", b.finished).put("addedAt", b.addedAt)
                     .put("lastReadAt", b.lastReadAt).put("category", b.category).put("synopsis", b.synopsis)
-                    .put("driveFileId", b.driveFileId ?: "").put("pendingUpload", b.pendingUpload)
+                    .put("driveFileId", b.driveFileId ?: "").put("driveCoverFileId", b.driveCoverFileId ?: "")
+                    .put("pendingUpload", b.pendingUpload)
                     .put("backupAt", b.backupAt).put("backupFailed", b.backupFailed).put("dnf", b.dnf)
                     .put("backupBytes", b.backupBytes)
                     // Read back with optString, so an older library.json without this key loads

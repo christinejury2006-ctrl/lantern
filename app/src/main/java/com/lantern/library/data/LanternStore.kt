@@ -2356,12 +2356,12 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             journalProgress(book.id, totalBytes, totalBytes, force = true)
         }
 
-        override fun onVerified(book: LibraryBook, driveFileId: String, bytes: Long) {
+        override fun onVerified(book: LibraryBook, driveFileId: String, bytes: Long, md5: String) {
             TransferBus.clear(book.id)
             journalDone(book.id)
             // Independent of the rest of the batch: this book is safe as soon as it is proved.
             viewModelScope.launch(Dispatchers.Main) {
-                recordVerified(book.id, driveFileId, bytes)
+                recordVerified(book.id, driveFileId, bytes, md5)
             }
         }
 
@@ -2400,7 +2400,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     }
 
     /** Writes one book's verified outcome to its record. Idempotent, and never invents a stamp. */
-    private fun recordVerified(bookId: String, driveFileId: String, bytes: Long) {
+    private fun recordVerified(bookId: String, driveFileId: String, bytes: Long, md5: String) {
         val latest = book(bookId) ?: return
         val verifiedAt = System.currentTimeMillis()
         upsert(
@@ -2409,7 +2409,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 pendingUpload = false,
                 backupFailed = false,
                 backupAt = verifiedAt,
-                backupBytes = bytes
+                backupBytes = bytes,
+                backupMd5 = md5
             )
         )
         clearTransfer(bookId)
@@ -3829,8 +3830,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 val local = book.filePath?.let(::File) ?: return@filter false
                 local.isFile && local.length() > 0L &&
                     DownloadRules.removeBlocker(book, local.length()) == null &&
-                    (book.backupMd5.isBlank() ||
-                        BookFiles.md5(local).equals(book.backupMd5, ignoreCase = true))
+                    book.backupMd5.isNotBlank() &&
+                    BookFiles.md5(local).equals(book.backupMd5, ignoreCase = true)
             }
             .sortedWith(compareBy<LibraryBook> { it.lastReadAt }.thenByDescending {
                 it.filePath?.let { path -> File(path).length() } ?: 0L

@@ -53,6 +53,7 @@ object BookRecords {
         .put("category", book.category)
         .put("synopsis", book.synopsis)
         .put("driveFileId", book.driveFileId ?: "")
+        .put("driveCoverFileId", book.driveCoverFileId ?: "")
         .put("pendingUpload", book.pendingUpload)
         .put("backupAt", book.backupAt)
         .put("backupFailed", book.backupFailed)
@@ -96,6 +97,7 @@ object BookRecords {
             category = json.optString("category", "Library"),
             synopsis = json.optString("synopsis"),
             driveFileId = json.optString("driveFileId").ifBlank { null },
+            driveCoverFileId = json.optString("driveCoverFileId").ifBlank { null },
             pendingUpload = json.optBoolean("pendingUpload", false),
             dnf = json.optBoolean("dnf", false),
             backupAt = json.optLong("backupAt", 0L),

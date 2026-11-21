@@ -7,6 +7,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.WifiOff
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -33,7 +36,8 @@ fun BookDetailsOverlay(
     onWant: () -> Unit,
     onNotInterested: () -> Unit,
     /** Null when the book has no page to open; the button is then not drawn at all. */
-    onOpenPage: (() -> Unit)? = null
+    onOpenPage: (() -> Unit)? = null,
+    networkAvailable: Boolean = true
 ) {
     val palette = nookPalette(theme)
     BackHandler(onBack = onDismiss)
@@ -102,7 +106,14 @@ fun BookDetailsOverlay(
                 // Same door for every book that has a page somewhere: a Google Books title and an
                 // Explore result behave identically when tapped.
                 GlassSurface(palette, Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), onClick = onOpenPage) {
-                    Text("Open Book Page", color = palette.ink, fontSize = 14.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(vertical = 13.dp))
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 13.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (!networkAvailable) Icon(Icons.Filled.WifiOff, "This action needs internet", tint = palette.mute, modifier = Modifier.size(15.dp))
+                        Text("Open Book Page", color = palette.ink, fontSize = 14.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center, modifier = Modifier.padding(start = 6.dp))
+                    }
                 }
             }
             Spacer(Modifier.height(8.dp))

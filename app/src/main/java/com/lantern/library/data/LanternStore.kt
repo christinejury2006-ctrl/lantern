@@ -2485,6 +2485,22 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             "${latest.title} is safely backed up to your account.",
             "backup:${bookId}:$verifiedAt", "library"
         )
+        // Cloud is the permanent copy. Unless the reader explicitly pinned this book offline,
+        // release the phone original only through DownloadService's full Drive + checksum recheck.
+        if (!(latest.keepOfflineExplicit && latest.keepOffline)) {
+            viewModelScope.launch(Dispatchers.IO) {
+                when (val outcome = downloadService.removeDownload(bookId, notify = false)) {
+                    is RemoveOutcome.Removed ->
+                        SyncDiag.mark("Book cache", "released verified local copy — ${latest.title}")
+                    is RemoveOutcome.AlreadyRemoved -> Unit
+                    else -> SyncDiag.mark(
+                        "Book cache",
+                        "kept local copy after backup; safe removal was not confirmed — ${latest.title}"
+                    )
+                }
+                withContext(Dispatchers.Main) { refreshBackupAudit() }
+            }
+        }
     }
 
     /** What one batch managed to confirm (id -> bytes) and what failed, with reasons. */

@@ -299,12 +299,20 @@ object AccountSync {
         val keptId = if (keepLocalDriveReference) local.driveFileId else cloud.driveFileId
         val backupSource = when {
             keptId.isNullOrBlank() -> null
-            local.driveFileId == keptId && cloud.driveFileId == keptId ->
-                if (local.backupAt >= cloud.backupAt) local else cloud
+            local.driveFileId == keptId && cloud.driveFileId == keptId -> when {
+                localHasConfirmedCopy && cloudHasConfirmedCopy ->
+                    if (local.backupAt >= cloud.backupAt) local else cloud
+                localHasConfirmedCopy -> local
+                cloudHasConfirmedCopy -> cloud
+                local.backupAt >= cloud.backupAt -> local
+                else -> cloud
+            }
             local.driveFileId == keptId -> local
             cloud.driveFileId == keptId -> cloud
             else -> null
         }
+        val backupSourceConfirmed = backupSource != null &&
+            backupSource.backupAt > 0L && !backupSource.pendingUpload && !backupSource.backupFailed
         return local.copy(
             title = if (fileOk || local.title.isNotBlank()) local.title.ifBlank { cloud.title } else cloud.title,
             author = if (fileOk) local.author.ifBlank { cloud.author } else local.author.ifBlank { cloud.author },
@@ -336,8 +344,8 @@ object AccountSync {
             // sides point at the same file, either side's stamp counts; if only one side has an
             // id, only that side's stamp is evidence.
             backupAt = backupSource?.backupAt ?: 0L,
-            pendingUpload = if ((backupSource?.backupAt ?: 0L) > 0L) false else local.pendingUpload || cloud.pendingUpload,
-            backupFailed = if ((backupSource?.backupAt ?: 0L) > 0L) false else local.backupFailed || cloud.backupFailed,
+            pendingUpload = if (backupSourceConfirmed) false else local.pendingUpload || cloud.pendingUpload,
+            backupFailed = if (backupSourceConfirmed) false else local.backupFailed || cloud.backupFailed,
             dnf = local.dnf || cloud.dnf,
             // The size is evidence about the same bytes as the stamp: take it from whichever side
             // the stamp came from, never from the other one.

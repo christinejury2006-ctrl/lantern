@@ -300,6 +300,14 @@ object AccountSync {
             synopsis = local.synopsis.ifBlank { cloud.synopsis },
             driveFileId = keptId,
             driveCoverFileId = local.driveCoverFileId ?: cloud.driveCoverFileId,
+            // An explicit retention choice must travel across devices. Prefer this device's
+            // explicit choice when both sides have one; otherwise inherit the other side's.
+            keepOffline = when {
+                local.keepOfflineExplicit -> local.keepOffline
+                cloud.keepOfflineExplicit -> cloud.keepOffline
+                else -> local.keepOffline || cloud.keepOffline
+            },
+            keepOfflineExplicit = local.keepOfflineExplicit || cloud.keepOfflineExplicit,
             // A confirmation is only meaningful for the file id it was issued against. If the two
             // sides point at the same file, either side's stamp counts; if only one side has an
             // id, only that side's stamp is evidence.

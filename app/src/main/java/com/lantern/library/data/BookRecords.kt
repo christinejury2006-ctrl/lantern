@@ -23,8 +23,9 @@ object BookRecords {
     /**
      * Backward-compatible retention migration.
      *
-     * Older records did not store the reader's offline choice. Treat them as cache-managed only
-     * when the record already proves a completed Drive backup; otherwise preserve the local copy.
+     * Older builds sometimes persisted the default true value without a reader choice. Only
+     * the explicit-choice marker makes a pin permanent; an unmarked legacy true migrates to
+     * managed cache after a size-and-checksum-confirmed Drive backup. Unverified files stay local.
      */
     fun keepOffline(json: JSONObject): Boolean {
         // Only an explicit reader choice is permanent. Older versions wrote the default true

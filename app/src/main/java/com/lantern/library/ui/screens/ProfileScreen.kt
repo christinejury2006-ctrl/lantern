@@ -136,6 +136,7 @@ fun ProfileScreen(
                     }
                     Spacer(Modifier.height(12.dp))
                     StorageLine("Books and restored downloads", storage.booksSize(), palette)
+                    StorageLine("Regenerable EPUB media", storage.derivedMediaSize(), palette)
                     StorageLine("Extracted covers", storage.coversSize(), palette)
                     StorageLine("Cloud transfer files", storage.cloudSize(), palette)
                     StorageLine("Temporary cache", storage.cacheSize(), palette)

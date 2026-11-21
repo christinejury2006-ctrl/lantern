@@ -274,7 +274,8 @@ class UploadPool(
         val sent = uploadSlots.withPermit {
             val existing = book.driveFileId
             val priorSizeConfirmation = book.backupAt > 0L &&
-                book.backupBytes == total && !book.pendingUpload && !book.backupFailed
+                (book.backupBytes <= 0L || book.backupBytes == total) &&
+                !book.pendingUpload && !book.backupFailed
             if (!existing.isNullOrBlank() && priorSizeConfirmation &&
                 DriveLibrary.remoteMatches(token, existing, file, sourceMd5) == true
             ) {

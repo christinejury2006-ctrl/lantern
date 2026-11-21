@@ -686,7 +686,13 @@ class UploadPoolTest {
         // A book deleted while we were away is never resurrected by its own journal.
         assertEquals(ResumeDecision.ALREADY_DONE, Resumable.decide(back, null, 0L))
         // And a signed, verified backup of exactly these bytes needs nothing.
-        val done = a.copy(backupAt = 1L, backupBytes = File(a.filePath!!).length(), backupFailed = false)
+        val doneFile = File(a.filePath!!)
+        val done = a.copy(
+            backupAt = 1L,
+            backupBytes = doneFile.length(),
+            backupMd5 = BookFiles.md5(doneFile),
+            backupFailed = false
+        )
         assertEquals(ResumeDecision.ALREADY_DONE, Resumable.decide(back, done, File(a.filePath!!).length()))
 
         // One entry per book, whatever order or repetition the journal is fed.

@@ -2503,7 +2503,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         )
         // Cloud is the permanent copy. Unless the reader explicitly pinned this book offline,
         // release the phone original only through DownloadService's full Drive + checksum recheck.
-        if (!(latest.keepOfflineExplicit && latest.keepOffline)) {
+        val openedAt = recentBookOpens[bookId] ?: 0L
+        val withinReadingGrace = (openedAt > 0L && System.currentTimeMillis() - openedAt < 30L * 60L * 1000L) ||
+            (latest.lastReadAt > 0L && System.currentTimeMillis() - latest.lastReadAt < 30L * 60L * 1000L)
+        if (!(latest.keepOfflineExplicit && latest.keepOffline) && !withinReadingGrace) {
             viewModelScope.launch(Dispatchers.IO) {
                 when (val outcome = downloadService.removeDownload(bookId, notify = false)) {
                     is RemoveOutcome.Removed ->

@@ -158,6 +158,16 @@ class AccountSyncMergeTest {
     }
 
     @Test
+    fun `explicit offline retention survives cloud snapshot serialization`() {
+        val pinned = book("a").copy(keepOffline = true, keepOfflineExplicit = true)
+        val encoded = AccountSync.toJson(snapshot(listOf(pinned)))
+        val decoded = AccountSync.fromJson(encoded)!!.books.single()
+
+        assertEquals(true, decoded.keepOffline)
+        assertEquals(true, decoded.keepOfflineExplicit)
+    }
+
+    @Test
     fun `cover and checksum references survive account serialization and cross-device merges`() {
         val checksum = "fedcba9876543210fedcba9876543210"
         val local = snapshot(

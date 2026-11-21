@@ -26,6 +26,7 @@ class OfflineRetentionTest {
     fun `new books start as managed cache rather than pinned offline downloads`() {
         val fresh = book()
         assertFalse(fresh.keepOffline)
+        assertFalse(BookRecords.decode(BookRecords.encode(fresh))!!.keepOffline)
     }
 
     @Test

@@ -338,6 +338,28 @@ class UploadPoolTest {
     // 1 -------------------------------------------------------------------------------------
 
     @Test
+    fun `a legacy backup without a saved size is checksum-confirmed without retransmitting`() {
+        val bytes = epubBytes("already backed up")
+        val file = write("legacy.epub", bytes)
+        val existingId = "drive-legacy"
+        val legacy = book("legacy", file).copy(
+            driveFileId = existingId,
+            backupAt = 1_700_000_000_000L,
+            backupBytes = 0L,
+            backupMd5 = ""
+        )
+        drive.files[existingId] = bytes
+        drive.loreIds[existingId] = legacy.id
+
+        val result = run(listOf(legacy))
+
+        assertEquals(setOf(legacy.id), result.confirmed.keys)
+        assertEquals("The existing Drive file should be reused", 0, drive.creates.get())
+        assertEquals("No media replacement should be needed", 0, drive.replaces.get())
+        assertTrue("The upload transport must not be entered", drive.uploadOrder.isEmpty())
+    }
+
+    @Test
     fun `two books transfer at the same time`() {
         val a = book("a", write("a.epub", epubBytes("a")))
         val b = book("b", write("b.epub", epubBytes("b")))

@@ -98,6 +98,28 @@ class AccountSyncMergeTest {
     }
 
     @Test
+    fun `explicit offline retention choice follows the account to a new device`() {
+        val local = book("a").copy(keepOffline = false, keepOfflineExplicit = false)
+        val cloud = book("a").copy(keepOffline = true, keepOfflineExplicit = true)
+
+        val merged = AccountSync.merge(snapshot(listOf(local)), snapshot(listOf(cloud))).books.single()
+
+        assertEquals(true, merged.keepOffline)
+        assertEquals(true, merged.keepOfflineExplicit)
+    }
+
+    @Test
+    fun `this device explicit offline choice wins over a stale cloud choice`() {
+        val local = book("a").copy(keepOffline = false, keepOfflineExplicit = true)
+        val cloud = book("a").copy(keepOffline = true, keepOfflineExplicit = true)
+
+        val merged = AccountSync.merge(snapshot(listOf(local)), snapshot(listOf(cloud))).books.single()
+
+        assertEquals(false, merged.keepOffline)
+        assertEquals(true, merged.keepOfflineExplicit)
+    }
+
+    @Test
     fun `syncing twice changes nothing the second time`() {
         val local = snapshot(listOf(book("a", page = 10, lastRead = 500L), book("b")))
         val cloud = snapshot(listOf(book("a", page = 3, lastRead = 100L), book("c")))

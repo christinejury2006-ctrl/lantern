@@ -786,8 +786,8 @@ private fun SheetButton(
         contentAlignment = Alignment.Center
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-            if (needsNetwork && !enabled) Icon(Icons.Filled.WifiOff, "This action needs internet", tint = palette.mute, modifier = Modifier.size(14.dp))
-            Text(label, color = if (enabled) ink else palette.mute, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = if (needsNetwork && !enabled) 6.dp else 0.dp))
+            if (needsNetwork && !enabled) Icon(Icons.Filled.WifiOff, "This action needs internet", tint = ink.copy(alpha = 0.55f), modifier = Modifier.size(14.dp))
+            Text(label, color = if (enabled) ink else ink.copy(alpha = 0.55f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = if (needsNetwork && !enabled) 6.dp else 0.dp))
         }
     }
 }

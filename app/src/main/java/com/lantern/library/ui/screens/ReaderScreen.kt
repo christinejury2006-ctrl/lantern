@@ -334,8 +334,11 @@ fun ReaderScreen(
     // PDF reader, where a scanned page *is* the unit; for text there is one way to read it.
     val epubUsesPager = book.format != BookFormat.PDF
     val pdfUsesPager = book.format == BookFormat.PDF && prefs.swipeMode
-    val pdfSession = remember(book.id, book.filePath, pdfUsesPager) {
-        if (book.format == BookFormat.PDF && !pdfUsesPager)
+    // One renderer session per open PDF, shared by both pager and scrolling modes.
+    // Opening a fresh PdfRenderer for every pager page can race as neighbouring pages enter
+    // and leave composition; Android PdfRenderer also requires page access to be serialized.
+    val pdfSession = remember(book.id, book.filePath) {
+        if (book.format == BookFormat.PDF)
             book.filePath?.let { PdfDocSession(File(it)) }
         else null
     }
@@ -1217,12 +1220,13 @@ private fun PdfPageImage(
     fillViewport: Boolean,
     session: PdfDocSession? = null
 ) {
-    var bmp by remember(path, index) { mutableStateOf<Bitmap?>(null) }
+    var bmp by remember(path, index, session) { mutableStateOf<Bitmap?>(null) }
     var aspect by remember(path, index, session) {
         mutableStateOf(session?.cachedAspect(index) ?: session?.typicalAspect ?: (1f / 1.294f))
     }
     LaunchedEffect(path, index, session, fillViewport) {
-        if (fillViewport || session == null) {
+        bmp = null
+        if (session == null) {
             bmp = withContext(Dispatchers.IO) {
                 path?.let { File(it) }?.takeIf { it.exists() }?.let { renderPdf(it, index) }
             }

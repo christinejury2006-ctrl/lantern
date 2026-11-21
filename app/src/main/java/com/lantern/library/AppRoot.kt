@@ -306,7 +306,13 @@ internal fun LanternRoot(store: LanternStore) {
             request.target == "profile" || request.target == "account" -> tab = Route.Profile
             request.target.startsWith("reader:") -> {
                 val id = request.target.removePrefix("reader:")
-                if (store.book(id) != null) { readerBack = Route.Home; tab = Route.Reader(id) } else return@LaunchedEffect
+                val targetBook = store.book(id) ?: return@LaunchedEffect
+                if (!targetBook.localFileAvailable && !networkAvailable) {
+                    store.toast("This book needs internet to restore to this phone.")
+                } else {
+                    readerBack = Route.Home
+                    tab = Route.Reader(id)
+                }
             }
             else -> tab = Route.Notifications
         }
@@ -452,7 +458,15 @@ internal fun LanternRoot(store: LanternStore) {
                                     target == "profile" || target == "account" -> tab = Route.Profile
                                     target.startsWith("reader:") -> {
                                         val id = target.removePrefix("reader:")
-                                        if (store.book(id) != null) { readerBack = Route.Home; tab = Route.Reader(id) }
+                                        val targetBook = store.book(id)
+                                        if (targetBook != null) {
+                                            if (!targetBook.localFileAvailable && !networkAvailable) {
+                                                store.toast("This book needs internet to restore to this phone.")
+                                            } else {
+                                                readerBack = Route.Home
+                                                tab = Route.Reader(id)
+                                            }
+                                        }
                                     }
                                     else -> tab = Route.Home
                                 }

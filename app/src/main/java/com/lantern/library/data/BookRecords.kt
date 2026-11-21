@@ -33,6 +33,10 @@ object BookRecords {
         if (json.optBoolean("keepOfflineExplicit", false)) {
             return json.optBoolean("keepOffline", true)
         }
+        // New records already persist false as the managed-cache default. Only legacy true (or
+        // absent) values need the backup-proof migration.
+        val storedChoice = json.optBoolean("keepOffline", true)
+        if (!storedChoice) return false
         val hasVerifiedRemoteCopy =
             json.optLong("backupAt", 0L) > 0L &&
                 !json.optBoolean("pendingUpload", false) &&

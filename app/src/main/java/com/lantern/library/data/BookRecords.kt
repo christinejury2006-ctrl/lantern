@@ -225,6 +225,13 @@ object VerifiedUploadRetention {
             (before.format != BookFormat.PDF && before.format != BookFormat.EPUB)) {
             return Outcome.NOT_ELIGIBLE
         }
+        // The durable record must describe this exact verified upload, not merely some older
+        // backup or a stale Drive id left behind by a failed replacement.
+        if (before.driveFileId != driveFileId || before.backupAt <= 0L ||
+            before.backupBytes != bytes || !before.backupMd5.equals(md5, ignoreCase = true) ||
+            before.pendingUpload || before.backupFailed) {
+            return Outcome.METADATA_FAILED
+        }
         val path = before.filePath ?: return Outcome.NOT_ELIGIBLE
         val local = File(path)
         if (!local.isFile || local.length() != bytes || bytes <= 0L ||

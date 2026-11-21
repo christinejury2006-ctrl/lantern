@@ -140,6 +140,7 @@ fun ProfileScreen(
                     StorageLine("Regenerable EPUB media", storage.derivedMediaSize(), palette)
                     StorageLine("Extracted covers", storage.coversSize(), palette)
                     StorageLine("Cloud transfer files", storage.cloudSize(), palette)
+                    StorageLine("Interrupted / temporary files", storage.temporarySize(), palette)
                     StorageLine("Temporary cache", storage.cacheSize(), palette)
                     StorageLine("App data and settings", storage.internalSize(), palette)
                     StorageLine("Other app files", storage.otherSize(), palette)

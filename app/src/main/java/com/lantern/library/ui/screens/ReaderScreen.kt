@@ -1246,7 +1246,7 @@ private fun PdfPageImage(
     }
     val image = bmp
     if (image != null && !image.isRecycled) {
-        val drawn = (image.width.toFloat() / image.height.toFloat()).coerceIn(0.4f, 2.2f)
+        val drawn = (image.width.toFloat() / image.height.toFloat()).coerceAtLeast(0.05f)
         Image(
             image.asImageBitmap(),
             contentDescription = "Page ${index + 1}",
@@ -1277,7 +1277,7 @@ private class PdfDocSession(private val file: File) {
             val r = openLocked() ?: return@run null
             if (index !in 0 until r.pageCount) return@run null
             val page = r.openPage(index)
-            val a = (page.width.toFloat() / page.height.toFloat()).coerceIn(0.4f, 2.2f)
+            val a = (page.width.toFloat() / page.height.toFloat()).coerceAtLeast(0.05f)
             page.close()
             aspects[index] = a
             typicalAspect = a

@@ -217,6 +217,19 @@ object VerifiedUploadRetention {
         driveFileId: String,
         bytes: Long,
         md5: String
+    ): Outcome = synchronized(libraryFile.absolutePath.intern()) {
+        // Hold the same per-profile lock as the foreground shelf writer across the final pin
+        // check, metadata transition and physical deletion. A simultaneous Keep Offline tap must
+        // win or lose as one ordered operation, never race the delete.
+        releaseLocked(libraryFile, bookId, driveFileId, bytes, md5)
+    }
+
+    private fun releaseLocked(
+        libraryFile: File,
+        bookId: String,
+        driveFileId: String,
+        bytes: Long,
+        md5: String
     ): Outcome {
         val before = BookRecords.read(libraryFile).firstOrNull { it.id == bookId }
             ?: return Outcome.NOT_ELIGIBLE

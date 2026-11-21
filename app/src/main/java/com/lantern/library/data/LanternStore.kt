@@ -2783,7 +2783,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             }
             DriveOutcome.Ok(Triple(ids, paths, failed))
         }
-        val value = (outcomes as? DriveOutcome.Ok)?.value ?: return snapshot
+        val value = when (outcomes) {
+            is DriveOutcome.Ok -> outcomes.value
+            else -> return snapshot
+        }
         val (ids, paths, failed) = value
         withContext(Dispatchers.Main) {
             synchronized(libraryLock) {

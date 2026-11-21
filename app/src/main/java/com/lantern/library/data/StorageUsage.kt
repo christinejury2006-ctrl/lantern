@@ -3,6 +3,8 @@ package com.lantern.library.data
 import android.content.Context
 import java.io.File
 
+data class StorageFileEntry(val path: String, val name: String, val bytes: Long, val category: String)
+
 data class StorageUsageSnapshot(
     val bytes: Long,
     val files: Int,
@@ -12,7 +14,8 @@ data class StorageUsageSnapshot(
     val cloudBytes: Long = 0L,
     val cacheBytes: Long = 0L,
     val internalBytes: Long = 0L,
-    val otherBytes: Long = 0L
+    val otherBytes: Long = 0L,
+    val largestFiles: List<StorageFileEntry> = emptyList()
 ) {
     fun displaySize(): String = formatBytes(bytes)
     fun booksSize(): String = formatBytes(bookBytes)
@@ -56,6 +59,7 @@ object StorageUsage {
         var cache = 0L
         var internal = 0L
         var other = 0L
+        val entries = ArrayList<StorageFileEntry>()
 
         fun add(root: File?) {
             if (root == null || !root.exists()) return
@@ -64,16 +68,38 @@ object StorageUsage {
                     val size = runCatching { file.length() }.getOrDefault(0L).coerceAtLeast(0L)
                     total = saturatingAdd(total, size)
                     count++
-                    when {
-                        isDerivedMediaFile(file, externalFilesRoot) -> derivedMedia = saturatingAdd(derivedMedia, size)
-                        classifyFile(file, externalFilesRoot, "books") -> books = saturatingAdd(books, size)
-                        classifyFile(file, externalFilesRoot, "covers") -> covers = saturatingAdd(covers, size)
-                        classifyFile(file, externalFilesRoot, "cloud") -> cloud = saturatingAdd(cloud, size)
+                    val category = when {
+                        isDerivedMediaFile(file, externalFilesRoot) -> {
+                            derivedMedia = saturatingAdd(derivedMedia, size)
+                            "EPUB media"
+                        }
+                        classifyFile(file, externalFilesRoot, "books") -> {
+                            books = saturatingAdd(books, size)
+                            "Book"
+                        }
+                        classifyFile(file, externalFilesRoot, "covers") -> {
+                            covers = saturatingAdd(covers, size)
+                            "Cover"
+                        }
+                        classifyFile(file, externalFilesRoot, "cloud") -> {
+                            cloud = saturatingAdd(cloud, size)
+                            "Cloud transfer"
+                        }
                         root == externalCacheRoot || isInside(file, File(internalRoot, "cache")) ||
-                            isInside(file, File(internalRoot, "code_cache")) -> cache = saturatingAdd(cache, size)
-                        root == internalRoot -> internal = saturatingAdd(internal, size)
-                        else -> other = saturatingAdd(other, size)
+                            isInside(file, File(internalRoot, "code_cache")) -> {
+                            cache = saturatingAdd(cache, size)
+                            "Cache"
+                        }
+                        root == internalRoot -> {
+                            internal = saturatingAdd(internal, size)
+                            "App data"
+                        }
+                        else -> {
+                            other = saturatingAdd(other, size)
+                            "Other"
+                        }
                     }
+                    entries += StorageFileEntry(file.absolutePath, file.name, size, category)
                 }
             }
         }
@@ -83,7 +109,10 @@ object StorageUsage {
         add(externalFilesRoot)
         add(externalCacheRoot)
 
-        return StorageUsageSnapshot(total, count, books, derivedMedia, covers, cloud, cache, internal, other)
+        return StorageUsageSnapshot(
+            total, count, books, derivedMedia, covers, cloud, cache, internal, other,
+            entries.sortedByDescending { it.bytes }.take(8)
+        )
     }
 
     private fun isInside(file: File, directory: File): Boolean = runCatching {

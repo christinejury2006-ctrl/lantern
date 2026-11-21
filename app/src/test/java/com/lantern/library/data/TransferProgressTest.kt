@@ -42,7 +42,28 @@ class TransferProgressTest {
 
     // ---------------------------------------------------------------- percentage
 
-    @Test
+        @Test
+    fun `backup counts respect queued failed and paused transfer states`() {
+        val file = write("audit.epub", epubBytes("audit"))
+        val queuedBook = book(id = "queued", filePath = file.absolutePath)
+        val failedBook = book(id = "failed", filePath = file.absolutePath)
+        val pausedBook = book(id = "paused", filePath = file.absolutePath)
+        val counts = BackupAudit.counts(
+            listOf(queuedBook, failedBook, pausedBook),
+            uploading = emptySet(),
+            online = true,
+            queued = setOf("queued"),
+            transfers = mapOf(
+                "failed" to TransferProgress.failed("failed", "network error"),
+                "paused" to TransferProgress.paused("paused", 0L, 100L)
+            )
+        )
+        assertEquals(2, counts.pending)
+        assertEquals(1, counts.failed)
+        assertEquals(0, counts.verified)
+    }
+
+@Test
     fun `percentage is measured from transferred bytes`() {
         assertEquals(0, Transfers.percent(0, 1_000))
         assertEquals(1, Transfers.percent(10, 1_000))

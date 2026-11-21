@@ -449,7 +449,8 @@ class UploadWorker(
                     backupFailed = false,
                     backupAt = now,
                     backupBytes = bytes,
-                    backupMd5 = md5
+                    backupMd5 = md5,
+                    keepOffline = if (latest.keepOfflineExplicit) latest.keepOffline else false
                 )
             }
             // The books this phone has confirmed are exactly the ones whose journal entry may go.

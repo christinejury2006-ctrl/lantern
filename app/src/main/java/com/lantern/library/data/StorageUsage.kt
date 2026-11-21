@@ -82,9 +82,15 @@ object StorageUsage {
         return StorageUsageSnapshot(total, count, books, covers, cloud, cache, internal, other)
     }
 
-    private fun isInside(file: File, directory: File): Boolean =
-        runCatching { file.canonicalFile.toPath().startsWith(directory.canonicalFile.toPath()) }
-            .getOrDefault(false)
+    private fun isInside(file: File, directory: File): Boolean = runCatching {
+        val target = directory.canonicalFile
+        var current: File? = file.canonicalFile
+        while (current != null) {
+            if (current == target) return@runCatching true
+            current = current.parentFile
+        }
+        false
+    }.getOrDefault(false)
 
     private fun classifyFile(file: File, externalRoot: File?, bucket: String): Boolean {
         if (externalRoot == null) return false

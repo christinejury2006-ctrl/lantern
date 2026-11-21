@@ -284,3 +284,17 @@ object VerifiedUploadRetention {
         return Outcome.DELETE_FAILED
     }
 }
+
+
+/** In-process notification that a background worker released bytes for an active profile. */
+object LocalBookRetentionEvents {
+    data class Released(val namespace: String, val bookId: String)
+
+    private val events = kotlinx.coroutines.flow.MutableSharedFlow<Released>(extraBufferCapacity = 32)
+
+    val released: kotlinx.coroutines.flow.SharedFlow<Released> = events
+
+    fun post(namespace: String, bookId: String) {
+        events.tryEmit(Released(namespace, bookId))
+    }
+}

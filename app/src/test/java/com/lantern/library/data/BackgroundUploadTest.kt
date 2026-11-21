@@ -196,7 +196,10 @@ class BackgroundUploadTest {
         val now = 1_700_000_000_500L
         assertTrue(
             BookRecords.update(library, "book-1") { latest ->
-                latest.copy(driveFileId = "drive-1", pendingUpload = false, backupAt = now, backupBytes = 42L)
+                latest.copy(
+                    driveFileId = "drive-1", pendingUpload = false, backupAt = now,
+                    backupBytes = 42L, backupMd5 = "a".repeat(32)
+                )
             }
         )
         val books = BookRecords.read(library)
@@ -218,13 +221,16 @@ class BackgroundUploadTest {
                 book("pending", driveFileId = "drive-1", backupAt = 0L),
                 book("failed", driveFileId = "drive-1", backupAt = 9L, backupFailed = true),
                 book("queued", driveFileId = "drive-1", backupAt = 9L, pendingUpload = true),
+                book("legacy", driveFileId = "drive-1", backupAt = 9L),
                 book("done", driveFileId = "drive-1", backupAt = 9L)
+                    .copy(backupBytes = 42L, backupMd5 = "a".repeat(32))
             )
         )
         val byId = BookRecords.read(library).associateBy { it.id }
         assertFalse(byId.getValue("pending").isBackedUp())
         assertFalse(byId.getValue("failed").isBackedUp())
         assertFalse(byId.getValue("queued").isBackedUp())
+        assertFalse("a legacy stamp without a persisted checksum is not yet verified", byId.getValue("legacy").isBackedUp())
         assertTrue(byId.getValue("done").isBackedUp())
     }
 

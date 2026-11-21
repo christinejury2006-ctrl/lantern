@@ -437,16 +437,24 @@ internal fun LanternRoot(store: LanternStore) {
                             // Borrow and "open the record" links leave for the browser: the point of them
                             // is that the book is read where it is legally lent, not copied here.
                             onOpenLink = { url ->
-                                runCatching {
-                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                                }.onFailure { store.toast("No app can open that link") }
+                                if (!networkAvailable) {
+                                    store.toast("This link needs an internet connection.")
+                                } else {
+                                    runCatching {
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                                    }.onFailure { store.toast("No app can open that link") }
+                                }
                             },
                             onDownload = { edition ->
-                                // Straight from the catalogue into the library, then straight into the
-                                // reader: the reader asked for a book, not for a file manager.
-                                readerBack = Route.Search
-                                store.fetchEdition(edition) { ready ->
-                                    tab = Route.Reader(ready.id)
+                                if (!networkAvailable) {
+                                    store.toast("Downloading a book needs an internet connection.")
+                                } else {
+                                    // Straight from the catalogue into the library, then straight into the
+                                    // reader: the reader asked for a book, not for a file manager.
+                                    readerBack = Route.Search
+                                    store.fetchEdition(edition) { ready ->
+                                        tab = Route.Reader(ready.id)
+                                    }
                                 }
                             }
                         )

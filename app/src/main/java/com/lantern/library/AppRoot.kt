@@ -2,6 +2,10 @@ package com.lantern.library
 
 import android.app.Activity
 import android.content.Intent
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,11 +29,14 @@ import androidx.compose.material.icons.filled.Create
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
@@ -106,6 +113,17 @@ internal fun LanternRoot(store: LanternStore) {
     var details by remember { mutableStateOf<DiscoveryBook?>(null) }
     val theme = store.readingPrefs.theme
     val context = LocalContext.current
+    val networkAvailable = rememberInternetAvailable()
+    var wasOnline by remember { mutableStateOf(networkAvailable) }
+    var connectionRestored by remember { mutableStateOf(false) }
+    LaunchedEffect(networkAvailable) {
+        if (networkAvailable && !wasOnline) {
+            connectionRestored = true
+            kotlinx.coroutines.delay(2_000L)
+            connectionRestored = false
+        }
+        wasOnline = networkAvailable
+    }
     val scope = rememberCoroutineScope()
     val activity = context as Activity
     // Multi-select: the picker can return several documents at once, and they are grouped by
@@ -336,6 +354,8 @@ internal fun LanternRoot(store: LanternStore) {
                             transfers = com.lantern.library.data.TransferBus.states,
                             queueReasons = store.uploadQueueReasons,
                             online = store.account.driveConnected,
+                            networkAvailable = networkAvailable,
+                            connectionRestored = connectionRestored,
                             onRetryBackup = { id -> store.retryBook(id) },
                             onRemoveDownload = { id -> store.removeDownload(id) },
                             onRestoreDownload = { id -> store.restoreDownload(id) },
@@ -382,6 +402,7 @@ internal fun LanternRoot(store: LanternStore) {
                         )
                         Route.Search -> SearchScreen(
                             theme = theme,
+                            networkAvailable = networkAvailable,
                             fetchingId = store.fetchingEditionId,
                             onOpen = { remote -> getDiscovery(remote) },
                             // Borrow and "open the record" links leave for the browser: the point of them
@@ -535,6 +556,46 @@ private fun BottomBar(theme: ReaderTheme, current: Route, onTab: (Route) -> Unit
         },
         modifier = modifier
     )
+}
+
+/**
+ * Reports a genuinely usable internet connection, not merely an attached Wi-Fi/cellular radio.
+ * VALIDATED avoids telling the reader that the network is back while captive portals or dead
+ * connections are still blocking requests.
+ */
+@Composable
+private fun rememberInternetAvailable(): Boolean {
+    val context = LocalContext.current.applicationContext
+    fun currentAvailability(): Boolean {
+        val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return false
+        val network = manager.activeNetwork ?: return false
+        val capabilities = manager.getNetworkCapabilities(network) ?: return false
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    }
+    var available by remember(context) { mutableStateOf(currentAvailability()) }
+    DisposableEffect(context) {
+        val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                available = currentAvailability()
+            }
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                available = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            }
+            override fun onLost(network: Network) {
+                available = currentAvailability()
+            }
+            override fun onUnavailable() {
+                available = false
+            }
+        }
+        runCatching { manager?.registerDefaultNetworkCallback(callback) }
+        onDispose { runCatching { manager?.unregisterNetworkCallback(callback) } }
+    }
+    return available
 }
 
 /** A Google sign-in failure that is the console's, not the code's, and what to do about it. */

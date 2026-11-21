@@ -223,6 +223,40 @@ fun ProfileScreen(
                 }
             }
 
+            Spacer(Modifier.height(22.dp))
+            NookSectionTitle("Backup data use", palette)
+            Spacer(Modifier.height(10.dp))
+            GlassSurface(
+                palette,
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                shape = RoundedCornerShape(22.dp)
+            ) {
+                Column(Modifier.padding(18.dp)) {
+                    Text(
+                        "Book backups can be large. Lore uses Wi-Fi by default and keeps cellular uploads off unless you allow them here.",
+                        color = palette.mute,
+                        fontSize = 12.sp
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    NookChip(
+                        palette,
+                        if (prefs.useMobileData) "Mobile data allowed" else "Wi-Fi only",
+                        prefs.useMobileData
+                    ) {
+                        onPrefs(prefs.copy(useMobileData = !prefs.useMobileData))
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        if (prefs.useMobileData)
+                            "Backups may use Wi-Fi or mobile data."
+                        else
+                            "Queued backups wait for an unmetered connection. Opening a cloud-only book still needs an internet connection.",
+                        color = palette.faint,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+
             // The four numbers, and nothing else. Whatever is not in the first two is named on the
             // remainder line, so the reader can add them up and get the shelf total.
             if (account.signedIn && account.driveConnected) {

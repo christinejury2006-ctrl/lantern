@@ -1,6 +1,9 @@
 package com.lantern.library.data
 
 import android.content.Context
+import android.app.Application
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -236,6 +239,27 @@ object UploadJobs {
         .build()
 }
 
+/**
+ * Shared network policy for foreground and durable uploads.
+ *
+ * Backups are large files, so a fresh install starts on unmetered networks only. Readers can
+ * explicitly allow cellular data in Profile. WorkManager constraints are the first guard; this
+ * runtime check is the second guard for workers that wake during a network transition.
+ */
+object UploadNetworkPolicy {
+    fun requiredNetworkType(allowMobileData: Boolean): NetworkType =
+        if (allowMobileData) NetworkType.CONNECTED else NetworkType.UNMETERED
+
+    fun isUnmetered(context: Context): Boolean {
+        val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return false
+        val network = manager.activeNetwork ?: return false
+        val capabilities = manager.getNetworkCapabilities(network) ?: return false
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+    }
+}
+
 /** Queues and cancels the durable uploads. The only place that talks to WorkManager. */
 object UploadScheduler {
 
@@ -250,11 +274,15 @@ object UploadScheduler {
         val account = accountId?.trim().orEmpty()
         if (account.isEmpty()) return
         if (!Profiles.isValidNamespace(namespace)) return
+        val allowMobileData = ProfileStore(context.applicationContext as Application)
+            .preferences(namespace).getBoolean("mobile", false)
         val request = OneTimeWorkRequestBuilder<UploadWorker>()
             .setInputData(UploadJobs.data(namespace, account, bookId))
             .setConstraints(
                 Constraints.Builder()
-                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .setRequiredNetworkType(
+                        UploadNetworkPolicy.requiredNetworkType(allowMobileData)
+                    )
                     .build()
             )
             // A book that failed on a bad connection should not hammer the account: exponential
@@ -290,6 +318,14 @@ object UploadScheduler {
         if (account.isEmpty()) return
         runCatching {
             WorkManager.getInstance(context).cancelAllWorkByTag(UploadJobs.accountTag(account))
+        }
+    }
+
+    /** Cancels queued jobs for one library so changed network preferences can requeue them. */
+    fun cancelNamespace(context: Context, namespace: String) {
+        if (!Profiles.isValidNamespace(namespace)) return
+        runCatching {
+            WorkManager.getInstance(context).cancelAllWorkByTag(UploadJobs.namespaceTag(namespace))
         }
     }
 
@@ -347,6 +383,14 @@ class UploadWorker(
         val libraryFile = profiles.file(namespace, "library.json")
         val journalFile = profiles.file(namespace, "upload_journal.json")
         val prefs = profiles.preferences(namespace)
+
+        // Constraints can become stale while a worker is waking. Never send bytes over a
+        // metered connection when the reader has not opted in.
+        val allowMobileData = prefs.getBoolean("mobile", false)
+        if (!allowMobileData && !UploadNetworkPolicy.isUnmetered(applicationContext)) {
+            SyncDiag.mark("Background upload", "waiting for Wi-Fi; mobile-data backups are disabled")
+            return@withContext Result.retry()
+        }
 
         // The reader's own pause wins over any scheduler: a paused book must not start because a
         // worker happened to wake up.

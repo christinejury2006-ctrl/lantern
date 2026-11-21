@@ -37,18 +37,33 @@ class OfflineRetentionTest {
     }
 
     @Test
-    fun `legacy records with a verified Drive copy migrate to managed cache`() {
+    fun `legacy records without a checksum remain protected until re-confirmed`() {
         val oldRecord = BookRecords.encode(
             book().copy(
                 driveFileId = "drive-file-123",
                 backupAt = 1_700_000_000_000L,
-                backupBytes = 4096L
+                backupBytes = 4096L,
+                backupMd5 = ""
             )
         ).apply { remove("keepOffline") }
 
         val decoded = BookRecords.decode(oldRecord)
 
-        assertEquals(false, decoded?.keepOffline)
+        assertEquals(true, decoded?.keepOffline)
+    }
+
+    @Test
+    fun `legacy records with a verified checksum migrate to managed cache`() {
+        val oldRecord = BookRecords.encode(
+            book().copy(
+                driveFileId = "drive-file-123",
+                backupAt = 1_700_000_000_000L,
+                backupBytes = 4096L,
+                backupMd5 = "a".repeat(32)
+            )
+        ).apply { remove("keepOffline") }
+
+        assertEquals(false, BookRecords.decode(oldRecord)?.keepOffline)
     }
 
     @Test

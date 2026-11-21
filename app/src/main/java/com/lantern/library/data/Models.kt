@@ -134,7 +134,9 @@ data class LibraryBook(
     /** Keep this complete local copy on the device; automatic cache cleanup must never evict it. */
     val keepOffline: Boolean = false,
     /** Stable Drive appDataFolder reference for the independently backed-up cover image. */
-    val driveCoverFileId: String? = null
+    val driveCoverFileId: String? = null,
+    /** True only after the reader explicitly chose the offline-retention setting. */
+    val keepOfflineExplicit: Boolean = false
 ) {
     val localFileAvailable: Boolean
         get() {

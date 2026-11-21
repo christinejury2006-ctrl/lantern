@@ -257,6 +257,10 @@ internal fun LanternRoot(store: LanternStore) {
     }
     fun getDiscovery(book: DiscoveryBook) {
         val owned = store.books.firstOrNull { Recommendations.inLibrary(book, listOf(it)) }
+        if (owned != null && owned.filePath?.let { path -> File(path).let { it.exists() && it.length() > 0L } } != true && !networkAvailable) {
+            store.toast("This book needs internet to restore to this phone.")
+            return
+        }
         if (owned == null && !networkAvailable) {
             store.toast("This action needs an internet connection.")
             return

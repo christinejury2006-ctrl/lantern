@@ -136,14 +136,22 @@ class AccountSyncMergeTest {
     }
 
     @Test
-    fun `cover asset references survive account serialization and cross-device merges`() {
-        val local = snapshot(listOf(book("a", driveCoverFileId = "cover-drive-7")))
+    fun `cover and checksum references survive account serialization and cross-device merges`() {
+        val checksum = "fedcba9876543210fedcba9876543210"
+        val local = snapshot(
+            listOf(
+                book("a", driveCoverFileId = "cover-drive-7", driveFileId = "drive-7", backupAt = 500L)
+                    .copy(backupBytes = 1234L, backupMd5 = checksum)
+            )
+        )
         val encoded = AccountSync.toJson(local)
         val decoded = AccountSync.fromJson(encoded)!!
         assertEquals("cover-drive-7", decoded.books.single().driveCoverFileId)
+        assertEquals(checksum, decoded.books.single().backupMd5)
 
         val merged = AccountSync.merge(snapshot(emptyList()), decoded)
         assertEquals("cover-drive-7", merged.books.single().driveCoverFileId)
+        assertEquals(checksum, merged.books.single().backupMd5)
         assertNull(merged.books.single().remoteCover)
     }
 

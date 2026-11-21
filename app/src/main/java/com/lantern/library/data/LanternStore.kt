@@ -378,6 +378,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             }
             if (accountId != null && session.isCurrent(gen, target)) {
                 viewModelScope.launch(Dispatchers.IO) {
+                    if (!networkReady()) {
+                        SyncDiag.mark("Drive on launch", "deferred until a validated internet connection is available")
+                        return@launch
+                    }
                     // Reported, never thrown: an exception escaping this coroutine reaches the
                     // default handler and takes the whole app down (build 276).
                     try {
@@ -947,6 +951,33 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
 
     fun refreshForYou() {
         ensureRecommendations(force = true)
+    }
+
+    /** Reconnect cloud services after the app's network monitor confirms internet is usable. */
+    fun onNetworkRestored() {
+        if (!networkReady()) return
+        if (interestsChosen) ensureRecommendations(force = false)
+        if (!account.signedIn) return
+        val target = namespace
+        val gen = session.current()
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!session.isCurrent(gen, target) || !networkReady()) return@launch
+            try {
+                connectDrive(quiet = true, pullAccount = true)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                SyncDiag.fail("Drive reconnect", failure.describe())
+            }
+            if (!session.isCurrent(gen, target)) return@launch
+            try {
+                retryQueuedTransfers()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                SyncDiag.fail("Upload retry after reconnect", failure.describe())
+            }
+        }
     }
 
     fun ensureRecommendations(force: Boolean = false) {
@@ -2106,7 +2137,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             ?: return false
         val net = cm.activeNetwork ?: return false
         val caps = cm.getNetworkCapabilities(net) ?: return false
-        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
     }
 
     private fun currentSnapshot(): AccountSnapshot {

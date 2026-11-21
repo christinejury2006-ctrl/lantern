@@ -13,6 +13,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.WifiOff
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -82,7 +85,8 @@ fun ProfileScreen(
     /** Books the upload journal still owes, minus what is moving and what the reader paused. */
     queuedIds: Set<String> = emptySet(),
     /** Uploads the reader paused: reported separately, never counted as uploading. */
-    pausedUploads: Set<String> = emptySet()
+    pausedUploads: Set<String> = emptySet(),
+    networkAvailable: Boolean = true
 ) {
     val palette = nookPalette(prefs.theme)
     val context = LocalContext.current
@@ -201,10 +205,16 @@ fun ProfileScreen(
                                 fontSize = 12.sp,
                                 modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
                             )
+                            if (!networkAvailable) {
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
+                                    Icon(Icons.Filled.WifiOff, "Account connection needs internet", tint = palette.mute, modifier = Modifier.size(14.dp))
+                                    Text("  Account connection needs internet", color = palette.mute, fontSize = 11.sp)
+                                }
+                            }
                             if (account.provider == "google") {
-                                NookButton(palette, "Connect account backup", onConnectDrive, filled = true)
+                                NookButton(palette, "Connect account backup", onConnectDrive, filled = true, enabled = networkAvailable)
                             } else {
-                                NookButton(palette, "Sign in with Google", onGoogleSignIn, filled = true)
+                                NookButton(palette, "Sign in with Google", onGoogleSignIn, filled = true, enabled = networkAvailable)
                             }
                         }
                         Spacer(Modifier.height(10.dp))
@@ -218,7 +228,13 @@ fun ProfileScreen(
                             fontSize = 12.sp,
                             modifier = Modifier.padding(top = 4.dp, bottom = 14.dp)
                         )
-                        NookButton(palette, "Sign in with Google", onGoogleSignIn, filled = true)
+                        if (!networkAvailable) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
+                                Icon(Icons.Filled.WifiOff, "Sign-in needs internet", tint = palette.mute, modifier = Modifier.size(14.dp))
+                                Text("  Sign-in needs an internet connection", color = palette.mute, fontSize = 11.sp)
+                            }
+                        }
+                        NookButton(palette, "Sign in with Google", onGoogleSignIn, filled = true, enabled = networkAvailable)
                     }
                 }
             }
@@ -319,7 +335,13 @@ fun ProfileScreen(
                             )
                         }
                         Spacer(Modifier.height(12.dp))
-                        NookButton(palette, "Sync now", onSyncNow, filled = true)
+                        if (!networkAvailable) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
+                                Icon(Icons.Filled.WifiOff, "Sync needs internet", tint = palette.mute, modifier = Modifier.size(14.dp))
+                                Text("  Sync needs an internet connection", color = palette.mute, fontSize = 11.sp)
+                            }
+                        }
+                        NookButton(palette, "Sync now", onSyncNow, filled = true, enabled = networkAvailable)
                     }
                 }
             }
@@ -413,17 +435,23 @@ private fun SyncRow(palette: NookPalette, label: String, value: String) {
 }
 
 @Composable
-private fun NookButton(palette: NookPalette, label: String, onClick: () -> Unit, filled: Boolean) {
+private fun NookButton(
+    palette: NookPalette,
+    label: String,
+    onClick: () -> Unit,
+    filled: Boolean,
+    enabled: Boolean = true
+) {
     GlassSurface(
         palette,
         Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        fill = if (filled) palette.accent else androidx.compose.ui.graphics.Color.Transparent,
-        onClick = onClick
+        fill = if (filled && enabled) palette.accent else palette.glass,
+        onClick = { if (enabled) onClick() }
     ) {
         Text(
             label,
-            color = if (filled) palette.accentInk else palette.ink,
+            color = if (filled && enabled) palette.accentInk else if (enabled) palette.ink else palette.mute,
             fontSize = 13.sp,
             fontWeight = if (filled) FontWeight.SemiBold else FontWeight.Medium,
             modifier = Modifier.align(Alignment.Center).padding(vertical = 12.dp)

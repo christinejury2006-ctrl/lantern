@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -144,6 +145,7 @@ private data class SearchBundle(
 @Composable
 fun SearchScreen(
     theme: ReaderTheme,
+    networkAvailable: Boolean = true,
     fetchingId: String? = null,
     onOpen: (DiscoveryBook) -> Unit,
     onDownload: (FreeEdition) -> Unit,
@@ -175,8 +177,13 @@ fun SearchScreen(
             "Frankenstein", "romance", "werewolf", "fantasy")
     }
 
-    LaunchedEffect(query) {
+    LaunchedEffect(query, networkAvailable) {
         val q = query.trim()
+        if (!networkAvailable) {
+            loading = false
+            searched = false
+            return@LaunchedEffect
+        }
         if (q.length < 2) {
             editions = emptyList()
             elsewhere = emptyList()
@@ -240,9 +247,15 @@ fun SearchScreen(
         ) {
             item(span = { GridItemSpan(2) }) {
                 Column {
-                    Text("Explore", color = ink, fontFamily = Playfair, fontSize = 30.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Explore", color = ink, fontFamily = Playfair, fontSize = 30.sp)
+                        if (!networkAvailable) {
+                            Icon(Icons.Filled.WifiOff, "Search needs internet", tint = mute, modifier = Modifier.padding(start = 8.dp).size(17.dp))
+                        }
+                    }
                     Text(
-                        "Free editions download to your shelf. Books still in copyright can be borrowed.",
+                        if (networkAvailable) "Free editions download to your shelf. Books still in copyright can be borrowed."
+                        else "Search needs an internet connection. Your downloaded books and saved library are still available.",
                         color = mute,
                         fontSize = 13.sp
                     )
@@ -315,6 +328,12 @@ fun SearchScreen(
                         SourcesNote(palette)
                     }
 
+                    if (!networkAvailable && query.trim().length >= 2) {
+                        Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.WifiOff, null, tint = palette.accent, modifier = Modifier.size(15.dp))
+                            Text("  Connect to search catalogues", color = mute, fontSize = 12.sp)
+                        }
+                    }
                     if (loading) {
                         Text(
                             "Searching four catalogues…",

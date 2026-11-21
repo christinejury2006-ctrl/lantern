@@ -487,6 +487,7 @@ internal fun LanternRoot(store: LanternStore) {
                             { store.requestDriveConnect() },
                             { store.openInterestEditor() },
                             { store.syncNow() },
+                            onFreeUpStorage = { store.freeUpPhoneStorage() },
                             // Four numbers from one function. The diagnosis UI is gone; the functions it
                             // called are still here, still logging, still used by the sync itself.
                             transfers = com.lantern.library.data.TransferBus.states,

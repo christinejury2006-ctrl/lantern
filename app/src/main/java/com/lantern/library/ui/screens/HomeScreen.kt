@@ -227,6 +227,7 @@ private fun BookRow(
                 transfer = transfers[book.id],
                 queued = book.id in queued,
                 online = online,
+                networkAvailable = networkAvailable,
                 modifier = Modifier.weight(1f),
                 onBadge = { onOpenBadge(book) },
                 onClick = { onOpenBook(book) }
@@ -303,19 +304,6 @@ private fun ConnectionIndicator(
             tint = if (networkAvailable) palette.accent else palette.mute,
             modifier = Modifier.size(19.dp)
         )
-        AnimatedVisibility(
-            visible = connectionRestored,
-            enter = fadeIn(),
-            exit = fadeOut()
-        ) {
-            Text(
-                "Network connection restored",
-                color = palette.accent,
-                fontSize = 9.sp,
-                maxLines = 2,
-                modifier = Modifier.padding(start = 4.dp)
-            )
-        }
     }
 }
 
@@ -394,6 +382,18 @@ private fun NookHeader(
                     }
                 }
             }
+        }
+        AnimatedVisibility(
+            visible = connectionRestored,
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
+            Text(
+                "Network connection restored",
+                color = palette.accent,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(start = 20.dp, top = 6.dp)
+            )
         }
     }
 }

@@ -616,8 +616,10 @@ class DownloadService(private val host: DownloadHost) {
                 // The cloud copy is unchanged: this only records the bytes now on the phone.
                 backupBytes = dest.length(),
                 backupFailed = false,
-                // An explicit Restore download request is an offline-download choice.
-                keepOffline = keepOffline,
+                // An explicit Restore download request pins the copy. Reader-triggered
+                // temporary restores preserve an existing explicit choice but do not create one.
+                keepOffline = keepOffline || (book.keepOfflineExplicit && book.keepOffline),
+                keepOfflineExplicit = book.keepOfflineExplicit || keepOffline,
                 backupMd5 = book.backupMd5.ifBlank { BookFiles.md5(dest) }
             )
             if (!host.persist(updated)) {

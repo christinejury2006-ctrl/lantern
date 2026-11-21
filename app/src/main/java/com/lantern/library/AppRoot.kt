@@ -412,7 +412,8 @@ internal fun LanternRoot(store: LanternStore) {
                             onPauseRestore = { store.pauseRestore(it) },
                             onResumeRestore = { store.resumeRestore(it) },
                             onPauseUpload = { store.pauseUpload(it) },
-                            onResumeUpload = { store.resumeUpload(it) }
+                            onResumeUpload = { store.resumeUpload(it) },
+                            networkAvailable = networkAvailable
                         )
                         Route.Search -> SearchScreen(
                             theme = theme,

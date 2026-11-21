@@ -365,28 +365,28 @@ class UploadPoolTest {
 
     @Test
     fun `the concurrency bound is never exceeded`() {
-        val books = (1..6).map { i -> book("n$i", write("n$i.epub", epubBytes("n$i"))) }
-        // Three arrivals is exactly the configured limit: once three uploads are inside, the gate
-        // opens and the rest follow in their own time. If the pool let six through, maxInFlight
+        val books = (1..8).map { i -> book("n$i", write("n$i.epub", epubBytes("n$i"))) }
+        // Four arrivals is exactly the configured limit: once four uploads are inside, the gate
+        // opens and the rest follow in their own time. If the pool let all eight through, maxInFlight
         // would say so.
-        val three = CountDownLatch(UploadPool.MAX_CONCURRENT_UPLOADS)
+        val four = CountDownLatch(UploadPool.MAX_CONCURRENT_UPLOADS)
         val release = CountDownLatch(1)
         books.forEach { b ->
             drive.uploadHold[b.id] = release
-            drive.uploadEntered[b.id] = three
+            drive.uploadEntered[b.id] = four
         }
-        thread("release-three") {
-            if (three.await(20, TimeUnit.SECONDS)) release.countDown()
+        thread("release-four") {
+            if (four.await(20, TimeUnit.SECONDS)) release.countDown()
         }
 
         val result = run(books)
 
-        assertEquals(6, result.confirmed.size)
+        assertEquals(8, result.confirmed.size)
         assertTrue(
             "at most ${UploadPool.MAX_CONCURRENT_UPLOADS} uploads at once, saw ${drive.maxInFlight.get()}",
             drive.maxInFlight.get() <= UploadPool.MAX_CONCURRENT_UPLOADS
         )
-        assertEquals(6, drive.creates.get())
+        assertEquals(8, drive.creates.get())
     }
 
     // 3 -------------------------------------------------------------------------------------

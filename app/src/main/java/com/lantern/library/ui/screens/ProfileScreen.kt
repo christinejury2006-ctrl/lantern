@@ -80,6 +80,7 @@ fun ProfileScreen(
     onConnectDrive: () -> Unit = {},
     onEditInterests: () -> Unit = {},
     onSyncNow: () -> Unit = {},
+    onFreeUpStorage: () -> Unit = {},
     /** Live transfers, so "still uploading" means bytes are moving, not that a queue is long. */
     transfers: Map<String, TransferProgress> = emptyMap(),
     /** Books the upload journal still owes, minus what is moving and what the reader paused. */
@@ -157,6 +158,21 @@ fun ProfileScreen(
                         }
                     }
                     Spacer(Modifier.height(10.dp))
+                    if (account.signedIn && account.provider == "google" && account.driveConnected) {
+                        Spacer(Modifier.height(8.dp))
+                        NookButton(
+                            palette,
+                            "Free up phone storage",
+                            onFreeUpStorage,
+                            filled = true
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "Removes local EPUB/PDF downloads only after Lore confirms the matching Google Drive copy. Your shelf and cloud books stay. Explicit offline saves are kept.",
+                            color = palette.mute,
+                            fontSize = 11.sp
+                        )
+                    }
                     NookButton(palette, "Refresh storage breakdown", { storageRefresh += 1 }, filled = false)
                     Spacer(Modifier.height(8.dp))
                     Text(

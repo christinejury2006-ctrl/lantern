@@ -83,7 +83,7 @@ class UploadPool(
          * simultaneous uploads on a mobile connection do not starve each other, and far below
          * Drive's and OkHttp's limits.
          */
-        const val MAX_CONCURRENT_UPLOADS = 3
+        const val MAX_CONCURRENT_UPLOADS = 4
         const val MAX_CONCURRENT_VERIFICATIONS = 3
 
         /**

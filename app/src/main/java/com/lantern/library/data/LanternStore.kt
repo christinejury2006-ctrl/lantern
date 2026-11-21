@@ -253,11 +253,19 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             LocalBookRetentionEvents.released.collect { event ->
                 if (event.namespace != namespace) return@collect
-                val current = book(event.bookId) ?: return@collect
-                if (current.filePath != null && !(current.keepOfflineExplicit && current.keepOffline)) {
-                    upsert(current.copy(filePath = null, keepOffline = false))
-                    refreshBackupAudit()
+                // The worker may also have written a newer Drive id/checksum. Reload the complete
+                // record from disk; changing only filePath on an old in-memory object could erase
+                // the very verification stamp that makes the cloud-only record restorable.
+                val diskBook = withContext(Dispatchers.IO) {
+                    BookRecords.read(profiles.file(event.namespace, "library.json"))
+                        .firstOrNull { it.id == event.bookId }
+                } ?: return@collect
+                if (namespace != event.namespace || diskBook.filePath != null) return@collect
+                synchronized(libraryLock) {
+                    val index = books.indexOfFirst { it.id == event.bookId }
+                    if (index >= 0) books[index] = diskBook else books.add(0, diskBook)
                 }
+                refreshBackupAudit()
             }
         }
     }

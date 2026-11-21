@@ -579,6 +579,102 @@ object DriveLibrary {
     }
 
     /**
+     * Uploads a derived cover independently from the book file. The stable appProperty makes
+     * retries idempotent, and Drive's checksum is checked before the returned id is trusted.
+     */
+    fun uploadCover(token: String, bookId: String, file: File): DriveOutcome<String> {
+        if (bookId.isBlank() || !file.exists() || file.length() <= 40L) return DriveOutcome.Failed
+        val q = "appProperties has { key='loreCoverId' and value='${escape(bookId)}' } and trashed=false"
+        val existing = when (val lookup = query(token, q)) {
+            QueryOutcome.Unauthorized -> return DriveOutcome.Unauthorized
+            QueryOutcome.Error -> return DriveOutcome.Failed
+            is QueryOutcome.Ok -> lookup.ids.firstOrNull()
+        }
+        val id = if (!existing.isNullOrBlank()) {
+            val req = Request.Builder()
+                .url("$UPLOAD/${enc(existing)}?uploadType=media")
+                .header("Authorization", "Bearer $token")
+                .patch(fileBody(file, "image/jpeg"))
+                .build()
+            val raw = executeRaw(req, retries = false) ?: return DriveOutcome.Failed
+            if (raw.code == 401) return DriveOutcome.Unauthorized
+            if (!raw.ok) {
+                noteError("cover replace", raw.code, raw.body)
+                return DriveOutcome.Failed
+            }
+            existing
+        } else {
+            val meta = JSONObject()
+                .put("name", "cover_${bookId.take(100)}.jpg")
+                .put("parents", JSONArray().put(APP_DATA_FOLDER))
+                .put("mimeType", "image/jpeg")
+                .put("appProperties", JSONObject().put("loreCoverId", bookId))
+            val multipart = related(jsonBody(meta.toString()), fileBody(file, "image/jpeg"))
+            val req = Request.Builder()
+                .url("$UPLOAD?uploadType=multipart")
+                .header("Authorization", "Bearer $token")
+                .post(multipart)
+                .build()
+            val raw = executeRaw(req, retries = false) ?: return DriveOutcome.Failed
+            if (raw.code == 401) return DriveOutcome.Unauthorized
+            if (!raw.ok || raw.body == null) {
+                noteError("cover upload", raw.code, raw.body)
+                return DriveOutcome.Failed
+            }
+            JSONObject(raw.body).optString("id").takeIf { it.isNotBlank() }
+                ?: return DriveOutcome.Failed
+        }
+        val verifyReq = Request.Builder()
+            .url("$FILES/${enc(id)}?fields=id,size,md5Checksum")
+            .header("Authorization", "Bearer $token")
+            .get()
+            .build()
+        val verified = executeRaw(verifyReq) ?: return DriveOutcome.Failed
+        if (verified.code == 401) return DriveOutcome.Unauthorized
+        if (!verified.ok || verified.body == null) return DriveOutcome.Failed
+        val metadata = JSONObject(verified.body)
+        val sameSize = metadata.optString("size").toLongOrNull() == file.length()
+        val remoteMd5 = metadata.optString("md5Checksum")
+        val sameHash = remoteMd5.isNotBlank() && remoteMd5.equals(md5Of(file), ignoreCase = true)
+        return if (sameSize && sameHash) DriveOutcome.Ok(id) else {
+            noteError("cover verification", verified.code, "Drive cover checksum or size did not match")
+            DriveOutcome.Failed
+        }
+    }
+
+    /** Restores a cover to a temporary file and commits it only after a complete response. */
+    fun downloadCover(token: String, fileId: String, dest: File): DriveOutcome<String> {
+        if (fileId.isBlank()) return DriveOutcome.Failed
+        val req = Request.Builder()
+            .url("$FILES/${enc(fileId)}?alt=media")
+            .header("Authorization", "Bearer $token")
+            .get()
+            .build()
+        val raw = executeRaw(req) ?: return DriveOutcome.Failed
+        if (raw.code == 401) return DriveOutcome.Unauthorized
+        if (!raw.ok || raw.bytes == null || raw.bytes.size <= 40) return DriveOutcome.Failed
+        val tmp = File(dest.parentFile, dest.name + ".tmp")
+        return try {
+            dest.parentFile?.mkdirs()
+            tmp.writeBytes(raw.bytes)
+            if (!tmp.exists() || tmp.length() != raw.bytes.size.toLong()) {
+                tmp.delete()
+                DriveOutcome.Failed
+            } else {
+                if (!tmp.renameTo(dest)) {
+                    tmp.copyTo(dest, overwrite = true)
+                    tmp.delete()
+                }
+                if (dest.exists() && dest.length() == raw.bytes.size.toLong()) DriveOutcome.Ok(dest.absolutePath)
+                else DriveOutcome.Failed
+            }
+        } catch (_: Exception) {
+            runCatching { tmp.delete() }
+            DriveOutcome.Failed
+        }
+    }
+
+    /**
      * Streams a book's bytes from the account into [dest], continuing from [from] when possible.
      *
      * This is the download half of the restore path, and it exists because the old one was a

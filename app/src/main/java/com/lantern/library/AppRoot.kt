@@ -249,6 +249,10 @@ internal fun LanternRoot(store: LanternStore) {
             ?: book.volumeId.takeIf { it.startsWith("http") })?.takeIf { it.isNotBlank() }
 
     fun openDiscoveryLink(book: DiscoveryBook): Boolean {
+        if (!networkAvailable) {
+            store.toast("This link needs an internet connection.")
+            return false
+        }
         val url = discoveryLink(book) ?: return false
         return runCatching {
             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))

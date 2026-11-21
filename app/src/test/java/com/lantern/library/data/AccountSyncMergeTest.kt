@@ -125,6 +125,14 @@ class AccountSyncMergeTest {
     }
 
     @Test
+    fun `cover asset references survive local library record persistence`() {
+        val original = book("a", driveCoverFileId = "cover-drive-local")
+        val encoded = BookRecords.encode(original)
+        val decoded = BookRecords.decode(encoded)!!
+        assertEquals("cover-drive-local", decoded.driveCoverFileId)
+    }
+
+    @Test
     fun `cover asset references survive account serialization and cross-device merges`() {
         val local = snapshot(listOf(book("a", driveCoverFileId = "cover-drive-7")))
         val encoded = AccountSync.toJson(local)

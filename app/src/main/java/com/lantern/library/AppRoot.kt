@@ -7,6 +7,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.Uri
+import java.io.File
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -344,7 +345,7 @@ internal fun LanternRoot(store: LanternStore) {
                             picksBusy = store.forYouBusy,
                             picksFailed = store.forYouFailed,
                             onOpenBook = { book ->
-                                if (book.filePath.isNullOrBlank() && !networkAvailable) {
+                                if ((book.filePath?.let { path -> File(path).let { it.exists() && it.length() > 0L } } != true) && !networkAvailable) {
                                     store.toast("This book needs internet to restore to this phone.")
                                 } else {
                                     readerBack = Route.Home

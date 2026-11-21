@@ -98,6 +98,14 @@ class OfflineRetentionTest {
         assertEquals(true, BookRecords.decode(pinned)?.keepOffline)
     }
     @Test
+    fun `backup checksum survives local library record round trip`() {
+        val checksum = "0123456789abcdef0123456789abcdef"
+        val encoded = BookRecords.encode(book().copy(backupMd5 = checksum))
+        val decoded = BookRecords.decode(encoded)
+        assertEquals(checksum, decoded?.backupMd5)
+    }
+
+    @Test
     fun `library file round trip preserves the retention choice`() {
         val file = temp.newFile("library.json")
         assertTrue(BookRecords.write(file, listOf(book(keepOffline = false))))

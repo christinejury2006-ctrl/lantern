@@ -149,6 +149,7 @@ fun ProfileScreen(
                     StorageLine("Temporary cache", storage.cacheSize(), palette)
                     StorageLine("App data and settings", storage.internalSize(), palette)
                     StorageLine("Other app files", storage.otherSize(), palette)
+                    StorageLine("Installed app package", storage.installedSize(), palette)
                     if (storage.largestFiles.isNotEmpty()) {
                         Spacer(Modifier.height(12.dp))
                         Text("Largest files", color = palette.ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
@@ -176,7 +177,7 @@ fun ProfileScreen(
                     NookButton(palette, "Refresh storage breakdown", { storageRefresh += 1 }, filled = false)
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "The total includes Lore's internal data, app-specific files (including the books folder), and cache. Cloud-only books are not stored on this phone and are not counted.",
+                        "The total includes Lore's internal data, all app-specific storage volumes, cache, and installed APK files. Android may show a slightly different total because it also accounts for system-managed package data. Cloud-only books are not stored on this phone and are not counted.",
                         color = palette.mute, fontSize = 11.sp
                     )
                 }

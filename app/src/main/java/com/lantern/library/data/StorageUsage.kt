@@ -54,7 +54,7 @@ object StorageUsage {
         var internal = 0L
         var other = 0L
 
-        fun add(root: File?, classify: (File) -> Unit) {
+        fun add(root: File?) {
             if (root == null || !root.exists()) return
             runCatching {
                 root.walkTopDown().filter { it.isFile }.forEach { file ->

@@ -343,10 +343,11 @@ object DriveLibrary {
         book: LibraryBook,
         fileId: String,
         file: File,
-        onProgress: (sent: Long, total: Long) -> Unit = { _, _ -> }
+        onProgress: (sent: Long, total: Long) -> Unit = { _, _ -> },
+        expectedMd5: String? = null
     ): Verified {
         val total = file.length()
-        return when (val check = verify(token, fileId, file)) {
+        return when (val check = verify(token, fileId, file, expectedMd5)) {
             VerifyOutcome.Verified -> Verified.Ok(fileId)
             VerifyOutcome.Unauthorized -> Verified.Unauthorized
             VerifyOutcome.Mismatch -> {
@@ -359,7 +360,7 @@ object DriveLibrary {
                         retryable = true
                     )
                 }
-                when (val again = verify(token, fileId, file)) {
+                when (val again = verify(token, fileId, file, expectedMd5)) {
                     VerifyOutcome.Verified -> Verified.Ok(fileId)
                     VerifyOutcome.Unauthorized -> Verified.Unauthorized
                     VerifyOutcome.Mismatch -> Verified.Failed(
@@ -823,8 +824,8 @@ object DriveLibrary {
      * re-uploaded on every sync: with a few hundred books, "verify then maybe upload" is the
      * difference between a second of metadata traffic and an hour of mobile data.
      */
-    fun remoteMatches(token: String, fileId: String, file: File): Boolean? =
-        when (verify(token, fileId, file)) {
+    fun remoteMatches(token: String, fileId: String, file: File, expectedMd5: String? = null): Boolean? =
+        when (verify(token, fileId, file, expectedMd5)) {
             VerifyOutcome.Verified -> true
             VerifyOutcome.Mismatch -> false
             VerifyOutcome.Unauthorized, VerifyOutcome.Unknown -> null
@@ -835,7 +836,7 @@ object DriveLibrary {
      * `Unknown` means the service gave us nothing to compare against; the caller then trusts the
      * upload rather than calling a good upload bad.
      */
-    private fun verify(token: String, fileId: String, file: File): VerifyOutcome {
+    private fun verify(token: String, fileId: String, file: File, expectedMd5: String? = null): VerifyOutcome {
         val req = Request.Builder()
             .url("$FILES/${enc(fileId)}?fields=id,size,md5Checksum")
             .header("Authorization", "Bearer $token")
@@ -853,7 +854,7 @@ object DriveLibrary {
             val remoteMd5 = json.optString("md5Checksum").takeIf { it.isNotBlank() }
             val remoteSize = json.optLong("size", -1L)
             if (remoteMd5 != null) {
-                if (remoteMd5.equals(md5Of(file), ignoreCase = true)) VerifyOutcome.Verified else VerifyOutcome.Mismatch
+                if (remoteMd5.equals(expectedMd5?.takeIf { it.isNotBlank() } ?: md5Of(file), ignoreCase = true)) VerifyOutcome.Verified else VerifyOutcome.Mismatch
             } else {
                 // Size alone cannot prove identity. The caller will read the remote bytes back
                 // and compare them with the local file before calling this backup verified.

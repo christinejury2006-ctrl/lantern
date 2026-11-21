@@ -87,7 +87,7 @@ fun ProfileScreen(
     val palette = nookPalette(prefs.theme)
     val context = LocalContext.current
     var storage by remember { mutableStateOf(StorageUsageSnapshot(0L, 0)) }
-    val storageKey = books.map { it.filePath to it.backupBytes }
+    val storageKey = books.map { Triple(it.filePath, it.backupBytes, it.remoteCover) }
     LaunchedEffect(storageKey, transfers) {
         storage = withContext(Dispatchers.IO) { StorageUsage.measure(context) }
     }

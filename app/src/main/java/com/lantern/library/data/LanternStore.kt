@@ -3994,7 +3994,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     o.optLong("backupBytes", 0L), backupMd5 = o.optString("backupMd5"),
                     // Missing on older records: protect existing local downloads after upgrade.
                     keepOffline = BookRecords.keepOffline(o),
-                    driveCoverFileId = o.optString("driveCoverFileId").ifBlank { null }
+                    driveCoverFileId = o.optString("driveCoverFileId").ifBlank { null },
+                    keepOfflineExplicit = o.optBoolean("keepOfflineExplicit", false)
                 )
             }
         }
@@ -4040,6 +4041,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     // Read back with optString, so an older library.json without this key loads
                     // as "no checksum recorded" rather than failing.
 .put("backupMd5", b.backupMd5).put("keepOffline", b.keepOffline)
+                    .put("keepOfflineExplicit", b.keepOfflineExplicit)
             )
         }
         atomicWrite(booksFile, arr.toString())

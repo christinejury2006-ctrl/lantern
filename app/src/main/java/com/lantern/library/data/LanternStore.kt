@@ -265,6 +265,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     val index = books.indexOfFirst { it.id == event.bookId }
                     if (index >= 0) books[index] = diskBook else books.add(0, diskBook)
                 }
+                markLocalChanged()
                 refreshBackupAudit()
             }
         }

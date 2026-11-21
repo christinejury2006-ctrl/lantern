@@ -23,6 +23,7 @@ class AccountSyncMergeTest {
         pages: Int = 100,
         lastRead: Long = 0L,
         driveFileId: String? = null,
+        driveCoverFileId: String? = null,
         filePath: String? = null,
         origin: BookOrigin = BookOrigin.IMPORT,
         finished: Boolean = false,
@@ -41,6 +42,7 @@ class AccountSyncMergeTest {
         lastReadAt = lastRead,
         finished = finished,
         driveFileId = driveFileId,
+        driveCoverFileId = driveCoverFileId,
         backupAt = backupAt,
         backupFailed = backupFailed,
         pendingUpload = pendingUpload
@@ -120,6 +122,18 @@ class AccountSyncMergeTest {
             "drive-9",
             AccountSync.merge(snapshot(listOf(local)), snapshot(listOf(cloud))).books.single().driveFileId
         )
+    }
+
+    @Test
+    fun `cover asset references survive account serialization and cross-device merges`() {
+        val local = snapshot(listOf(book("a", driveCoverFileId = "cover-drive-7")))
+        val encoded = AccountSync.toJson(local)
+        val decoded = AccountSync.fromJson(encoded)!!
+        assertEquals("cover-drive-7", decoded.books.single().driveCoverFileId)
+
+        val merged = AccountSync.merge(snapshot(emptyList()), decoded)
+        assertEquals("cover-drive-7", merged.books.single().driveCoverFileId)
+        assertNull(merged.books.single().remoteCover)
     }
 
     @Test

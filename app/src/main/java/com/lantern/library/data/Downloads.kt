@@ -1,6 +1,8 @@
 package com.lantern.library.data
 
 import java.io.File
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Removing a book's local bytes, and putting them back.
@@ -391,8 +393,12 @@ enum class AccountLink {
 /** The crash-safe sequences. See the file comment for why the order is what it is. */
 class DownloadService(private val host: DownloadHost) {
 
-    /** Books with a restore running. Also the single-flight guard: two per book is never right. */
-    private val bookIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    /**
+     * One lock per book. A reader opening a book while its shelf restore is already running must
+     * wait for that restore, not receive Busy and enter an empty reader. Locks remain for this
+     * service lifetime so a waiter can never race a newly-created lock for the same restore file.
+     */
+    private val restoreLocks = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
 
     /** Pauses the reader asked for, honoured between chunks. */
     private val pauseRequests = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
@@ -482,28 +488,27 @@ class DownloadService(private val host: DownloadHost) {
      * local file is never replaced, and a failure never touches the account copy.
      */
     suspend fun restoreDownload(bookId: String, keepOffline: Boolean = true): RestoreOutcome {
-        val book = host.latest(bookId) ?: return RestoreOutcome.NotFound
-        val existing = book.filePath?.let(::File)
-        if (existing != null && existing.exists() && existing.length() > 0L &&
-            BookFiles.validate(existing, book.format) is BookFiles.Check.Ok
-        ) {
-            return RestoreOutcome.AlreadyAvailable(book)
-        }
+        // Serialize callers, but make the later caller wait rather than fail with Busy. Re-read
+        // the record only after acquiring the lock: the first caller may have restored it while
+        // this one was waiting.
+        val lock = restoreLocks.computeIfAbsent(bookId) { Mutex() }
+        return lock.withLock {
+            val book = host.latest(bookId) ?: return@withLock RestoreOutcome.NotFound
+            val existing = book.filePath?.let(::File)
+            if (existing != null && existing.exists() && existing.length() > 0L &&
+                BookFiles.validate(existing, book.format) is BookFiles.Check.Ok
+            ) {
+                return@withLock RestoreOutcome.AlreadyAvailable(book)
+            }
 
-        DownloadRules.restoreBlocker(book)?.let { return RestoreOutcome.Refused(it) }
+            DownloadRules.restoreBlocker(book)?.let { return@withLock RestoreOutcome.Refused(it) }
 
-        // One restore per book. Two writers on one `.restore` file would interleave their bytes
-        // into something that passes a size check and fails a checksum, or worse, nearly passes.
-        if (!bookIds.add(book.id)) return RestoreOutcome.Busy
-        val outcome = try {
-            streamInto(book, keepOffline)
-        } finally {
-            bookIds.remove(book.id)
+            val outcome = streamInto(book, keepOffline)
+            // A pause keeps its checkpoint so resuming can continue from it. Everything else —
+            // done, refused, failed — leaves nothing to resume.
+            if (outcome !is RestoreOutcome.Paused) host.clearRestore(book.id)
+            outcome
         }
-        // A pause keeps its checkpoint so resuming can continue from it. Everything else — done,
-        // refused, failed — leaves nothing to resume.
-        if (outcome !is RestoreOutcome.Paused) host.clearRestore(book.id)
-        return outcome
     }
 
     /** The transfer half: resume, download, pause, retry, and only then verify and commit. */
@@ -638,8 +643,8 @@ class DownloadService(private val host: DownloadHost) {
         }
     }
 
-    /** True when a restore for this book is running right now. */
-    fun isRestoring(bookId: String): Boolean = bookId in bookIds
+    /** True when a restore for this book is running or another caller is waiting for it. */
+    fun isRestoring(bookId: String): Boolean = restoreLocks[bookId]?.isLocked == true
 
     /**
      * Asks the running restore for [bookId] to stop at the next chunk boundary.

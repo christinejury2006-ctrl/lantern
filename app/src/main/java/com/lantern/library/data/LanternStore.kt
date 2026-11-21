@@ -2651,6 +2651,11 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             }
             recordBatch(batch)
         }
+        // Covers are separate derived assets. Recreate missing local jackets from available book
+        // files, then upload/restore them independently before the account snapshot is written.
+        repairMissingBookCovers()
+        merged = syncCoverAssets(merged)
+
         // The merged library was applied above, inside the state lock, before any of the uploads
         // below ran. Uploads take time, and the reader can delete a book while its file is in
         // flight, so the snapshot is reconciled against the *current* tombstones immediately before
@@ -2723,7 +2728,6 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             }
             // Only after the account snapshot is durably written: the remote file upload alone is
             // not enough to evict a local copy if its library metadata has not been synced.
-            repairMissingBookCovers()
             maybeEvictCache(keepId = null)
         } else {
             SyncDiag.fail("Account snapshot written", "Drive rejected the write; the account copy is unchanged")
@@ -2739,6 +2743,72 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
      * book itself becomes eligible for eviction. This keeps a same-device library from losing
      * its jackets merely because the account metadata was synced.
      */
+    /**
+     * Uploads local cover derivatives or restores cover-only assets for cloud-only books.
+     * A cover failure never changes the book's own backup confirmation.
+     */
+    private suspend fun syncCoverAssets(snapshot: AccountSnapshot): AccountSnapshot {
+        val localById = withContext(Dispatchers.Main) {
+            synchronized(libraryLock) { books.associateBy { it.id } }
+        }
+        val outcomes = withDriveOutcome { token, _ ->
+            val ids = LinkedHashMap<String, String>()
+            val paths = LinkedHashMap<String, String>()
+            var failed = 0
+            snapshot.books.forEach { cloudBook ->
+                val local = localById[cloudBook.id]
+                val currentCover = local?.remoteCover ?: cloudBook.remoteCover
+                val localCover = currentCover?.takeIf { value ->
+                    !value.startsWith("http://") && !value.startsWith("https://") &&
+                        File(value).exists() && File(value).length() > 40L
+                }?.let(::File)
+                if (localCover != null) {
+                    when (val uploaded = DriveLibrary.uploadCover(token, cloudBook.id, localCover)) {
+                        is DriveOutcome.Ok -> ids[cloudBook.id] = uploaded.value
+                        else -> failed++
+                    }
+                } else {
+                    val coverId = cloudBook.driveCoverFileId ?: local?.driveCoverFileId
+                    if (!coverId.isNullOrBlank()) {
+                        val dest = File(BookIo.coversDir(getApplication()), "${cloudBook.id}.jpg")
+                        when (val restored = DriveLibrary.downloadCover(token, coverId, dest)) {
+                            is DriveOutcome.Ok -> {
+                                paths[cloudBook.id] = restored.value
+                                ids[cloudBook.id] = coverId
+                            }
+                            else -> failed++
+                        }
+                    }
+                }
+            }
+            DriveOutcome.Ok(Triple(ids, paths, failed))
+        }
+        val value = (outcomes as? DriveOutcome.Ok)?.value ?: return snapshot
+        val (ids, paths, failed) = value
+        withContext(Dispatchers.Main) {
+            synchronized(libraryLock) {
+                for (index in books.indices) {
+                    val book = books[index]
+                    val coverId = ids[book.id] ?: book.driveCoverFileId
+                    val coverPath = paths[book.id] ?: book.remoteCover
+                    if (coverId != book.driveCoverFileId || coverPath != book.remoteCover) {
+                        books[index] = book.copy(driveCoverFileId = coverId, remoteCover = coverPath)
+                    }
+                }
+                persistBooksUnlocked()
+            }
+        }
+        if (ids.isNotEmpty() || paths.isNotEmpty() || failed > 0) {
+            SyncDiag.mark("Cover assets", "${ids.size} uploaded/verified or restored; $failed failed")
+        }
+        return snapshot.copy(books = snapshot.books.map { book ->
+            book.copy(
+                driveCoverFileId = ids[book.id] ?: book.driveCoverFileId,
+                remoteCover = paths[book.id] ?: localById[book.id]?.remoteCover ?: book.remoteCover
+            )
+        })
+    }
+
     private suspend fun repairMissingBookCovers() {
         val localBooks = withContext(Dispatchers.Main) { synchronized(libraryLock) { books.toList() } }
         val repaired = withContext(Dispatchers.IO) {

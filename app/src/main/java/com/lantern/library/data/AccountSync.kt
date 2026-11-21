@@ -278,9 +278,33 @@ object AccountSync {
             !cloud.remoteCover.isNullOrBlank() && cloud.remoteCover.startsWith("http") -> cloud.remoteCover
             else -> localCover ?: cloud.remoteCover
         }
-        // The id this book will keep. Local wins when it has one: the local side is where an
-        // upload just happened, and it is the only side that can have been re-verified.
-        val keptId = local.driveFileId ?: cloud.driveFileId
+        // A Drive id is not proof by itself. When the two devices disagree, keep the reference
+        // with an actual confirmation; otherwise a stale local id can hide a verified cloud copy
+        // and make every sign-in look like a fresh upload. If both are confirmed, the newest
+        // confirmation identifies the current account copy. Local wins only when neither side
+        // has a confirmed copy, preserving an in-progress local upload reference.
+        val localHasConfirmedCopy =
+            !local.driveFileId.isNullOrBlank() && local.backupAt > 0L &&
+                !local.pendingUpload && !local.backupFailed
+        val cloudHasConfirmedCopy =
+            !cloud.driveFileId.isNullOrBlank() && cloud.backupAt > 0L &&
+                !cloud.pendingUpload && !cloud.backupFailed
+        val keepLocalDriveReference = when {
+            localHasConfirmedCopy && cloudHasConfirmedCopy -> local.backupAt >= cloud.backupAt
+            localHasConfirmedCopy -> true
+            cloudHasConfirmedCopy -> false
+            !local.driveFileId.isNullOrBlank() -> true
+            else -> false
+        }
+        val keptId = if (keepLocalDriveReference) local.driveFileId else cloud.driveFileId
+        val backupSource = when {
+            keptId.isNullOrBlank() -> null
+            local.driveFileId == keptId && cloud.driveFileId == keptId ->
+                if (local.backupAt >= cloud.backupAt) local else cloud
+            local.driveFileId == keptId -> local
+            cloud.driveFileId == keptId -> cloud
+            else -> null
+        }
         return local.copy(
             title = if (fileOk || local.title.isNotBlank()) local.title.ifBlank { cloud.title } else cloud.title,
             author = if (fileOk) local.author.ifBlank { cloud.author } else local.author.ifBlank { cloud.author },
@@ -311,33 +335,16 @@ object AccountSync {
             // A confirmation is only meaningful for the file id it was issued against. If the two
             // sides point at the same file, either side's stamp counts; if only one side has an
             // id, only that side's stamp is evidence.
-            backupAt = when {
-                keptId == null -> 0L
-                local.driveFileId == keptId && cloud.driveFileId == keptId -> maxOf(local.backupAt, cloud.backupAt)
-                local.driveFileId == keptId -> local.backupAt
-                else -> cloud.backupAt
-            },
-            pendingUpload = false,
-            backupFailed = false,
+            backupAt = backupSource?.backupAt ?: 0L,
+            pendingUpload = if (backupSource?.backupAt ?: 0L > 0L) false else local.pendingUpload || cloud.pendingUpload,
+            backupFailed = if (backupSource?.backupAt ?: 0L > 0L) false else local.backupFailed || cloud.backupFailed,
             dnf = local.dnf || cloud.dnf,
             // The size is evidence about the same bytes as the stamp: take it from whichever side
             // the stamp came from, never from the other one.
-            backupBytes = when {
-                keptId == null -> 0L
-                local.driveFileId == keptId && cloud.driveFileId == keptId ->
-                    if (local.backupAt >= cloud.backupAt) local.backupBytes else cloud.backupBytes
-                local.driveFileId == keptId -> local.backupBytes
-                else -> cloud.backupBytes
-            },
-            // The checksum belongs to the same bytes as the stamp it came with, so it is taken
-            // from exactly the side the size came from — never mixed.
-            backupMd5 = when {
-                keptId == null -> ""
-                local.driveFileId == keptId && cloud.driveFileId == keptId ->
-                    if (local.backupAt >= cloud.backupAt) local.backupMd5 else cloud.backupMd5
-                local.driveFileId == keptId -> local.backupMd5
-                else -> cloud.backupMd5
-            }
+            backupBytes = backupSource?.backupBytes ?: 0L,
+            // The checksum belongs to the same bytes as the stamp and size; never mix evidence
+            // from two different Drive files.
+            backupMd5 = backupSource?.backupMd5.orEmpty()
         )
     }
 

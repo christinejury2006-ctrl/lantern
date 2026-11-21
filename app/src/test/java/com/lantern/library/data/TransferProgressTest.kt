@@ -54,8 +54,8 @@ class TransferProgressTest {
             online = true,
             queued = setOf("queued"),
             transfers = mapOf(
-                "failed" to TransferProgress.failed("failed", "network error"),
-                "paused" to TransferProgress.paused("paused", 0L, 100L)
+                "failed" to TransferProgress.failed("failed", 0L, 100L, "network error"),
+                "paused" to TransferProgress.paused("paused", 0L, 100L, "user paused")
             )
         )
         assertEquals(2, counts.pending)

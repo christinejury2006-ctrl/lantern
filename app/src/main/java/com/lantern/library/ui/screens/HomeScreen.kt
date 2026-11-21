@@ -1,5 +1,8 @@
 package com.lantern.library.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -167,6 +170,7 @@ fun ReadingNookScreen(
                             transfers = transfers,
                             queued = queueReasons.keys,
                             online = online,
+                            networkAvailable = networkAvailable,
                             onOpenBook = onOpenBook,
                             onOpenBadge = { book -> detailFor = book.id }
                         )
@@ -208,6 +212,7 @@ private fun BookRow(
     transfers: Map<String, TransferProgress>,
     queued: Set<String>,
     online: Boolean,
+    networkAvailable: Boolean,
     onOpenBook: (LibraryBook) -> Unit,
     onOpenBadge: (LibraryBook) -> Unit
 ) {
@@ -298,7 +303,11 @@ private fun ConnectionIndicator(
             tint = if (networkAvailable) palette.accent else palette.mute,
             modifier = Modifier.size(19.dp)
         )
-        if (connectionRestored) {
+        AnimatedVisibility(
+            visible = connectionRestored,
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
             Text(
                 "Network connection restored",
                 color = palette.accent,

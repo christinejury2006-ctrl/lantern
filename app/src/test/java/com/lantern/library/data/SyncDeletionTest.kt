@@ -191,7 +191,11 @@ class SyncDeletionTest {
         val file = java.io.File.createTempFile("lore-test", ".epub")
         try {
             file.writeBytes(ByteArray(512))
-            val onDisk = book("a").copy(filePath = file.absolutePath)
+            val onDisk = book("a").copy(
+                filePath = file.absolutePath,
+                backupBytes = file.length(),
+                backupMd5 = BookFiles.md5(file)
+            )
             assertEquals(BackupBadge.VERIFIED, BackupAudit.badge(onDisk, uploading = false))
             assertTrue(BackupRules.restorable(onDisk))
 
@@ -261,7 +265,11 @@ class SyncDeletionTest {
             assertTrue(BackupRules.changedSinceBackup(changed, localFileExists = true))
             assertEquals(UploadDecision.SEND, BackupRules.decide(changed, localFileExists = true))
 
-            val same = confirmed.copy(filePath = file.absolutePath, backupBytes = 2_000L)
+            val same = confirmed.copy(
+                filePath = file.absolutePath,
+                backupBytes = 2_000L,
+                backupMd5 = BookFiles.md5(file)
+            )
             assertFalse(BackupRules.changedSinceBackup(same, localFileExists = true))
             assertEquals(UploadDecision.ALREADY_VERIFIED, BackupRules.decide(same, localFileExists = true))
         } finally {

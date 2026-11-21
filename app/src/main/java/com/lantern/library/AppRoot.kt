@@ -15,6 +15,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.getBottom
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -44,6 +47,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -278,6 +282,11 @@ internal fun LanternRoot(store: LanternStore) {
         NotificationCenter.clearPendingOpen()
     }
     val needsOnboarding = !store.interestsChosen
+    // The shell should not keep a second navigation surface visible above the IME. On resize
+    // devices the keyboard reduces the window height; leaving the bar in the Column makes it
+    // appear to float into the notification/search content. Read the IME inset so it disappears
+    // for the entire keyboard-visible interval and returns when the keyboard closes.
+    val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     LanternTheme(theme) {
         // The shell is two regions, not two layers.
         //
@@ -440,7 +449,7 @@ internal fun LanternRoot(store: LanternStore) {
                 // consumed the inset), and the real gesture/three-button height if the window is
                 // ever edge-to-edge. That is one owner of the inset, and it is why the bar cannot
                 // be padded twice.
-                if (!needsOnboarding && tab !is Route.Reader && details == null) {
+                if (!needsOnboarding && tab !is Route.Reader && details == null && !imeVisible) {
                     BottomBar(
                         theme, tab, { tab = it },
                         Modifier

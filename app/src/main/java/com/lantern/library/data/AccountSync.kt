@@ -299,6 +299,7 @@ object AccountSync {
             category = local.category.ifBlank { cloud.category },
             synopsis = local.synopsis.ifBlank { cloud.synopsis },
             driveFileId = keptId,
+            driveCoverFileId = local.driveCoverFileId ?: cloud.driveCoverFileId,
             // A confirmation is only meaningful for the file id it was issued against. If the two
             // sides point at the same file, either side's stamp counts; if only one side has an
             // id, only that side's stamp is evidence.
@@ -377,6 +378,7 @@ object AccountSync {
             // phone never has to keep every file locally. `backupAt` says whether the contents
             // behind that id were ever confirmed, which is a different question.
             .put("driveFileId", b.driveFileId.orEmpty())
+            .put("driveCoverFileId", b.driveCoverFileId.orEmpty())
             .put("backupAt", b.backupAt)
             // The size the confirmation was issued against, so another device can tell whether a
             // local file is the one that was verified.
@@ -413,6 +415,7 @@ object AccountSync {
             category = o.optString("category", "Library"),
             synopsis = o.optString("synopsis"),
             driveFileId = o.optString("driveFileId").ifBlank { null },
+            driveCoverFileId = o.optString("driveCoverFileId").ifBlank { null },
             pendingUpload = false,
             backupAt = o.optLong("backupAt", 0L),
             dnf = o.optBoolean("dnf", false),

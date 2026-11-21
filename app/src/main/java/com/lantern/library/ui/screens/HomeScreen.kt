@@ -53,6 +53,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.io.File
 import androidx.compose.ui.window.Dialog
 import com.lantern.library.data.SystemBars
 import com.lantern.library.data.BackupAudit
@@ -431,7 +432,7 @@ private fun ShelfTile(
             )
             // The badge is the only thing on the cover that changes, and it is drawn in the same
             // spot for every state, so a transfer never nudges the layout underneath it.
-            if (!networkAvailable && book.filePath.isNullOrBlank() && !book.driveFileId.isNullOrBlank()) {
+            if (!networkAvailable && book.filePath?.let { path -> File(path).let { it.exists() && it.length() > 0L } } != true && !book.driveFileId.isNullOrBlank()) {
                 Box(
                     Modifier.align(Alignment.TopStart).padding(5.dp)
                         .clip(RoundedCornerShape(8.dp)).background(Color(0x66000000))

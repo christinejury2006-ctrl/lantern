@@ -42,10 +42,10 @@ object AccountSync {
      * 2 — adds `deletions` (tombstones) and a per-book `backupBytes` (the size that was verified).
      * 3 — adds saved-for-later discoveries (`wantToRead`).
      * 4 — adds saved-for-later deletion timestamps so removals sync without resurrection.
-     *     Readable both ways: a v1 snapshot simply has neither, and a v2 one is read by any build
-     *     that understands the fields it cares about.
+     * 5 — adds independent Drive cover-file references, without changing book-file confirmation.
+     *     Older snapshots remain readable; missing cover ids simply mean no cloud cover asset.
      */
-    const val SCHEMA = 4
+    const val SCHEMA = 5
     const val STATE_LORE_ID = "account_state"
     const val STATE_FILE_NAME = "lore_account.json"
 

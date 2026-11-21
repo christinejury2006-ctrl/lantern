@@ -234,6 +234,12 @@ object VerifiedUploadRetention {
         val before = BookRecords.read(libraryFile).firstOrNull { it.id == bookId }
             ?: return Outcome.NOT_ELIGIBLE
         if (before.keepOfflineExplicit && before.keepOffline) return Outcome.KEPT_OFFLINE
+        // A recent reading session gets the same grace window as cache eviction. Removing an
+        // EPUB's extracted media while its reader is open would make illustrations disappear.
+        val now = System.currentTimeMillis()
+        if (before.lastReadAt > 0L && now - before.lastReadAt < 30L * 60L * 1000L) {
+            return Outcome.NOT_ELIGIBLE
+        }
         if (before.origin == BookOrigin.BUNDLED ||
             (before.format != BookFormat.PDF && before.format != BookFormat.EPUB)) {
             return Outcome.NOT_ELIGIBLE

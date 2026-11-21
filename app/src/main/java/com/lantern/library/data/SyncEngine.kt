@@ -329,7 +329,9 @@ object Resumable {
         if (book == null) return ResumeDecision.ALREADY_DONE
         if (!BackupRules.eligible(book)) return ResumeDecision.ALREADY_DONE
         if (fileBytes <= 0L) return ResumeDecision.RESEND
-        val verified = book.backupAt > 0L && book.backupBytes == fileBytes && !book.backupFailed
+        val verified = book.isBackedUp() &&
+            book.backupBytes == fileBytes &&
+            !BackupRules.changedSinceBackup(book, localFileExists = true)
         if (verified) return ResumeDecision.ALREADY_DONE
         // The bytes changed while we were away: whatever was half-sent is not this file.
         if (journal.totalBytes > 0L && fileBytes != journal.totalBytes) return ResumeDecision.RESEND

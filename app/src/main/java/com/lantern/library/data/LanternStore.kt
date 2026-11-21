@@ -4160,7 +4160,12 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                     .put("keepOfflineExplicit", b.keepOfflineExplicit)
             )
         }
-        atomicWrite(booksFile, arr.toString())
+        // Background upload retention uses the same per-file lock when it updates a profile
+        // record. Serialising this writer prevents a stale in-memory shelf from restoring a path
+        // after the worker has safely released the original (or vice versa).
+        synchronized(booksFile.absolutePath.intern()) {
+            atomicWrite(booksFile, arr.toString())
+        }
     }
 
     private fun atomicWrite(file: File, content: String) {

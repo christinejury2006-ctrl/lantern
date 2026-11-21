@@ -20,7 +20,7 @@ interface UploadListener {
     fun onProgress(book: LibraryBook, sent: Long, total: Long) {}
     /** This book's bytes are out; its own verification is starting now. */
     fun onVerifying(book: LibraryBook, totalBytes: Long) {}
-    fun onVerified(book: LibraryBook, driveFileId: String, bytes: Long) {}
+    fun onVerified(book: LibraryBook, driveFileId: String, bytes: Long, md5: String) {}
     fun onFailed(book: LibraryBook, failure: DriveLibrary.TransferFailure, reachedBytes: Long) {}
     /** Cancelled mid-transfer — not a failure of the book, an interruption. */
     fun onPaused(book: LibraryBook, sent: Long, total: Long, reason: String) {}
@@ -258,6 +258,15 @@ class UploadPool(
             return
         }
         val total = file.length()
+        val sourceMd5 = BookFiles.md5(file)
+        if (sourceMd5.isBlank()) {
+            val failure = DriveLibrary.TransferFailure(
+                book.id, book.title, "verify", "could not fingerprint the local file before backup", retryable = true
+            )
+            failed += book to failure
+            listener.onFailed(book, failure, 0L)
+            return
+        }
         listener.onStarted(book, total)
 
         // --- transfer, holding an upload permit only for as long as bytes are moving ----------
@@ -305,8 +314,21 @@ class UploadPool(
                 }
                 when (verified) {
                     is DriveLibrary.Verified.Ok -> {
-                        confirmed[book.id] = verified.fileId to total
-                        listener.onVerified(book, verified.fileId, total)
+                        // The source must still be the same file we started with. Otherwise a
+                        // same-size edit during transfer could be stamped as backed up.
+                        val finalMd5 = BookFiles.md5(file)
+                        if (finalMd5.isBlank() || !finalMd5.equals(sourceMd5, ignoreCase = true)) {
+                            val failure = DriveLibrary.TransferFailure(
+                                book.id, book.title, "verify",
+                                "the local file changed while backup was running; retry the current copy",
+                                retryable = true
+                            )
+                            failed += book to failure
+                            listener.onFailed(book, failure, total)
+                        } else {
+                            confirmed[book.id] = verified.fileId to total
+                            listener.onVerified(book, verified.fileId, total, finalMd5)
+                        }
                     }
                     DriveLibrary.Verified.Unauthorized -> {
                         unauthorized.set(true)

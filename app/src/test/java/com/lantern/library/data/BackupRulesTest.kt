@@ -23,7 +23,9 @@ class BackupRulesTest {
         backupAt: Long = 0L,
         pendingUpload: Boolean = false,
         backupFailed: Boolean = false,
-        filePath: String? = null
+        filePath: String? = null,
+        backupBytes: Long = 0L,
+        backupMd5: String = ""
     ) = LibraryBook(
         id = id,
         title = "A Book",
@@ -34,7 +36,9 @@ class BackupRulesTest {
         driveFileId = driveFileId,
         backupAt = backupAt,
         pendingUpload = pendingUpload,
-        backupFailed = backupFailed
+        backupFailed = backupFailed,
+        backupBytes = backupBytes,
+        backupMd5 = backupMd5
     )
 
     @Test
@@ -63,10 +67,29 @@ class BackupRulesTest {
         val file = java.io.File.createTempFile("lore-backup", ".epub")
         try {
             file.writeBytes(ByteArray(256))
-            val b = book(driveFileId = "d1", backupAt = 1_700_000_000_000L, filePath = file.absolutePath)
+            val b = book(
+                driveFileId = "d1", backupAt = 1_700_000_000_000L, filePath = file.absolutePath,
+                backupBytes = file.length(), backupMd5 = BookFiles.md5(file)
+            )
             assertFalse(BackupRules.needsUpload(b, localFileExists = true))
             assertEquals(BookBackupState.BACKED_UP, b.backupState)
             assertTrue(BackupRules.restorable(b))
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
+    fun `a same-size local edit is detected by the saved checksum`() {
+        val file = java.io.File.createTempFile("lore-backup-edit", ".epub")
+        try {
+            file.writeBytes(ByteArray(256) { 7 })
+            val b = book(
+                driveFileId = "d1", backupAt = 1_700_000_000_000L, filePath = file.absolutePath,
+                backupBytes = file.length(), backupMd5 = BookFiles.md5(file)
+            )
+            file.writeBytes(ByteArray(256) { 8 })
+            assertTrue(BackupRules.needsUpload(b, localFileExists = true))
         } finally {
             file.delete()
         }
@@ -124,7 +147,7 @@ class BackupRulesTest {
                 driveFileId = "drive-existing",
                 backupAt = 1_700_000_000_000L,
                 filePath = null
-            ).copy(backupBytes = 256L)
+            ).copy(backupBytes = 256L, backupMd5 = BookFiles.md5(file))
 
             fun snapshot(books: List<LibraryBook>) = AccountSnapshot(
                 updatedAt = 1_700_000_000_000L,

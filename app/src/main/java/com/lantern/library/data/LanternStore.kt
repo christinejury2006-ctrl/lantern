@@ -2797,6 +2797,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                             remoteCover = local.remoteCover?.takeIf { !it.startsWith("http") && File(it).exists() }
                                 ?: cloudBook.remoteCover ?: local.remoteCover,
                             driveFileId = keptId,
+                            driveCoverFileId = local.driveCoverFileId ?: cloudBook.driveCoverFileId,
                             // Keep the confirmation only while it belongs to the id we still point
                             // at; a stamp for a different file is not evidence about this one.
                             backupAt = if (keptId == local.driveFileId) maxOf(local.backupAt, cloudBook.backupAt)

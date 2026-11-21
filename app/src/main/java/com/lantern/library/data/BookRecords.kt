@@ -27,14 +27,19 @@ object BookRecords {
      * when the record already proves a completed Drive backup; otherwise preserve the local copy.
      */
     fun keepOffline(json: JSONObject): Boolean {
-        if (json.has("keepOffline")) return json.optBoolean("keepOffline", true)
+        // Only an explicit reader choice is permanent. Older versions wrote the default true
+        // into library.json, so the presence of the key alone cannot distinguish a pin from a
+        // legacy default. Those records migrate only when the exact remote bytes are verified.
+        if (json.optBoolean("keepOfflineExplicit", false)) {
+            return json.optBoolean("keepOffline", true)
+        }
         val hasVerifiedRemoteCopy =
             json.optLong("backupAt", 0L) > 0L &&
                 !json.optBoolean("pendingUpload", false) &&
                 !json.optBoolean("backupFailed", false) &&
                 json.optString("driveFileId").isNotBlank() &&
                 json.optLong("backupBytes", 0L) > 0L &&
-                json.optString("backupMd5").isNotBlank()
+                json.optString("backupMd5").matches(Regex("(?i)[0-9a-f]{32}"))
         return !hasVerifiedRemoteCopy
     }
 
@@ -65,6 +70,7 @@ object BookRecords {
         // checksum recorded" rather than failing.
         .put("backupMd5", book.backupMd5)
         .put("keepOffline", book.keepOffline)
+        .put("keepOfflineExplicit", book.keepOfflineExplicit)
 
     /**
      * Reads one record.
@@ -107,7 +113,8 @@ object BookRecords {
             backupBytes = json.optLong("backupBytes", 0L),
             backupMd5 = json.optString("backupMd5"),
             // Older records default to protected so an upgrade never evicts an existing download.
-            keepOffline = keepOffline(json)
+            keepOffline = keepOffline(json),
+            keepOfflineExplicit = json.optBoolean("keepOfflineExplicit", false)
         )
     }
 

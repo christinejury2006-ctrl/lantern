@@ -149,6 +149,8 @@ class UploadPool(
     data class Result(
         /** book id -> (Drive file id, bytes verified). Only books that finished verification. */
         val confirmed: Map<String, Pair<String, Long>>,
+        /** MD5 fingerprints for the exact local bytes that each confirmed Drive file contains. */
+        val checksums: Map<String, String>,
         /** Books that did not make it, with the reason, in order of completion. */
         val failed: List<Pair<LibraryBook, DriveLibrary.TransferFailure>>,
         /** Books another caller was already uploading. Not failures; not done either. */
@@ -170,6 +172,7 @@ class UploadPool(
         listener: UploadListener = object : UploadListener {}
     ): Result = supervisorScope {
         val confirmed = ConcurrentHashMap<String, Pair<String, Long>>()
+        val checksums = ConcurrentHashMap<String, String>()
         val failed = ConcurrentLinkedQueue<Pair<LibraryBook, DriveLibrary.TransferFailure>>()
         val skipped = ConcurrentLinkedQueue<LibraryBook>()
         val unauthorized = AtomicBoolean(false)
@@ -197,7 +200,7 @@ class UploadPool(
             }
             val job = launch(Dispatchers.IO) {
                 try {
-                    uploadOne(token, book, listener, confirmed, failed, unauthorized)
+                    uploadOne(token, book, listener, confirmed, checksums, failed, unauthorized)
                 } catch (cancelled: CancellationException) {
                     // Two quite different things arrive here, and the reader is told which one:
                     // a pause they asked for, or the app going away mid-transfer. Neither is a
@@ -232,6 +235,7 @@ class UploadPool(
 
         Result(
             confirmed = confirmed.toMap(),
+            checksums = checksums.toMap(),
             failed = failed.toList(),
             skipped = skipped.toList(),
             unauthorized = unauthorized.get()
@@ -244,6 +248,7 @@ class UploadPool(
         book: LibraryBook,
         listener: UploadListener,
         confirmed: ConcurrentHashMap<String, Pair<String, Long>>,
+        checksums: ConcurrentHashMap<String, String>,
         failed: ConcurrentLinkedQueue<Pair<LibraryBook, DriveLibrary.TransferFailure>>,
         unauthorized: AtomicBoolean
     ) {
@@ -330,6 +335,7 @@ class UploadPool(
                             listener.onFailed(book, failure, total)
                         } else {
                             confirmed[book.id] = verified.fileId to total
+                            checksums[book.id] = finalMd5
                             listener.onVerified(book, verified.fileId, total, finalMd5)
                         }
                     }

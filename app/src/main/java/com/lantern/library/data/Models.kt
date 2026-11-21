@@ -132,7 +132,9 @@ data class LibraryBook(
      */
     val backupMd5: String = "",
     /** Keep this complete local copy on the device; automatic cache cleanup must never evict it. */
-    val keepOffline: Boolean = false
+    val keepOffline: Boolean = false,
+    /** Stable Drive appDataFolder reference for the independently backed-up cover image. */
+    val driveCoverFileId: String? = null
 ) {
     val localFileAvailable: Boolean
         get() {

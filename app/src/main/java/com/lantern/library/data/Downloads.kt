@@ -73,6 +73,24 @@ sealed class RemoveBlocker {
                 "${Transfers.size(recorded)} verified), so the download stays until it is backed up again."
     }
 
+    /** A verified backup without a persisted checksum must be re-confirmed before removal. */
+    object ChecksumNotRecorded : RemoveBlocker() {
+        override val message =
+            "Lore needs to confirm this book's checksum before it can remove the phone copy."
+    }
+
+    /** The local file could not be fingerprinted, so its identity cannot be checked. */
+    object ChecksumUnavailable : RemoveBlocker() {
+        override val message =
+            "Lore could not verify this file's checksum, so the download was kept."
+    }
+
+    /** The local file no longer matches the bytes recorded at backup time. */
+    object StaleChecksum : RemoveBlocker() {
+        override val message =
+            "This file has changed since it was backed up, so the download stays until it is backed up again."
+    }
+
     /** Offline, or Drive would not answer: the account's copy could not be confirmed. */
     object AccountUnconfirmed : RemoveBlocker() {
         override val message =
@@ -187,6 +205,7 @@ object DownloadRules {
         // Evidence about bytes only counts if it is about *these* bytes.
         if (book.backupBytes <= 0L) return RemoveBlocker.SizeNotRecorded
         if (book.backupBytes != localBytes) return RemoveBlocker.StaleBackup(book.backupBytes, localBytes)
+        if (book.backupMd5.isBlank()) return RemoveBlocker.ChecksumNotRecorded
         return null
     }
 
@@ -404,6 +423,11 @@ class DownloadService(private val host: DownloadHost) {
         val present = file ?: return RemoveOutcome.Refused(RemoveBlocker.NoLocalFile)
 
         DownloadRules.removeBlocker(book, localBytes)?.let { return RemoveOutcome.Refused(it) }
+        val localMd5 = BookFiles.md5(present)
+        if (localMd5.isBlank()) return RemoveOutcome.Refused(RemoveBlocker.ChecksumUnavailable)
+        if (!localMd5.equals(book.backupMd5, ignoreCase = true)) {
+            return RemoveOutcome.Refused(RemoveBlocker.StaleChecksum)
+        }
 
         // The account must still be the one holding the copy. A wrong answer here is cheap to
         // recover from; deleting the only copy of a book is not.

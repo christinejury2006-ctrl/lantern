@@ -41,6 +41,12 @@ permissions:
   contents: read
   checks: write
 
+# Only the newest commit on a branch needs a build/startup run. This keeps pushes made
+# during active implementation from stacking stale APKs ahead of the current revision.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   launch:
     runs-on: ubuntu-latest

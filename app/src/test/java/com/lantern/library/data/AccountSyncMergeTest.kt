@@ -126,10 +126,13 @@ class AccountSyncMergeTest {
 
     @Test
     fun `cover asset references survive local library record persistence`() {
+        val checksum = "0123456789abcdef0123456789abcdef"
         val original = book("a", driveCoverFileId = "cover-drive-local")
+            .copy(backupBytes = 1234L, backupMd5 = checksum)
         val encoded = BookRecords.encode(original)
         val decoded = BookRecords.decode(encoded)!!
         assertEquals("cover-drive-local", decoded.driveCoverFileId)
+        assertEquals(checksum, decoded.backupMd5)
     }
 
     @Test

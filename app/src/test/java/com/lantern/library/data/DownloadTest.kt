@@ -139,7 +139,8 @@ class DownloadTest {
             lastReadAt = 1_600_000_000_000L,
             driveFileId = driveFileId,
             backupAt = backupAt,
-            backupBytes = bytes.size.toLong()
+            backupBytes = bytes.size.toLong(),
+            backupMd5 = md5(bytes)
         )
         host.library[id] = book
         return book
@@ -283,6 +284,27 @@ class DownloadTest {
         val outcome = runBlockingTest { service.removeDownload(book.id) }
         assertEquals(RemoveOutcome.Refused(RemoveBlocker.SizeNotRecorded), outcome)
         assertTrue(File(book.filePath!!).exists())
+    }
+
+    @Test
+    fun `a legacy backup without a recorded checksum cannot be removed`() {
+        val book = verifiedBook().copy(backupMd5 = "")
+        host.library[book.id] = book
+        val outcome = runBlockingTest { service.removeDownload(book.id) }
+        assertEquals(RemoveOutcome.Refused(RemoveBlocker.ChecksumNotRecorded), outcome)
+        assertTrue(File(book.filePath!!).exists())
+    }
+
+    @Test
+    fun `a same-size local edit cannot be removed as a verified backup`() {
+        val book = verifiedBook()
+        val local = File(book.filePath!!)
+        val changed = local.readBytes()
+        changed[changed.lastIndex] = (changed.last().toInt() xor 1).toByte()
+        local.writeBytes(changed)
+        val outcome = runBlockingTest { service.removeDownload(book.id) }
+        assertEquals(RemoveOutcome.Refused(RemoveBlocker.StaleChecksum), outcome)
+        assertTrue(local.exists())
     }
 
     // 11

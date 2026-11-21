@@ -80,6 +80,26 @@ class BackupRulesTest {
     }
 
     @Test
+    fun `a legacy local stamp without a checksum is not called verified`() {
+        val file = java.io.File.createTempFile("lore-legacy-backup", ".epub")
+        try {
+            file.writeBytes(ByteArray(256) { 3 })
+            val legacy = book(
+                driveFileId = "d1",
+                backupAt = 1_700_000_000_000L,
+                filePath = file.absolutePath,
+                backupBytes = file.length(),
+                backupMd5 = ""
+            )
+            assertEquals(BookBackupState.PENDING, legacy.backupState)
+            assertFalse(legacy.isBackedUp())
+            assertTrue(BackupRules.needsUpload(legacy, localFileExists = true))
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
     fun `a same-size local edit is detected by the saved checksum`() {
         val file = java.io.File.createTempFile("lore-backup-edit", ".epub")
         try {

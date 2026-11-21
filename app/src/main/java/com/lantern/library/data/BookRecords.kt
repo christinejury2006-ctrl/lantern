@@ -32,7 +32,9 @@ object BookRecords {
             json.optLong("backupAt", 0L) > 0L &&
                 !json.optBoolean("pendingUpload", false) &&
                 !json.optBoolean("backupFailed", false) &&
-                json.optString("driveFileId").isNotBlank()
+                json.optString("driveFileId").isNotBlank() &&
+                json.optLong("backupBytes", 0L) > 0L &&
+                json.optString("backupMd5").isNotBlank()
         return !hasVerifiedRemoteCopy
     }
 

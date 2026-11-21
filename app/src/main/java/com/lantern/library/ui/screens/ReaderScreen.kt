@@ -1332,14 +1332,21 @@ private class PdfDocSession(private val file: File) {
 private fun paintPdfPage(renderer: PdfRenderer, index: Int): Pair<Bitmap, Float>? {
     if (index !in 0 until renderer.pageCount) return null
     val page = renderer.openPage(index)
-    val w = 1080
-    val h = ((w.toFloat() * page.height) / page.width).toInt().coerceIn(200, 1800)
-    val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-    bmp.eraseColor(android.graphics.Color.WHITE)
-    page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-    val aspect = (page.width.toFloat() / page.height.toFloat()).coerceIn(0.4f, 2.2f)
-    page.close()
-    return bmp to aspect
+    try {
+        // Preserve the PDF page's real aspect ratio. A fixed 1,800px height used to squash
+        // unusually tall scans into a shorter bitmap, making their content look incorrectly sized.
+        // Cap total pixels instead of clamping just one dimension.
+        val aspect = (page.width.toFloat() / page.height.toFloat()).coerceAtLeast(0.05f)
+        val maxPixels = 2_500_000f
+        val w = minOf(1080f, kotlin.math.sqrt(maxPixels * aspect)).toInt().coerceAtLeast(1)
+        val h = (w / aspect).toInt().coerceAtLeast(1)
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        bmp.eraseColor(android.graphics.Color.WHITE)
+        page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+        return bmp to aspect
+    } finally {
+        page.close()
+    }
 }
 
 private fun renderPdf(file: File, index: Int): Bitmap? {

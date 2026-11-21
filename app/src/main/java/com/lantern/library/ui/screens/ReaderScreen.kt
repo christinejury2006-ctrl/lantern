@@ -504,7 +504,8 @@ fun ReaderScreen(
                                 index = i,
                                 ink = ink,
                                 modifier = Modifier.fillMaxSize(),
-                                fillViewport = true
+                                fillViewport = true,
+                                session = pdfSession
                             )
                         }
                     }

@@ -16,7 +16,7 @@
         android:theme="@style/Theme.Lantern">
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_icon"
-            android:resource="@drawable/lore_icon" />
+            android:resource="@drawable/ic_lore_notification" />
         <service
             android:name=".data.LoreMessagingService"
             android:exported="false">

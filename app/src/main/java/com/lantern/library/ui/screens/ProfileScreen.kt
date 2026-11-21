@@ -143,6 +143,14 @@ fun ProfileScreen(
                     StorageLine("Temporary cache", storage.cacheSize(), palette)
                     StorageLine("App data and settings", storage.internalSize(), palette)
                     StorageLine("Other app files", storage.otherSize(), palette)
+                    if (storage.largestFiles.isNotEmpty()) {
+                        Spacer(Modifier.height(12.dp))
+                        Text("Largest files", color = palette.ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        storage.largestFiles.forEach { entry ->
+                            val bookTitle = books.firstOrNull { it.filePath == entry.path }?.title ?: entry.name
+                            StorageLine("${entry.category}: ${bookTitle}", StorageUsageSnapshot.formatBytes(entry.bytes), palette)
+                        }
+                    }
                     Spacer(Modifier.height(10.dp))
                     NookButton(palette, "Refresh storage breakdown", { storageRefresh += 1 }, filled = false)
                     Spacer(Modifier.height(8.dp))

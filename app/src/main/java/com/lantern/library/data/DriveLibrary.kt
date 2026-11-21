@@ -852,7 +852,6 @@ object DriveLibrary {
         return runCatching {
             val json = JSONObject(raw.body)
             val remoteMd5 = json.optString("md5Checksum").takeIf { it.isNotBlank() }
-            val remoteSize = json.optLong("size", -1L)
             if (remoteMd5 != null) {
                 if (remoteMd5.equals(expectedMd5?.takeIf { it.isNotBlank() } ?: md5Of(file), ignoreCase = true)) VerifyOutcome.Verified else VerifyOutcome.Mismatch
             } else {

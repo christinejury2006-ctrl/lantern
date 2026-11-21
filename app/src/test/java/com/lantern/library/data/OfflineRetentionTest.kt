@@ -30,10 +30,11 @@ class OfflineRetentionTest {
 
     @Test
     fun `offline retention choice survives record serialization`() {
-        val encoded = BookRecords.encode(book(keepOffline = false))
+        val encoded = BookRecords.encode(book(keepOffline = false).copy(keepOfflineExplicit = true))
         val decoded = BookRecords.decode(encoded)
 
         assertEquals(false, decoded?.keepOffline)
+        assertEquals(true, decoded?.keepOfflineExplicit)
     }
 
     @Test
@@ -67,6 +68,20 @@ class OfflineRetentionTest {
     }
 
     @Test
+    fun `legacy persisted default true migrates when its cloud copy is checksum-verified`() {
+        val oldRecord = BookRecords.encode(
+            book(keepOffline = true).copy(
+                driveFileId = "drive-file-123",
+                backupAt = 1_700_000_000_000L,
+                backupBytes = 4096L,
+                backupMd5 = "a".repeat(32)
+            )
+        ).apply { remove("keepOfflineExplicit") }
+
+        assertEquals(false, BookRecords.decode(oldRecord)?.keepOffline)
+    }
+
+    @Test
     fun `legacy records without a verified Drive copy remain protected`() {
         val oldRecord = BookRecords.encode(book()).apply { remove("keepOffline") }
         val decoded = BookRecords.decode(oldRecord)
@@ -92,7 +107,10 @@ class OfflineRetentionTest {
         val pinned = BookRecords.encode(
             book(keepOffline = true).copy(
                 driveFileId = "drive-file-123",
-                backupAt = 1_700_000_000_000L
+                backupAt = 1_700_000_000_000L,
+                backupBytes = 4096L,
+                backupMd5 = "a".repeat(32),
+                keepOfflineExplicit = true
             )
         )
         assertEquals(true, BookRecords.decode(pinned)?.keepOffline)

@@ -394,6 +394,8 @@ object AccountSync {
             // The checksum travels with the size it describes, for the same reason: it is evidence
             // about one specific set of bytes, and a restore on another device can use it.
             .put("backupMd5", b.backupMd5)
+            .put("keepOffline", b.keepOffline)
+            .put("keepOfflineExplicit", b.keepOfflineExplicit)
             // The reader's own decisions about a book travel with it: a book they finished or
             // gave up on should look the same on their next phone.
             .put("dnf", b.dnf)
@@ -428,7 +430,9 @@ object AccountSync {
             backupAt = o.optLong("backupAt", 0L),
             dnf = o.optBoolean("dnf", false),
             backupBytes = o.optLong("backupBytes", 0L),
-            backupMd5 = o.optString("backupMd5")
+            backupMd5 = o.optString("backupMd5"),
+            keepOffline = o.optBoolean("keepOffline", false),
+            keepOfflineExplicit = o.optBoolean("keepOfflineExplicit", false)
         )
     }
 

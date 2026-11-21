@@ -382,7 +382,7 @@ internal fun LanternRoot(store: LanternStore) {
                             books = store.books,
                             theme = theme,
                             onOpen = { book ->
-                                if (book.filePath.isNullOrBlank() && !networkAvailable) {
+                                if ((book.filePath?.let { path -> File(path).let { it.exists() && it.length() > 0L } } != true) && !networkAvailable) {
                                     store.toast("This book needs internet to restore to this phone.")
                                 } else {
                                     readerBack = Route.Library

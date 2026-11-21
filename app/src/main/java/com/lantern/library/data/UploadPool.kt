@@ -276,7 +276,7 @@ class UploadPool(
             val priorSizeConfirmation = book.backupAt > 0L &&
                 book.backupBytes == total && !book.pendingUpload && !book.backupFailed
             if (!existing.isNullOrBlank() && priorSizeConfirmation &&
-                DriveLibrary.remoteMatches(token, existing, file) == true
+                DriveLibrary.remoteMatches(token, existing, file, sourceMd5) == true
             ) {
                 // The account already holds these exact bytes: the confirmation is the missing
                 // piece, and re-sending the file would be wasted traffic, not extra safety.
@@ -311,7 +311,7 @@ class UploadPool(
                         // verification moves bytes, but this book's phase is VERIFYING and its
                         // card must not drop back to "uploading 60%" — that is exactly the kind of
                         // jump the reader would read as a restart.
-                        DriveLibrary.verifyUploaded(token, book, sent.fileId, file)
+                        DriveLibrary.verifyUploaded(token, book, sent.fileId, file, expectedMd5 = sourceMd5)
                     }
                 }
                 when (verified) {

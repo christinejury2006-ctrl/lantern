@@ -187,6 +187,7 @@ fun ReadingNookScreen(
                 transfer = transfers[detailBook.id],
                 queuedReason = queueReasons[detailBook.id],
                 online = online,
+                networkAvailable = networkAvailable,
                 palette = palette,
                 onRetry = { onRetryBackup(detailBook.id) },
                 onRemoveDownload = { onRemoveDownload(detailBook.id) },
@@ -594,6 +595,7 @@ private fun BackupDetailSheet(
     transfer: TransferProgress?,
     queuedReason: String?,
     online: Boolean,
+    networkAvailable: Boolean,
     palette: NookPalette,
     onRetry: () -> Unit,
     onRemoveDownload: () -> Unit,
@@ -610,7 +612,7 @@ private fun BackupDetailSheet(
     onResumeRestore: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
-    val state = BackupAudit.badge(book, transfer, online = online, queued = queuedReason != null)
+    val state = BackupAudit.badge(book, transfer, online = online && networkAvailable, queued = queuedReason != null)
     val fileBytes = book.filePath?.let { java.io.File(it) }?.takeIf { it.exists() }?.length() ?: 0L
     Dialog(onDismissRequest = onDismiss) {
         GlassSurface(
@@ -669,7 +671,9 @@ private fun BackupDetailSheet(
                         if (transfer!!.restore) "Resume download" else "Resume upload",
                         palette.accent,
                         palette.accentInk,
-                        if (transfer.restore) onResumeRestore else onResumeUpload
+                        if (transfer.restore) onResumeRestore else onResumeUpload,
+                        enabled = networkAvailable,
+                        needsNetwork = true
                     )
                 }
                 if (transfer != null && transfer.percent != null) {
@@ -703,7 +707,7 @@ private fun BackupDetailSheet(
                 }
                 if (state == BackupBadge.FAILED || state == BackupBadge.PAUSED || state == BackupBadge.LOCAL_ONLY) {
                     Spacer(Modifier.height(14.dp))
-                    SheetButton("Try again now", palette.accent, palette.accentInk, onRetry)
+                    SheetButton("Try again now", palette.accent, palette.accentInk, onRetry, enabled = networkAvailable, needsNetwork = true)
                     Spacer(Modifier.height(8.dp))
                 }
                 // The two non-destructive actions. Which one appears is decided by the book's own
@@ -733,10 +737,10 @@ private fun BackupDetailSheet(
                     }
                     DownloadUi.actionFor(book, localBytes) == DownloadAction.RESTORE -> {
                         Spacer(Modifier.height(14.dp))
-                        SheetButton("Restore download", palette.accent, palette.accentInk, onRestoreDownload)
+                        SheetButton("Restore download", palette.accent, palette.accentInk, onRestoreDownload, enabled = networkAvailable, needsNetwork = true)
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            if (online) "Fetches the verified copy from your account."
+                            if (networkAvailable && online) "Fetches the verified copy from your account."
                             else "Connect to the internet to fetch this book back.",
                             color = palette.faint,
                             fontSize = 10.sp
@@ -764,17 +768,27 @@ private fun BackupDetailSheet(
 
 /** One button in the sheet, in the same glass language as the rest of the app. */
 @Composable
-private fun SheetButton(label: String, fill: Color, ink: Color, onClick: () -> Unit) {
+private fun SheetButton(
+    label: String,
+    fill: Color,
+    ink: Color,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    needsNetwork: Boolean = false
+) {
     Box(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(fill)
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(vertical = 12.dp),
         contentAlignment = Alignment.Center
     ) {
-        Text(label, color = ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+            if (needsNetwork && !enabled) Icon(Icons.Filled.WifiOff, "This action needs internet", tint = palette.mute, modifier = Modifier.size(14.dp))
+            Text(label, color = if (enabled) ink else palette.mute, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = if (needsNetwork && !enabled) 6.dp else 0.dp))
+        }
     }
 }
 

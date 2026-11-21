@@ -56,6 +56,17 @@ import java.util.Date
  * is tested, rather than being re-derived in a composable.
  */
 @Composable
+private fun StorageLine(label: String, value: String, palette: NookPalette) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, color = palette.mute, fontSize = 11.sp, modifier = Modifier.weight(1f))
+        Text(value, color = palette.ink, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
 fun ProfileScreen(
     books: List<LibraryBook>,
     account: CloudAccount,
@@ -120,9 +131,16 @@ fun ProfileScreen(
                         }
                         Text("LOCAL", color = palette.accent, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     }
+                    Spacer(Modifier.height(12.dp))
+                    StorageLine("Books and restored downloads", storage.booksSize(), palette)
+                    StorageLine("Extracted covers", storage.coversSize(), palette)
+                    StorageLine("Cloud transfer files", storage.cloudSize(), palette)
+                    StorageLine("Temporary cache", storage.cacheSize(), palette)
+                    StorageLine("App data and settings", storage.internalSize(), palette)
+                    StorageLine("Other app files", storage.otherSize(), palette)
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "This is measured from Lore's private app data and cache folders. Books stored only in your cloud account are not counted; offline downloads and temporary cached files are.",
+                        "The total includes Lore's internal data, app-specific files (including the books folder), and cache. Cloud-only books are not stored on this phone and are not counted.",
                         color = palette.mute, fontSize = 11.sp
                     )
                 }

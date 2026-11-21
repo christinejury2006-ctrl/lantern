@@ -158,8 +158,12 @@ data class LibraryBook(
      * and nothing still queued or failed. Sign-out relies on this to decide which local entries are
      * safe to drop, so it must never be optimistic.
      */
+    private val hasVerifiedBackupFingerprint: Boolean
+        get() = backupBytes > 0L && backupMd5.matches(Regex("(?i)[0-9a-f]{32}"))
+
     fun isBackedUp(): Boolean =
-        backupAt > 0L && !pendingUpload && !backupFailed && !driveFileId.isNullOrBlank()
+        backupAt > 0L && !pendingUpload && !backupFailed && !driveFileId.isNullOrBlank() &&
+            hasVerifiedBackupFingerprint
 
     /** What the reader can honestly be told about this book's cloud copy. */
     val backupState: BookBackupState
@@ -168,13 +172,15 @@ data class LibraryBook(
             if (origin == BookOrigin.BUNDLED || format == BookFormat.TEXT) {
                 return BookBackupState.NOT_APPLICABLE
             }
-            val confirmed = backupAt > 0L && !pendingUpload && !backupFailed && !driveFileId.isNullOrBlank()
+            val remoteConfirmed = backupAt > 0L && !pendingUpload && !backupFailed && !driveFileId.isNullOrBlank()
+            val locallyVerified = remoteConfirmed && hasVerifiedBackupFingerprint
             return when {
-                // A confirmed copy the phone does not hold: the reader needs a restore, not a backup.
-                confirmed && !localFileAvailable -> BookBackupState.RESTORE_REQUIRED
-                confirmed -> BookBackupState.BACKED_UP
+                // A recorded cloud copy the phone does not hold: restore it, even if an older
+                // snapshot predates persisted checksums.
+                remoteConfirmed && !localFileAvailable -> BookBackupState.RESTORE_REQUIRED
+                locallyVerified -> BookBackupState.BACKED_UP
                 backupFailed -> BookBackupState.FAILED
-                // Pending and an unconfirmed id are the same answer: nothing has been proven yet.
+                // A legacy stamp without a checksum is re-confirmed by sync, never called verified.
                 else -> BookBackupState.PENDING
             }
         }

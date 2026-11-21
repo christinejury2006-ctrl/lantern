@@ -58,7 +58,11 @@ fun NotificationsScreen(onBack: () -> Unit, onOpenTarget: (String) -> Unit) {
     var clearConfirm by remember { mutableStateOf(false) }
     val visibleItems = if (showHistory) items else items.filterNot { it.dismissed }
     val context = LocalContext.current
+    var notificationPermissionGranted by remember {
+        mutableStateOf(Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
+    }
     val pushPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        notificationPermissionGranted = granted
         NotificationCenter.updatePreferences { it.copy(pushEnabled = granted) }
     }
     Column(Modifier.fillMaxSize()) {
@@ -69,6 +73,22 @@ fun NotificationsScreen(onBack: () -> Unit, onOpenTarget: (String) -> Unit) {
             TextButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, contentDescription = "Back") }
             Text("Notifications", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
             TextButton(onClick = { settings = true }) { Text("Settings") }
+        }
+        if (Build.VERSION.SDK_INT >= 33 && !notificationPermissionGranted) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    "Android is currently blocking Lore notifications on this device.",
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodySmall
+                )
+                TextButton(onClick = { pushPermission.launch(Manifest.permission.POST_NOTIFICATIONS) }) {
+                    Text("Allow")
+                }
+            }
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { showHistory = false }) { Text(if (showHistory) "Inbox" else "Inbox ✓") }

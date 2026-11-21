@@ -111,9 +111,12 @@ object StorageUsage {
 
         return StorageUsageSnapshot(
             total, count, books, derivedMedia, covers, cloud, cache, internal, other,
-            entries.sortedByDescending { it.bytes }.take(8)
+            largest(entries)
         )
     }
+
+    internal fun largest(entries: List<StorageFileEntry>): List<StorageFileEntry> =
+        entries.sortedByDescending { it.bytes }.take(8)
 
     private fun isInside(file: File, directory: File): Boolean = runCatching {
         val target = directory.canonicalFile

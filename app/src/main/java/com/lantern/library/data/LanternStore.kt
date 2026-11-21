@@ -2609,7 +2609,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         SyncDiag.mark(
             "Backup decisions",
             "inspected ${merged.books.size}; already verified ${decisions[UploadDecision.ALREADY_VERIFIED] ?: 0}; " +
-                "to upload ${stillOwed.size}; restore required ${decisions[UploadDecision.NO_LOCAL_FILE] ?: 0}; " +
+                "to upload ${stillOwed.size}; restore required ${merged.books.count { b ->
+                    val file = b.filePath?.let(::File)
+                    BackupRules.restorable(b) && (file == null || !file.exists() || file.length() <= 0L)
+                }}; " +
                 "not applicable ${decisions[UploadDecision.NOT_APPLICABLE] ?: 0}; " +
                 "paused ${pausedUploads.count { id -> merged.books.any { it.id == id } }}"
         )

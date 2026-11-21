@@ -205,10 +205,16 @@ fun ProfileScreen(
                                 fontSize = 12.sp,
                                 modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
                             )
+                            if (!networkAvailable) {
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
+                                    Icon(Icons.Filled.WifiOff, "Account connection needs internet", tint = palette.mute, modifier = Modifier.size(14.dp))
+                                    Text("  Account connection needs internet", color = palette.mute, fontSize = 11.sp)
+                                }
+                            }
                             if (account.provider == "google") {
-                                NookButton(palette, "Connect account backup", onConnectDrive, filled = true)
+                                NookButton(palette, "Connect account backup", onConnectDrive, filled = true, enabled = networkAvailable)
                             } else {
-                                NookButton(palette, "Sign in with Google", onGoogleSignIn, filled = true)
+                                NookButton(palette, "Sign in with Google", onGoogleSignIn, filled = true, enabled = networkAvailable)
                             }
                         }
                         Spacer(Modifier.height(10.dp))
@@ -222,7 +228,13 @@ fun ProfileScreen(
                             fontSize = 12.sp,
                             modifier = Modifier.padding(top = 4.dp, bottom = 14.dp)
                         )
-                        NookButton(palette, "Sign in with Google", onGoogleSignIn, filled = true)
+                        if (!networkAvailable) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
+                                Icon(Icons.Filled.WifiOff, "Sign-in needs internet", tint = palette.mute, modifier = Modifier.size(14.dp))
+                                Text("  Sign-in needs an internet connection", color = palette.mute, fontSize = 11.sp)
+                            }
+                        }
+                        NookButton(palette, "Sign in with Google", onGoogleSignIn, filled = true, enabled = networkAvailable)
                     }
                 }
             }

@@ -29,7 +29,6 @@ import androidx.compose.material.icons.filled.Create
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -117,6 +116,7 @@ internal fun LanternRoot(store: LanternStore) {
     var connectionRestored by remember { mutableStateOf(false) }
     LaunchedEffect(networkAvailable) {
         if (networkAvailable && !wasOnline) {
+            store.onNetworkRestored()
             connectionRestored = true
             kotlinx.coroutines.delay(2_000L)
             connectionRestored = false

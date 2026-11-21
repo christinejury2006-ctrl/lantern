@@ -15,6 +15,7 @@ data class StorageUsageSnapshot(
     val cacheBytes: Long = 0L,
     val internalBytes: Long = 0L,
     val otherBytes: Long = 0L,
+    val temporaryBytes: Long = 0L,
     val largestFiles: List<StorageFileEntry> = emptyList()
 ) {
     fun displaySize(): String = formatBytes(bytes)
@@ -25,6 +26,7 @@ data class StorageUsageSnapshot(
     fun cacheSize(): String = formatBytes(cacheBytes)
     fun internalSize(): String = formatBytes(internalBytes)
     fun otherSize(): String = formatBytes(otherBytes)
+    fun temporarySize(): String = formatBytes(temporaryBytes)
 
     companion object {
         fun formatBytes(value: Long): String {
@@ -59,6 +61,7 @@ object StorageUsage {
         var cache = 0L
         var internal = 0L
         var other = 0L
+        var temporary = 0L
         val entries = ArrayList<StorageFileEntry>()
 
         fun add(root: File?) {
@@ -69,6 +72,10 @@ object StorageUsage {
                     total = saturatingAdd(total, size)
                     count++
                     val category = when {
+                        isTemporaryFile(file) -> {
+                            temporary = saturatingAdd(temporary, size)
+                            "Temporary transfer"
+                        }
                         isDerivedMediaFile(file, externalFilesRoot) -> {
                             derivedMedia = saturatingAdd(derivedMedia, size)
                             "EPUB media"
@@ -119,9 +126,15 @@ object StorageUsage {
 
         return StorageUsageSnapshot(
             total, count, books, derivedMedia, covers, cloud, cache, internal, other,
-            largest(entries)
+            temporary, largest(entries)
         )
     }
+
+    internal fun isTemporaryFile(file: File): Boolean =
+        file.name.lowercase().let { name ->
+            name.endsWith(".restore") || name.endsWith(".part") ||
+                name.endsWith(".tmp") || name.endsWith(".incoming")
+        }
 
     internal fun largest(entries: List<StorageFileEntry>): List<StorageFileEntry> =
         entries.sortedByDescending { it.bytes }.take(8)

@@ -99,7 +99,15 @@ object StorageUsage {
                             "Other"
                         }
                     }
-                    entries += StorageFileEntry(file.absolutePath, file.name, size, category)
+                    val entry = StorageFileEntry(file.absolutePath, file.name, size, category)
+                    if (entries.size < 8) {
+                        entries += entry
+                    } else {
+                        val smallestIndex = entries.indices.minByOrNull { entries[it].bytes }
+                        if (smallestIndex != null && size > entries[smallestIndex].bytes) {
+                            entries[smallestIndex] = entry
+                        }
+                    }
                 }
             }
         }

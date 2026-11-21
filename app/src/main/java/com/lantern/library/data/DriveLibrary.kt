@@ -854,9 +854,9 @@ object DriveLibrary {
             val remoteSize = json.optLong("size", -1L)
             if (remoteMd5 != null) {
                 if (remoteMd5.equals(md5Of(file), ignoreCase = true)) VerifyOutcome.Verified else VerifyOutcome.Mismatch
-            } else if (remoteSize >= 0L) {
-                if (remoteSize == file.length()) VerifyOutcome.Verified else VerifyOutcome.Mismatch
             } else {
+                // Size alone cannot prove identity. The caller will read the remote bytes back
+                // and compare them with the local file before calling this backup verified.
                 VerifyOutcome.Unknown
             }
         }.getOrDefault(VerifyOutcome.Unknown)

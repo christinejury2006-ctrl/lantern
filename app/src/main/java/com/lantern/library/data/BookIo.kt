@@ -619,7 +619,7 @@ object BookIo {
                 val bitmap = zip.getInputStream(entry).use { input ->
                     BitmapFactory.decodeStream(input, null, BitmapFactory.Options().apply {
                         inSampleSize = sample
-                        inPreferredConfig = Bitmap.Config.RGB_565
+                        inPreferredConfig = Bitmap.Config.ARGB_8888
                     })
                 } ?: return@runCatching false
                 try {

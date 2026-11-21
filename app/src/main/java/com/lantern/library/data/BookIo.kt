@@ -585,7 +585,9 @@ object BookIo {
      */
     private fun unpackMedia(zip: ZipFile, book: File): Map<String, File> {
         val dir = File(book.parentFile, "media_" + book.name)
-        val done = File(dir, ".unpacked")
+        // v2 stores reader-sized WebP derivatives, not every original full-resolution image.
+        // Removing the old directory also reclaims space used by earlier uncompressed extracts.
+        val done = File(dir, ".unpacked_v2")
         val map = HashMap<String, File>()
         val imageEntries = zip.entries().toList().filter { e ->
             val n = e.name.lowercase()
@@ -599,16 +601,46 @@ object BookIo {
             }
             return map
         }
+        runCatching { dir.deleteRecursively() }
         dir.mkdirs()
-        imageEntries.forEach { e ->
-            val target = File(dir, mediaName(e.name))
+        var writtenBytes = 0L
+        // Illustrations are derived from the EPUB and can always be recreated. Bound the expanded
+        // media directory so a compressed image-heavy EPUB cannot silently consume gigabytes.
+        val mediaBudgetBytes = 96L * 1024L * 1024L
+        imageEntries.forEach { entry ->
+            if (writtenBytes >= mediaBudgetBytes) return@forEach
+            val target = File(dir, mediaName(entry.name))
             val wrote = runCatching {
-                zip.getInputStream(e).use { input -> target.outputStream().use { input.copyTo(it) } }
-                target.length() > 0L
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                zip.getInputStream(entry).use { BitmapFactory.decodeStream(it, null, bounds) }
+                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching false
+                var sample = 1
+                while (bounds.outWidth / sample > 1800 || bounds.outHeight / sample > 1800) sample *= 2
+                val bitmap = zip.getInputStream(entry).use { input ->
+                    BitmapFactory.decodeStream(input, null, BitmapFactory.Options().apply {
+                        inSampleSize = sample
+                        inPreferredConfig = Bitmap.Config.RGB_565
+                    })
+                } ?: return@runCatching false
+                try {
+                    target.outputStream().use { output ->
+                        val format = if (android.os.Build.VERSION.SDK_INT >= 30)
+                            Bitmap.CompressFormat.WEBP_LOSSY else Bitmap.CompressFormat.WEBP
+                        bitmap.compress(format, 78, output)
+                    }
+                } finally {
+                    bitmap.recycle()
+                }
+                target.length() in 1..(mediaBudgetBytes - writtenBytes)
             }.getOrDefault(false)
-            if (wrote) map[normalizeEpubPath(e.name)] = target else runCatching { target.delete() }
+            if (wrote) {
+                writtenBytes += target.length()
+                map[normalizeEpubPath(entry.name)] = target
+            } else {
+                runCatching { target.delete() }
+            }
         }
-        runCatching { done.writeText(System.currentTimeMillis().toString()) }
+        runCatching { done.writeText("v2:" + System.currentTimeMillis()) }
         return map
     }
 
@@ -618,7 +650,7 @@ object BookIo {
         val ext = lower.substringAfterLast('.', "jpg").let { if (it.length <= 4) it else "jpg" }
         val hash = entryName.hashCode().toUInt().toString(16)
         val stem = lower.substringAfterLast('/').substringBeforeLast('.').replace(Regex("[^a-z0-9]+"), "_").take(28)
-        return "${stem}_$hash.$ext"
+        return "${stem}_$hash.webp"
     }
 
     /** The archive entry the book's own metadata calls its cover, if there is one. */

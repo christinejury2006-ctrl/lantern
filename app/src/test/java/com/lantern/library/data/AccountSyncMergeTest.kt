@@ -299,4 +299,50 @@ class AccountSyncMergeTest {
         assertTrue(!merged.backupFailed)
         assertEquals(900L, merged.backupAt)
     }
+
+
+    @Test
+    fun `a confirmed cloud copy outranks an unconfirmed local Drive reference`() {
+        val local = book("a", driveFileId = "stale-local-id", backupAt = 0L)
+            .copy(pendingUpload = true, backupFailed = true)
+        val cloud = book("a", driveFileId = "verified-cloud-id", backupAt = 900L)
+            .copy(backupBytes = 4096L, backupMd5 = "a".repeat(32))
+
+        val merged = AccountSync.merge(snapshot(listOf(local)), snapshot(listOf(cloud))).books.single()
+
+        assertEquals("verified-cloud-id", merged.driveFileId)
+        assertEquals(900L, merged.backupAt)
+        assertEquals(4096L, merged.backupBytes)
+        assertEquals("a".repeat(32), merged.backupMd5)
+        assertTrue(!merged.pendingUpload)
+        assertTrue(!merged.backupFailed)
+    }
+
+    @Test
+    fun `when both Drive copies are confirmed the newest confirmation wins`() {
+        val local = book("a", driveFileId = "older-local-id", backupAt = 700L)
+            .copy(backupBytes = 100L, backupMd5 = "1".repeat(32))
+        val cloud = book("a", driveFileId = "newer-cloud-id", backupAt = 900L)
+            .copy(backupBytes = 200L, backupMd5 = "2".repeat(32))
+
+        val merged = AccountSync.merge(snapshot(listOf(local)), snapshot(listOf(cloud))).books.single()
+
+        assertEquals("newer-cloud-id", merged.driveFileId)
+        assertEquals(900L, merged.backupAt)
+        assertEquals(200L, merged.backupBytes)
+        assertEquals("2".repeat(32), merged.backupMd5)
+    }
+
+    @Test
+    fun `an unconfirmed local Drive reference is retained when neither side is verified`() {
+        val local = book("a", driveFileId = "local-pending-id", backupAt = 0L)
+            .copy(pendingUpload = true)
+        val cloud = book("a", driveFileId = null, backupAt = 0L)
+
+        val merged = AccountSync.merge(snapshot(listOf(local)), snapshot(listOf(cloud))).books.single()
+
+        assertEquals("local-pending-id", merged.driveFileId)
+        assertTrue(merged.pendingUpload)
+    }
+
 }

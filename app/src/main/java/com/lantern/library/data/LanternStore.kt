@@ -2596,11 +2596,23 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         // The merged shelf is the source of truth: a local file is sent only if the reconciled
         // account record says its bytes are not already verified. Paused books remain untouched.
         // Anything without a readable local file is a restore/re-import case, not an upload.
+        val decisions = merged.books.groupingBy { b ->
+            val file = b.filePath?.let(::File)
+            val exists = file != null && file.exists() && file.length() > 0L
+            BackupRules.decide(b, exists)
+        }.eachCount()
         val stillOwed = merged.books.filter { b ->
             val file = b.filePath?.let(::File)
             b.id !in pausedUploads &&
                 BackupRules.needsUpload(b, file != null && file.exists() && file.length() > 0L)
         }
+        SyncDiag.mark(
+            "Backup decisions",
+            "inspected ${merged.books.size}; already verified ${decisions[UploadDecision.ALREADY_VERIFIED] ?: 0}; " +
+                "to upload ${stillOwed.size}; restore required ${decisions[UploadDecision.NO_LOCAL_FILE] ?: 0}; " +
+                "not applicable ${decisions[UploadDecision.NOT_APPLICABLE] ?: 0}; " +
+                "paused ${pausedUploads.count { id -> merged.books.any { it.id == id } }}"
+        )
         var extraFailures = 0
         if (stillOwed.isNotEmpty()) {
             val batch = uploadBatch(stillOwed)

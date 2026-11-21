@@ -68,6 +68,20 @@ jobs:
           echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "Deployed Lore notification relay: $url"
 
+      - name: Publish the relay URL to the Android build
+        env:
+          RELAY_URL: ${{ steps.deploy.outputs.url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh variable set LORE_NOTIFICATION_RELAY_URL --body "$RELAY_URL" --repo "$GITHUB_REPOSITORY"
+          configured="$(gh variable get LORE_NOTIFICATION_RELAY_URL --repo "$GITHUB_REPOSITORY")"
+          if [[ "$configured" != "$RELAY_URL" ]]; then
+            echo "::error title=Relay URL not saved::The Android build would ship without the notification relay endpoint."
+            exit 1
+          fi
+          echo "Saved the deployed relay URL for subsequent Android builds."
+
       - name: Rebuild Lore with the deployed relay URL
         shell: bash
         run: |

@@ -585,11 +585,7 @@ object DriveLibrary {
     fun uploadCover(token: String, bookId: String, file: File, knownFileId: String? = null): DriveOutcome<String> {
         if (bookId.isBlank() || !file.exists() || file.length() <= 40L) return DriveOutcome.Failed
         val q = "appProperties has { key='loreCoverId' and value='${escape(bookId)}' } and trashed=false"
-        val existing = knownFileId?.takeIf { it.isNotBlank() } ?: when (val lookup = query(token, q)) {
-            QueryOutcome.Unauthorized -> return DriveOutcome.Unauthorized
-            QueryOutcome.Error -> return DriveOutcome.Failed
-            is QueryOutcome.Ok -> lookup.ids.firstOrNull()
-        }
+        var existing = knownFileId?.takeIf { it.isNotBlank() }
         if (!existing.isNullOrBlank()) {
             val checkReq = Request.Builder()
                 .url("$FILES/${enc(existing)}?fields=id,size,md5Checksum")
@@ -603,6 +599,20 @@ object DriveLibrary {
                 val sameSize = meta.optString("size").toLongOrNull() == file.length()
                 val sameHash = meta.optString("md5Checksum").equals(md5Of(file), ignoreCase = true)
                 if (sameSize && sameHash) return DriveOutcome.Ok(existing)
+            } else if (check.code == 404) {
+                // The account may have deleted the cover independently. Fall back to its stable
+                // appProperty lookup and create a fresh asset if no matching file remains.
+                existing = null
+            } else {
+                noteError("cover lookup", check.code, check.body)
+                return DriveOutcome.Failed
+            }
+        }
+        if (existing.isNullOrBlank()) {
+            existing = when (val lookup = query(token, q)) {
+                QueryOutcome.Unauthorized -> return DriveOutcome.Unauthorized
+                QueryOutcome.Error -> return DriveOutcome.Failed
+                is QueryOutcome.Ok -> lookup.ids.firstOrNull()
             }
         }
         val id = if (!existing.isNullOrBlank()) {

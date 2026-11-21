@@ -1,5 +1,8 @@
 package com.lantern.library.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -28,6 +31,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -115,7 +120,9 @@ fun ReadingNookScreen(
     onPauseUpload: (String) -> Unit = {},
     onResumeUpload: (String) -> Unit = {},
     onPauseRestore: (String) -> Unit = {},
-    onResumeRestore: (String) -> Unit = {}
+    onResumeRestore: (String) -> Unit = {},
+    networkAvailable: Boolean = true,
+    connectionRestored: Boolean = false
 ) {
     val palette = nookPalette(theme)
     // Which book's backup detail is open. Local to Home: opening it must not touch the shelf.
@@ -123,11 +130,11 @@ fun ReadingNookScreen(
 
     NookBackdrop(palette) {
         Column(Modifier.fillMaxSize()) {
-            NookHeader(palette, account, onNotifications, unreadNotifications)
+            NookHeader(palette, account, onNotifications, unreadNotifications, networkAvailable, connectionRestored)
             // The editor's picks sit above the shelf and stay there: they are the one part of the
             // page that is about books the reader does not own yet, and it should not disappear
             // the moment they start scrolling their own.
-            PicksBar(palette, picks, picksBusy, picksFailed, onOpenPick, onRefreshPicks)
+            PicksBar(palette, picks, picksBusy, picksFailed, onOpenPick, onRefreshPicks, networkAvailable)
 
             LazyColumn(
                 Modifier.fillMaxSize(),
@@ -163,6 +170,7 @@ fun ReadingNookScreen(
                             transfers = transfers,
                             queued = queueReasons.keys,
                             online = online,
+                            networkAvailable = networkAvailable,
                             onOpenBook = onOpenBook,
                             onOpenBadge = { book -> detailFor = book.id }
                         )
@@ -204,6 +212,7 @@ private fun BookRow(
     transfers: Map<String, TransferProgress>,
     queued: Set<String>,
     online: Boolean,
+    networkAvailable: Boolean,
     onOpenBook: (LibraryBook) -> Unit,
     onOpenBadge: (LibraryBook) -> Unit
 ) {
@@ -218,6 +227,7 @@ private fun BookRow(
                 transfer = transfers[book.id],
                 queued = book.id in queued,
                 online = online,
+                networkAvailable = networkAvailable,
                 modifier = Modifier.weight(1f),
                 onBadge = { onOpenBadge(book) },
                 onClick = { onOpenBook(book) }
@@ -241,20 +251,26 @@ private fun PicksBar(
     picksBusy: Boolean,
     picksFailed: Boolean,
     onOpenPick: (DiscoveryBook) -> Unit,
-    onRefreshPicks: () -> Unit
+    onRefreshPicks: () -> Unit,
+    networkAvailable: Boolean
 ) {
     Column(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 6.dp)) {
         NookSectionTitle("Editor's Choice", palette) {
-            Text(
-                if (picksFailed) "Retry" else "Refresh",
-                color = palette.accent,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .clip(RoundedCornerShape(14.dp))
-                    .clickable(enabled = !picksBusy, onClick = onRefreshPicks)
+                    .clickable(enabled = !picksBusy && networkAvailable, onClick = onRefreshPicks)
                     .padding(horizontal = 10.dp, vertical = 4.dp)
-            )
+            ) {
+                if (!networkAvailable) Icon(Icons.Filled.WifiOff, "Internet required", tint = palette.mute, modifier = Modifier.size(13.dp))
+                Text(
+                    if (picksFailed) "Retry" else "Refresh",
+                    color = if (networkAvailable) palette.accent else palette.mute,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
         }
         Spacer(Modifier.height(8.dp))
         when {
@@ -270,21 +286,45 @@ private fun PicksBar(
     }
 }
 
+@Composable
+private fun ConnectionIndicator(
+    palette: NookPalette,
+    networkAvailable: Boolean,
+    connectionRestored: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier.padding(top = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Start
+    ) {
+        Icon(
+            if (networkAvailable) Icons.Filled.Wifi else Icons.Filled.WifiOff,
+            contentDescription = if (networkAvailable) "Internet connected" else "No internet connection",
+            tint = if (networkAvailable) palette.accent else palette.mute,
+            modifier = Modifier.size(19.dp)
+        )
+    }
+}
+
 /** Said plainly when nothing has been confirmed in the account yet. */
 @Composable
 private fun NookHeader(
     palette: NookPalette,
     account: CloudAccount,
     onNotifications: () -> Unit,
-    unreadNotifications: Int
+    unreadNotifications: Int,
+    networkAvailable: Boolean,
+    connectionRestored: Boolean
 ) {
     Column(Modifier.fillMaxWidth().padding(top = 26.dp, bottom = 16.dp)) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 20.dp),
             verticalAlignment = Alignment.Top
         ) {
-            // Left slot balances the two buttons on the right so the title stays centred.
-            Spacer(Modifier.width(38.dp))
+            // The connection state has a fixed home in the upper-left corner; it never scrolls
+            // with the shelf and never competes with the notification control.
+            ConnectionIndicator(palette, networkAvailable, connectionRestored, Modifier.width(38.dp))
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
                     "THE",
@@ -343,6 +383,18 @@ private fun NookHeader(
                 }
             }
         }
+        AnimatedVisibility(
+            visible = connectionRestored,
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
+            Text(
+                "Network connection restored",
+                color = palette.accent,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(start = 20.dp, top = 6.dp)
+            )
+        }
     }
 }
 
@@ -354,6 +406,7 @@ private fun ShelfTile(
     transfer: TransferProgress?,
     queued: Boolean,
     online: Boolean,
+    networkAvailable: Boolean,
     modifier: Modifier = Modifier,
     onBadge: () -> Unit,
     onClick: () -> Unit
@@ -376,6 +429,15 @@ private fun ShelfTile(
             )
             // The badge is the only thing on the cover that changes, and it is drawn in the same
             // spot for every state, so a transfer never nudges the layout underneath it.
+            if (!networkAvailable && book.filePath.isNullOrBlank() && !book.driveFileId.isNullOrBlank()) {
+                Box(
+                    Modifier.align(Alignment.TopStart).padding(5.dp)
+                        .clip(RoundedCornerShape(8.dp)).background(Color(0x66000000))
+                        .padding(4.dp)
+                ) {
+                    Icon(Icons.Filled.WifiOff, "This book needs internet to restore", tint = Color.White, modifier = Modifier.size(12.dp))
+                }
+            }
             BackupBadgeChip(
                 book = book,
                 transfer = transfer,

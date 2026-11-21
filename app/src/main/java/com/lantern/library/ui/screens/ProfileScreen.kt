@@ -88,7 +88,10 @@ fun ProfileScreen(
     val context = LocalContext.current
     var storage by remember { mutableStateOf(StorageUsageSnapshot(0L, 0)) }
     val storageKey = books.map { Triple(it.filePath, it.backupBytes, it.remoteCover) }
-    LaunchedEffect(storageKey, transfers) {
+    // Directory walks can touch hundreds of megabytes. Refresh when the library's
+    // stored-file/cover inventory changes or this screen is re-entered, not on every
+    // transfer-progress tick.
+    LaunchedEffect(storageKey) {
         storage = withContext(Dispatchers.IO) { StorageUsage.measure(context) }
     }
     // Every number on the panel comes from the same function, so they add up by construction.

@@ -3258,7 +3258,18 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             val token = driveToken() ?: return AccountLink.UNKNOWN
             return withContext(Dispatchers.IO) {
                 when (val lookup = DriveLibrary.findByLoreId(token, book.id)) {
-                    is LoreLookup.Found -> if (lookup.id == expected) AccountLink.MATCHED else AccountLink.MISSING
+                    is LoreLookup.Found -> {
+                        if (lookup.id != expected) {
+                            AccountLink.MISSING
+                        } else {
+                            val local = book.filePath?.let(::File) ?: return@withContext AccountLink.UNKNOWN
+                            when (DriveLibrary.remoteMatches(token, expected, local)) {
+                                true -> AccountLink.MATCHED
+                                false -> AccountLink.MISSING
+                                null -> AccountLink.UNKNOWN
+                            }
+                        }
+                    }
                     // The account answered, and does not have it: that is an answer, not a failure.
                     LoreLookup.NotFound -> AccountLink.MISSING
                     LoreLookup.Error -> AccountLink.UNKNOWN

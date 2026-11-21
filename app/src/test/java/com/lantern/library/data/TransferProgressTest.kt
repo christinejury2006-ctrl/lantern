@@ -42,9 +42,9 @@ class TransferProgressTest {
 
     // ---------------------------------------------------------------- percentage
 
-        @Test
+    @Test
     fun `backup counts respect queued failed and paused transfer states`() {
-        val file = write("audit.epub", epubBytes("audit"))
+        val file = tempFile(512)
         val queuedBook = book(id = "queued", filePath = file.absolutePath)
         val failedBook = book(id = "failed", filePath = file.absolutePath)
         val pausedBook = book(id = "paused", filePath = file.absolutePath)

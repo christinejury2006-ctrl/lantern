@@ -460,7 +460,8 @@ internal fun LanternRoot(store: LanternStore) {
                             // called are still here, still logging, still used by the sync itself.
                             transfers = com.lantern.library.data.TransferBus.states,
                             queuedIds = store.queuedUploadIds,
-                            pausedUploads = store.pausedUploads
+                            pausedUploads = store.pausedUploads,
+                            networkAvailable = networkAvailable
                         )
                         is Route.Reader -> {
                             val book = store.book(r.id)

@@ -246,6 +246,21 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         val snapshotAt: Long
     )
 
+    // A WorkManager upload may finish while the app process still has this ViewModel alive.
+    // Mirror a worker's already-persisted cloud-only transition into Compose state immediately.
+    init {
+        viewModelScope.launch {
+            LocalBookRetentionEvents.released.collect { event ->
+                if (event.namespace != namespace) return@collect
+                val current = book(event.bookId) ?: return@collect
+                if (current.filePath != null && !(current.keepOfflineExplicit && current.keepOffline)) {
+                    upsert(current.copy(filePath = null, keepOffline = false))
+                    refreshBackupAudit()
+                }
+            }
+        }
+    }
+
     init {
         StartupTrace.mark("LanternStore.init scheduled")
         viewModelScope.launch {

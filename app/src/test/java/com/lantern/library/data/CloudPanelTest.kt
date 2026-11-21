@@ -56,20 +56,25 @@ class CloudPanelTest {
         backupBytes: Long = LOCAL_BYTES,
         pending: Boolean = false,
         failed: Boolean = false
-    ) = LibraryBook(
-        id = id,
-        title = "Book $id",
-        author = "Writer",
-        format = format,
-        origin = origin,
-        filePath = if (local) localPath(id) else null,
-        pageCount = 10,
-        driveFileId = driveId,
-        backupAt = backupAt,
-        backupBytes = backupBytes,
-        pendingUpload = pending,
-        backupFailed = failed
-    )
+    ): LibraryBook {
+        val path = if (local) localPath(id) else null
+        val file = path?.let(::File)
+        return LibraryBook(
+            id = id,
+            title = "Book $id",
+            author = "Writer",
+            format = format,
+            origin = origin,
+            filePath = path,
+            pageCount = 10,
+            driveFileId = driveId,
+            backupAt = backupAt,
+            backupBytes = backupBytes,
+            backupMd5 = file?.let(BookFiles::md5).orEmpty(),
+            pendingUpload = pending,
+            backupFailed = failed
+        )
+    }
 
     /** The one invariant the panel must never break. */
     private fun assertConsistent(m: CloudPanel.Metrics) {

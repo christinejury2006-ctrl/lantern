@@ -191,6 +191,31 @@ class OfflineRetentionTest {
     }
 
     @Test
+    fun `recently read books remain local after their upload is verified`() {
+        val books = temp.newFolder("recent-books")
+        val archive = File(books, "recent.epub").apply { writeBytes("recently read".toByteArray()) }
+        val checksum = BookFiles.md5(archive)
+        val library = temp.newFile("recent-library.json")
+        val record = book().copy(
+            filePath = archive.absolutePath,
+            driveFileId = "drive-recent",
+            backupAt = 1_700_000_000_000L,
+            backupBytes = archive.length(),
+            backupMd5 = checksum,
+            lastReadAt = System.currentTimeMillis()
+        )
+        assertTrue(BookRecords.write(library, listOf(record)))
+
+        val outcome = VerifiedUploadRetention.release(
+            library, record.id, "drive-recent", archive.length(), checksum
+        )
+
+        assertEquals(VerifiedUploadRetention.Outcome.NOT_ELIGIBLE, outcome)
+        assertTrue("the active reading copy must stay available", archive.exists())
+        assertEquals(archive.absolutePath, BookRecords.read(library).single().filePath)
+    }
+
+    @Test
     fun `post-upload release refuses local bytes that no longer match verified checksum`() {
         val books = temp.newFolder("changed-books")
         val archive = File(books, "changed.pdf").apply { writeBytes("original bytes".toByteArray()) }

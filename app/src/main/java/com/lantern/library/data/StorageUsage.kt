@@ -7,6 +7,7 @@ data class StorageUsageSnapshot(
     val bytes: Long,
     val files: Int,
     val bookBytes: Long = 0L,
+    val derivedMediaBytes: Long = 0L,
     val coverBytes: Long = 0L,
     val cloudBytes: Long = 0L,
     val cacheBytes: Long = 0L,
@@ -15,6 +16,7 @@ data class StorageUsageSnapshot(
 ) {
     fun displaySize(): String = formatBytes(bytes)
     fun booksSize(): String = formatBytes(bookBytes)
+    fun derivedMediaSize(): String = formatBytes(derivedMediaBytes)
     fun coversSize(): String = formatBytes(coverBytes)
     fun cloudSize(): String = formatBytes(cloudBytes)
     fun cacheSize(): String = formatBytes(cacheBytes)
@@ -48,6 +50,7 @@ object StorageUsage {
         var total = 0L
         var count = 0
         var books = 0L
+        var derivedMedia = 0L
         var covers = 0L
         var cloud = 0L
         var cache = 0L
@@ -62,6 +65,7 @@ object StorageUsage {
                     total = saturatingAdd(total, size)
                     count++
                     when {
+                        isDerivedMediaFile(file, externalFilesRoot) -> derivedMedia = saturatingAdd(derivedMedia, size)
                         classifyFile(file, externalFilesRoot, "books") -> books = saturatingAdd(books, size)
                         classifyFile(file, externalFilesRoot, "covers") -> covers = saturatingAdd(covers, size)
                         classifyFile(file, externalFilesRoot, "cloud") -> cloud = saturatingAdd(cloud, size)
@@ -79,7 +83,7 @@ object StorageUsage {
         add(externalFilesRoot)
         add(externalCacheRoot)
 
-        return StorageUsageSnapshot(total, count, books, covers, cloud, cache, internal, other)
+        return StorageUsageSnapshot(total, count, books, derivedMedia, covers, cloud, cache, internal, other)
     }
 
     private fun isInside(file: File, directory: File): Boolean = runCatching {
@@ -91,6 +95,15 @@ object StorageUsage {
         }
         false
     }.getOrDefault(false)
+
+    private fun isDerivedMediaFile(file: File, externalRoot: File?): Boolean {
+        if (externalRoot == null) return false
+        return runCatching {
+            val root = externalRoot.canonicalFile
+            val relative = file.canonicalFile.relativeTo(root).path
+            relative.startsWith("books" + File.separator + "media_")
+        }.getOrDefault(false)
+    }
 
     private fun classifyFile(file: File, externalRoot: File?, bucket: String): Boolean {
         if (externalRoot == null) return false

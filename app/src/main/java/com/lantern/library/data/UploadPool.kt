@@ -105,7 +105,7 @@ class UploadPool(
      *
      * A pause has to stop bytes, not just redraw a badge. The transfer is asked to stop at the
      * next chunk boundary (by throwing out of the progress callback) and the socket is aborted, so
-     * the permit is released and the book stops occupying one of the three slots. It is not a
+     * the permit is released and the book stops occupying one of the upload slots. It is not a
      * resumable HTTP session — Drive's simple upload endpoint does not offer one — so the resume
      * re-sends the file, which is safe because every attempt looks the book up by `loreId` first
      * and replaces rather than duplicates.

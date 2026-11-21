@@ -737,6 +737,29 @@ object BookIo {
         }
     }
 
+    /**
+     * Rebuilds an imported book's local cover from its source file when the extracted image is
+     * missing. Cover images are derivatives, not the book itself, so they can always be
+     * regenerated from a validated local EPUB/PDF without another network request.
+     */
+    fun ensureCover(context: Context, book: LibraryBook): String? {
+        val current = book.remoteCover
+        if (current.isNullOrBlank()) Unit
+        else if (current.startsWith("http://") || current.startsWith("https://")) return current
+        else {
+            val existing = File(current)
+            if (existing.exists() && existing.length() > 40L) return existing.absolutePath
+        }
+        val source = book.filePath?.let(::File)?.takeIf { it.exists() && it.length() > 0L } ?: return null
+        val dest = File(coversDir(context), "${book.id}.jpg")
+        val ok = when (book.format) {
+            BookFormat.EPUB -> extractEpubCover(source, dest)
+            BookFormat.PDF -> extractPdfCover(source, dest)
+            BookFormat.TEXT -> false
+        }
+        return dest.absolutePath.takeIf { ok && dest.exists() && dest.length() > 40L }
+    }
+
     private fun extractEpubCover(epub: File, dest: File): Boolean {
         val zip = try { ZipFile(epub) } catch (_: Exception) { return false }
         return zip.use { z ->

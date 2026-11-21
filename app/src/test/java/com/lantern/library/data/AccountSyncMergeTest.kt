@@ -345,4 +345,63 @@ class AccountSyncMergeTest {
         assertTrue(merged.pendingUpload)
     }
 
+
+
+    @Test
+    fun `two hundred verified books remain upload-free across sign-in reconciliation`() {
+        val dir = java.nio.file.Files.createTempDirectory("lore-repeat-backup").toFile()
+        try {
+            val localBooks = (0 until 200).map { index ->
+                val file = java.io.File(dir, "book-$index.epub").apply {
+                    writeBytes("book-$index-content".toByteArray())
+                }
+                LibraryBook(
+                    id = "book-$index",
+                    title = "Book $index",
+                    author = "Test",
+                    format = BookFormat.EPUB,
+                    origin = BookOrigin.IMPORT,
+                    filePath = file.absolutePath,
+                    driveFileId = "drive-$index",
+                    backupAt = 1_700_000_000_000L + index,
+                    backupBytes = file.length(),
+                    backupMd5 = BookFiles.md5(file),
+                    pendingUpload = false,
+                    backupFailed = false
+                )
+            }
+            val localDiskRoundTrip = BookRecords.decodeAll(BookRecords.encodeAll(localBooks))
+            val cloudRoundTrip = AccountSync.fromJson(
+                AccountSync.toJson(snapshot(localBooks.map { it.copy(filePath = null) }))
+            )!!
+
+            val firstSignIn = AccountSync.merge(
+                snapshot(localDiskRoundTrip),
+                cloudRoundTrip
+            )
+            val secondSignIn = AccountSync.merge(
+                snapshot(BookRecords.decodeAll(BookRecords.encodeAll(firstSignIn.books))),
+                AccountSync.fromJson(AccountSync.toJson(firstSignIn))!!
+            )
+
+            assertEquals(200, secondSignIn.books.size)
+            assertEquals(
+                200,
+                secondSignIn.books.count { book ->
+                    val file = book.filePath?.let { java.io.File(it) }
+                    file != null && BackupRules.decide(book, file.exists()) == UploadDecision.ALREADY_VERIFIED
+                }
+            )
+            assertTrue(
+                "a sign-in must not enqueue any of the already verified books",
+                secondSignIn.books.none { book ->
+                    val file = book.filePath?.let { java.io.File(it) }
+                    BackupRules.needsUpload(book, file != null && file.exists())
+                }
+            )
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
 }

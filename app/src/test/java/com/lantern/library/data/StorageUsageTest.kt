@@ -32,4 +32,14 @@ class StorageUsageTest {
     fun `negative file sizes are treated as zero`() {
         assertEquals("0 B", StorageUsageSnapshot.formatBytes(-1L))
     }
+
+    @Test
+    fun `storage audit recognises incomplete transfer files separately`() {
+        assertEquals(true, StorageUsage.isTemporaryFile(java.io.File("book.epub.restore")))
+        assertEquals(true, StorageUsage.isTemporaryFile(java.io.File("book.pdf.part")))
+        assertEquals(true, StorageUsage.isTemporaryFile(java.io.File("library.json.tmp")))
+        assertEquals(true, StorageUsage.isTemporaryFile(java.io.File("cover.jpg.incoming")))
+        assertEquals(false, StorageUsage.isTemporaryFile(java.io.File("complete-book.epub")))
+    }
+
 }

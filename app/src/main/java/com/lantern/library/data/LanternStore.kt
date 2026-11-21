@@ -2885,6 +2885,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 val knownCoverId = cloudBook.driveCoverFileId
                     ?: local?.driveCoverFileId
                     ?: coverIndex[cloudBook.id]
+                if (!knownCoverId.isNullOrBlank()) ids[cloudBook.id] = knownCoverId
                 if (localCover != null) {
                     when (val uploaded = DriveLibrary.uploadCover(token, cloudBook.id, localCover, knownCoverId)) {
                         is DriveOutcome.Ok -> ids[cloudBook.id] = uploaded.value
@@ -2913,7 +2914,6 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         }
         val (ids, paths, counts) = value
         val (failed, unavailable) = counts
-        val coverIndex = if (ids.isEmpty()) emptyMap() else ids
         withContext(Dispatchers.Main) {
             synchronized(libraryLock) {
                 for (index in books.indices) {

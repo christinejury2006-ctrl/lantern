@@ -42,4 +42,23 @@ class StorageUsageTest {
         assertEquals(false, StorageUsage.isTemporaryFile(java.io.File("complete-book.epub")))
     }
 
+
+    @Test
+    fun `storage roots are canonicalised and de duplicated`() {
+        val root = java.nio.file.Files.createTempDirectory("lore-storage-root").toFile()
+        try {
+            val alias = java.io.File(root, "nested/..")
+            val roots = StorageUsage.uniqueRoots(listOf(root, alias, null))
+            assertEquals(1, roots.size)
+            assertEquals(root.canonicalPath, roots.single().canonicalPath)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `installed package bytes have a separate display value`() {
+        val snapshot = StorageUsageSnapshot(bytes = 4096L, files = 2, installedBytes = 2048L)
+        assertEquals("2.0 KB", snapshot.installedSize())
+    }
 }

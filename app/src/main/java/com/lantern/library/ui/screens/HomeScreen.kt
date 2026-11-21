@@ -275,7 +275,7 @@ private fun PicksBar(
         Spacer(Modifier.height(8.dp))
         when {
             picksBusy && picks.isEmpty() -> PicksPlaceholder(palette)
-            picks.isEmpty() -> EmptyPicks(palette, picksFailed, onRefreshPicks)
+            picks.isEmpty() -> EmptyPicks(palette, picksFailed, onRefreshPicks, networkAvailable)
             else -> LazyRow(
                 contentPadding = PaddingValues(horizontal = 20.dp, vertical = 2.dp),
                 horizontalArrangement = Arrangement.spacedBy(14.dp)
@@ -853,14 +853,26 @@ private fun PicksPlaceholder(palette: NookPalette) {
 }
 
 @Composable
-private fun EmptyPicks(palette: NookPalette, failed: Boolean, onRetry: () -> Unit) {
+private fun EmptyPicks(
+    palette: NookPalette,
+    failed: Boolean,
+    onRetry: () -> Unit,
+    networkAvailable: Boolean
+) {
     GlassSurface(
         palette,
         Modifier.fillMaxWidth().padding(horizontal = 20.dp),
         shape = RoundedCornerShape(18.dp),
-        onClick = onRetry
+        onClick = { if (networkAvailable) onRetry() }
     ) {
         Column(Modifier.padding(16.dp)) {
+            if (!networkAvailable) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.WifiOff, "Internet required", tint = palette.mute, modifier = Modifier.size(13.dp))
+                    Text("  Waiting for an internet connection", color = palette.mute, fontSize = 11.sp)
+                }
+                Spacer(Modifier.height(6.dp))
+            }
             Text(
                 if (failed) "Today's picks could not be fetched" else "No picks yet",
                 color = palette.ink,
@@ -868,7 +880,8 @@ private fun EmptyPicks(palette: NookPalette, failed: Boolean, onRetry: () -> Uni
                 fontSize = 15.sp
             )
             Text(
-                if (failed) "Tap to try again. Your shelf is unaffected."
+                if (!networkAvailable) "Your saved library is available offline. Picks will refresh when you reconnect."
+                else if (failed) "Tap to try again. Your shelf is unaffected."
                 else "Pick a few interests in your profile and the nook will fill itself.",
                 color = palette.mute,
                 fontSize = 12.sp,

@@ -152,22 +152,22 @@ object BookRecords {
      * temporary and renamed for the same reason as [update]: a process killed mid-write must leave
      * the previous shelf, never half a shelf.
      */
-    fun write(file: File, books: List<LibraryBook>): Boolean {
-        val tmp = File(file.parentFile, file.name + ".tmp")
-        runCatching { tmp.writeText(encodeAll(books)) }.getOrElse { return false }
-        if (!tmp.renameTo(file)) {
-            val copied = runCatching {
-                tmp.copyTo(file, overwrite = true)
-                true
-            }.getOrDefault(false)
-            runCatching { tmp.delete() }
-            if (!copied) return false
+    fun write(file: File, books: List<LibraryBook>): Boolean =
+        synchronized(file.absolutePath.intern()) {
+            val expected = encodeAll(books)
+            val tmp = File(file.parentFile, file.name + ".tmp")
+            runCatching { tmp.writeText(expected) }.getOrElse { return@synchronized false }
+            if (!tmp.renameTo(file)) {
+                val copied = runCatching {
+                    tmp.copyTo(file, overwrite = true)
+                    true
+                }.getOrDefault(false)
+                runCatching { tmp.delete() }
+                if (!copied) return@synchronized false
+            }
+            // Sign-out cleanup relies on this return value before deleting any physical book bytes.
+            runCatching { file.exists() && file.readText() == expected }.getOrDefault(false)
         }
-        // Sign-out cleanup relies on this return value before deleting any physical book bytes.
-        // Verify the exact serialized shelf landed, rather than treating a failed fallback copy as
-        // success and potentially removing files while the old metadata still points at them.
-        return runCatching { file.exists() && file.readText() == encodeAll(books) }.getOrDefault(false)
-    }
 
     /** Reads a namespace's library file without any app state. */
     fun read(file: File): List<LibraryBook> =

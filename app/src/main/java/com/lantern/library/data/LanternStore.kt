@@ -2763,7 +2763,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                         File(value).exists() && File(value).length() > 40L
                 }?.let(::File)
                 if (localCover != null) {
-                    when (val uploaded = DriveLibrary.uploadCover(token, cloudBook.id, localCover)) {
+                    when (val uploaded = DriveLibrary.uploadCover(token, cloudBook.id, localCover, cloudBook.driveCoverFileId ?: local?.driveCoverFileId)) {
                         is DriveOutcome.Ok -> ids[cloudBook.id] = uploaded.value
                         else -> failed++
                     }

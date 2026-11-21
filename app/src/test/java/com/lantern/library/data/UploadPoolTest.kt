@@ -379,6 +379,8 @@ class UploadPoolTest {
         val result = run(listOf(a, b))
 
         assertEquals(setOf("a", "b"), result.confirmed.keys)
+        assertEquals(setOf("a", "b"), result.checksums.keys)
+        assertTrue(result.checksums.values.all { it.matches(Regex("(?i)[0-9a-f]{32}")) })
         assertEquals(2, drive.maxInFlight.get())
         assertEquals(2, drive.countFor("a") + drive.countFor("b"))
     }

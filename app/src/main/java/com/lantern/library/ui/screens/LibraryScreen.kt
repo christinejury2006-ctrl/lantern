@@ -30,6 +30,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -125,7 +126,8 @@ fun LibraryScreen(
     onResumeRestore: (String) -> Unit = {},
     /** Stops / continues an upload. */
     onPauseUpload: (String) -> Unit = {},
-    onResumeUpload: (String) -> Unit = {}
+    onResumeUpload: (String) -> Unit = {},
+    networkAvailable: Boolean = true
 ) {
     val palette = nookPalette(theme)
     var category by remember { mutableStateOf(LibraryCategory.ALL) }
@@ -259,7 +261,8 @@ fun LibraryScreen(
                         onClick = { onOpen(book) },
                         onLongClick = { menuFor = book },
                         removing = book.id in removingIds,
-                        restoring = book.id in restoringIds
+                        restoring = book.id in restoringIds,
+                        networkAvailable = networkAvailable
                     )
                 }
             }
@@ -494,7 +497,8 @@ private fun BookTile(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     removing: Boolean = false,
-    restoring: Boolean = false
+    restoring: Boolean = false,
+    networkAvailable: Boolean = true
 ) {
     Column {
         Box(
@@ -508,6 +512,15 @@ private fun BookTile(
             CoverFace(book.title, book.localCover, book.remoteCover, Modifier.fillMaxSize(), palette.dark)
             if (!book.localFileAvailable) {
                 Badge("☁", palette, Alignment.TopEnd)
+                if (!networkAvailable && !book.driveFileId.isNullOrBlank()) {
+                    Box(
+                        Modifier.align(Alignment.TopStart).padding(5.dp)
+                            .clip(RoundedCornerShape(8.dp)).background(Color(0x66000000))
+                            .padding(4.dp)
+                    ) {
+                        Icon(Icons.Filled.WifiOff, "This book needs internet to restore", tint = Color.White, modifier = Modifier.size(13.dp))
+                    }
+                }
             }
             when (book.section) {
                 LibraryCategory.DNF -> Badge("DNF", palette, Alignment.BottomStart)

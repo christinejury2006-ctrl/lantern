@@ -324,28 +324,42 @@ class RestorePauseTest {
 
     // 7
     @Test
-    fun `two restores of one book never run at once`() {
+    fun `two restores of one book share the active result instead of returning Busy`() {
         val book = remoteBook()
         val gate = CountDownLatch(1)
         host.gate = gate
         val firstOutcome = arrayOfNulls<RestoreOutcome>(1)
-        val runner = Thread(Runnable {
+        val secondOutcome = arrayOfNulls<RestoreOutcome>(1)
+        val secondDone = CountDownLatch(1)
+        val first = Thread(Runnable {
             firstOutcome[0] = runBlocking { service.restoreDownload(book.id) }
         }, "restore-first").apply { isDaemon = true; start() }
 
-        try {
+        val second = try {
             assertTrue("the first restore must start", host.entered.await(20, TimeUnit.SECONDS))
-            val second = runBlocking { service.restoreDownload(book.id) }
-            assertEquals("a second writer on one file is refused", RestoreOutcome.Busy, second)
+            Thread(Runnable {
+                secondOutcome[0] = runBlocking { service.restoreDownload(book.id) }
+                secondDone.countDown()
+            }, "restore-second").apply { isDaemon = true; start() }
+        } catch (t: Throwable) {
+            gate.countDown()
+            throw t
+        }
+
+        try {
+            assertFalse(
+                "the second caller must wait for the first restore",
+                secondDone.await(150, TimeUnit.MILLISECONDS)
+            )
         } finally {
             gate.countDown()
         }
-        runner.join(30_000)
-        assertTrue(
-            "the first restore must complete: ${firstOutcome[0]}",
-            firstOutcome[0] is RestoreOutcome.Restored
-        )
-        assertEquals("and write one file", 1, host.streamedFrom.size)
+        first.join(30_000)
+        second.join(30_000)
+        assertTrue("first restore completes: ${firstOutcome[0]}", firstOutcome[0] is RestoreOutcome.Restored)
+        assertTrue("second caller sees the restored file: ${secondOutcome[0]}", secondOutcome[0] is RestoreOutcome.AlreadyAvailable)
+        assertEquals("only one cloud transfer is performed", 1, host.streamedFrom.size)
+        assertFalse("the restore lock is released", service.isRestoring(book.id))
     }
 
     // 8

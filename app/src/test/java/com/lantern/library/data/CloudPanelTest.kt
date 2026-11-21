@@ -70,7 +70,7 @@ class CloudPanelTest {
             driveFileId = driveId,
             backupAt = backupAt,
             backupBytes = backupBytes,
-            backupMd5 = file?.let(BookFiles::md5).orEmpty(),
+            backupMd5 = file?.let { BookFiles.md5(it) }.orEmpty(),
             pendingUpload = pending,
             backupFailed = failed
         )

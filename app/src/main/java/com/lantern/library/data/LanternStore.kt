@@ -2139,7 +2139,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                         backupFailed = false,
                         backupAt = now,
                         backupBytes = verified.second,
-                        backupMd5 = batch.checksums[bookId] ?: latest.backupMd5
+                        backupMd5 = batch.checksums[bookId] ?: latest.backupMd5,
+                        keepOffline = if (latest.keepOfflineExplicit) latest.keepOffline else false
                     )
                 )
                 NotificationCenter.post(
@@ -2413,7 +2414,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 backupFailed = false,
                 backupAt = verifiedAt,
                 backupBytes = bytes,
-                backupMd5 = md5
+                backupMd5 = md5,
+                keepOffline = if (latest.keepOfflineExplicit) latest.keepOffline else false
             )
         )
         clearTransfer(bookId)

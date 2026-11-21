@@ -3619,7 +3619,16 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         val books = synchronized(libraryLock) { books.toList() }
             .filter { it.origin != BookOrigin.BUNDLED && it.format != BookFormat.TEXT }
         // Live transfers (including paused ones) come from the bus; the batch flag is only a hint.
-        backupCounts = BackupAudit.counts(books, uploadingIds + TransferBus.activeIds())
+        val queued = pendingTransfers().map { it.bookId }.toSet() - TransferBus.activeIds() - pausedUploads
+        val transfers = (uploadingIds + TransferBus.activeIds() + pausedUploads)
+            .mapNotNull { id -> TransferBus.progressFor(id)?.let { id to it } }.toMap()
+        backupCounts = BackupAudit.counts(
+            books,
+            uploading = uploadingIds + TransferBus.activeIds(),
+            online = networkReady(),
+            queued = queued,
+            transfers = transfers
+        )
     }
 
     /** "2 verified, 1 pending, 1 failed" — counted from files, never from metadata. */

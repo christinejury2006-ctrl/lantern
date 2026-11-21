@@ -261,7 +261,7 @@ internal fun LanternRoot(store: LanternStore) {
     }
     fun getDiscovery(book: DiscoveryBook) {
         val owned = store.books.firstOrNull { Recommendations.inLibrary(book, listOf(it)) }
-        if (owned != null && owned.filePath?.let { path -> File(path).let { it.exists() && it.length() > 0L } } != true && !networkAvailable) {
+        if (owned != null && !owned.localFileAvailable && !networkAvailable) {
             store.toast("This book needs internet to restore to this phone.")
             return
         }
@@ -359,7 +359,7 @@ internal fun LanternRoot(store: LanternStore) {
                             picksBusy = store.forYouBusy,
                             picksFailed = store.forYouFailed,
                             onOpenBook = { book ->
-                                if ((book.filePath?.let { path -> File(path).let { it.exists() && it.length() > 0L } } != true) && !networkAvailable) {
+                                if ((!book.localFileAvailable) && !networkAvailable) {
                                     store.toast("This book needs internet to restore to this phone.")
                                 } else {
                                     readerBack = Route.Home

@@ -18,6 +18,17 @@ class StorageUsageTest {
     }
 
     @Test
+    fun `storage audit ranks largest files and caps the visible list`() {
+        val entries = (1..12).map { index ->
+            StorageFileEntry("/app/file-$index", "file-$index", index.toLong() * 100L, "Book")
+        }
+        val largest = StorageUsage.largest(entries)
+        assertEquals(8, largest.size)
+        assertEquals("file-12", largest.first().name)
+        assertEquals("file-5", largest.last().name)
+    }
+
+    @Test
     fun `negative file sizes are treated as zero`() {
         assertEquals("0 B", StorageUsageSnapshot.formatBytes(-1L))
     }

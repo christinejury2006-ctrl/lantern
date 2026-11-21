@@ -671,6 +671,21 @@ object DriveLibrary {
     /** Restores a cover to a temporary file and commits it only after a complete response. */
     fun downloadCover(token: String, fileId: String, dest: File): DriveOutcome<String> {
         if (fileId.isBlank()) return DriveOutcome.Failed
+        // Read the expected identity before downloading. A partial or substituted image must
+        // never be committed as the cover for a different book.
+        val metaReq = Request.Builder()
+            .url("$FILES/${enc(fileId)}?fields=id,size,md5Checksum")
+            .header("Authorization", "Bearer $token")
+            .get()
+            .build()
+        val metaRaw = executeRaw(metaReq) ?: return DriveOutcome.Failed
+        if (metaRaw.code == 401) return DriveOutcome.Unauthorized
+        if (!metaRaw.ok || metaRaw.body == null) return DriveOutcome.Failed
+        val metadata = runCatching { JSONObject(metaRaw.body) }.getOrNull() ?: return DriveOutcome.Failed
+        val expectedSize = metadata.optString("size").toLongOrNull() ?: return DriveOutcome.Failed
+        val expectedMd5 = metadata.optString("md5Checksum").takeIf { it.matches(Regex("(?i)[0-9a-f]{32}")) }
+            ?: return DriveOutcome.Failed
+
         val req = Request.Builder()
             .url("$FILES/${enc(fileId)}?alt=media")
             .header("Authorization", "Bearer $token")
@@ -678,12 +693,17 @@ object DriveLibrary {
             .build()
         val raw = executeRaw(req) ?: return DriveOutcome.Failed
         if (raw.code == 401) return DriveOutcome.Unauthorized
-        if (!raw.ok || raw.bytes == null || raw.bytes.size <= 40) return DriveOutcome.Failed
+        val bytes = raw.bytes ?: return DriveOutcome.Failed
+        if (!raw.ok || bytes.size <= 40 || bytes.size.toLong() != expectedSize) return DriveOutcome.Failed
+        val actualMd5 = java.security.MessageDigest.getInstance("MD5").digest(bytes)
+            .joinToString("") { "%02x".format(it) }
+        if (!actualMd5.equals(expectedMd5, ignoreCase = true)) return DriveOutcome.Failed
+
         val tmp = File(dest.parentFile, dest.name + ".tmp")
         return try {
             dest.parentFile?.mkdirs()
-            tmp.writeBytes(raw.bytes)
-            if (!tmp.exists() || tmp.length() != raw.bytes.size.toLong()) {
+            tmp.writeBytes(bytes)
+            if (!tmp.exists() || tmp.length() != expectedSize) {
                 tmp.delete()
                 DriveOutcome.Failed
             } else {
@@ -691,7 +711,7 @@ object DriveLibrary {
                     tmp.copyTo(dest, overwrite = true)
                     tmp.delete()
                 }
-                if (dest.exists() && dest.length() == raw.bytes.size.toLong()) DriveOutcome.Ok(dest.absolutePath)
+                if (dest.exists() && dest.length() == expectedSize) DriveOutcome.Ok(dest.absolutePath)
                 else DriveOutcome.Failed
             }
         } catch (_: Exception) {

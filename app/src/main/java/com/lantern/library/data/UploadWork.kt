@@ -1,6 +1,7 @@
 package com.lantern.library.data
 
 import android.content.Context
+import android.app.Application
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import androidx.work.BackoffPolicy
@@ -273,14 +274,14 @@ object UploadScheduler {
         val account = accountId?.trim().orEmpty()
         if (account.isEmpty()) return
         if (!Profiles.isValidNamespace(namespace)) return
+        val allowMobileData = ProfileStore(context.applicationContext as Application)
+            .preferences(namespace).getBoolean("mobile", false)
         val request = OneTimeWorkRequestBuilder<UploadWorker>()
             .setInputData(UploadJobs.data(namespace, account, bookId))
             .setConstraints(
                 Constraints.Builder()
                     .setRequiredNetworkType(
-                        UploadNetworkPolicy.requiredNetworkType(
-                            profiles.preferences(namespace).getBoolean("mobile", false)
-                        )
+                        UploadNetworkPolicy.requiredNetworkType(allowMobileData)
                     )
                     .build()
             )

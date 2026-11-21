@@ -517,7 +517,8 @@ internal fun LanternRoot(store: LanternStore) {
                             openDiscoveryLink(detail)
                             details = null
                         }
-                    } else null
+                    } else null,
+                    networkAvailable = networkAvailable
                 )
             }
             if (store.editingInterests && store.interestsChosen) {

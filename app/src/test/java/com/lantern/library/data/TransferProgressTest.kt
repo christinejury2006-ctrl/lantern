@@ -36,6 +36,9 @@ class TransferProgressTest {
         driveFileId = driveFileId,
         backupAt = backupAt,
         backupBytes = backupBytes,
+        backupMd5 = filePath?.let { path ->
+            File(path).takeIf { it.isFile }?.let { BookFiles.md5(it) }
+        }.orEmpty(),
         pendingUpload = pendingUpload,
         backupFailed = backupFailed
     )

@@ -2600,7 +2600,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             val file = b.filePath?.let(::File)
             b.id !in pausedUploads &&
                 BackupRules.needsUpload(b, file != null && file.exists() && file.length() > 0L)
-        }.take(40)
+        }
         var extraFailures = 0
         if (stillOwed.isNotEmpty()) {
             val batch = uploadBatch(stillOwed)
@@ -2708,12 +2708,46 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             }
             // Only after the account snapshot is durably written: the remote file upload alone is
             // not enough to evict a local copy if its library metadata has not been synced.
+            repairMissingBookCovers()
             maybeEvictCache(keepId = null)
         } else {
             SyncDiag.fail("Account snapshot written", "Drive rejected the write; the account copy is unchanged")
             if (announce) withContext(Dispatchers.Main) {
                 toast("Could not sync account. Library stays on this phone.")
             }
+        }
+    }
+
+    /**
+     * Cover images are local derivatives of the EPUB/PDF, not part of the account snapshot.
+     * If an earlier cache purge removed one, recreate it from the still-local book before the
+     * book itself becomes eligible for eviction. This keeps a same-device library from losing
+     * its jackets merely because the account metadata was synced.
+     */
+    private suspend fun repairMissingBookCovers() {
+        val localBooks = withContext(Dispatchers.Main) { synchronized(libraryLock) { books.toList() } }
+        val repaired = withContext(Dispatchers.IO) {
+            localBooks.mapNotNull { book ->
+                if (book.origin == BookOrigin.BUNDLED || book.format == BookFormat.TEXT) return@mapNotNull null
+                val current = book.remoteCover
+                val hasCover = !current.isNullOrBlank() &&
+                    (current.startsWith("http://") || current.startsWith("https://") ||
+                        (File(current).exists() && File(current).length() > 40L))
+                if (hasCover) return@mapNotNull null
+                BookIo.ensureCover(getApplication(), book)?.let { book.id to it }
+            }
+        }
+        if (repaired.isEmpty()) return
+        withContext(Dispatchers.Main) {
+            synchronized(libraryLock) {
+                val paths = repaired.toMap()
+                for (index in books.indices) {
+                    val path = paths[books[index].id] ?: continue
+                    books[index] = books[index].copy(remoteCover = path)
+                }
+                persistBooksUnlocked()
+            }
+            SyncDiag.mark("Book covers", "recreated ${repaired.size} local cover image(s) from their book files")
         }
     }
 

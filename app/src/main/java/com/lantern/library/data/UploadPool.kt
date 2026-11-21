@@ -273,7 +273,9 @@ class UploadPool(
         val alreadyThere = AtomicBoolean(false)
         val sent = uploadSlots.withPermit {
             val existing = book.driveFileId
-            if (!existing.isNullOrBlank() && !BackupRules.changedSinceBackup(book, true) &&
+            val priorSizeConfirmation = book.backupAt > 0L &&
+                book.backupBytes == total && !book.pendingUpload && !book.backupFailed
+            if (!existing.isNullOrBlank() && priorSizeConfirmation &&
                 DriveLibrary.remoteMatches(token, existing, file) == true
             ) {
                 // The account already holds these exact bytes: the confirmation is the missing

@@ -382,8 +382,13 @@ class UploadPoolTest {
         val result = run(books)
 
         assertEquals(8, result.confirmed.size)
+        assertEquals(
+            "the pool should actually fill all four slots under load",
+            UploadPool.MAX_CONCURRENT_UPLOADS,
+            drive.maxInFlight.get()
+        )
         assertTrue(
-            "at most ${UploadPool.MAX_CONCURRENT_UPLOADS} uploads at once, saw ${drive.maxInFlight.get()}",
+            "the pool must never exceed ${UploadPool.MAX_CONCURRENT_UPLOADS} uploads, saw ${drive.maxInFlight.get()}",
             drive.maxInFlight.get() <= UploadPool.MAX_CONCURRENT_UPLOADS
         )
         assertEquals(8, drive.creates.get())

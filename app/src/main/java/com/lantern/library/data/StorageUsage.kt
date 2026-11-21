@@ -65,7 +65,8 @@ object StorageUsage {
                         classifyFile(file, externalFilesRoot, "books") -> books = saturatingAdd(books, size)
                         classifyFile(file, externalFilesRoot, "covers") -> covers = saturatingAdd(covers, size)
                         classifyFile(file, externalFilesRoot, "cloud") -> cloud = saturatingAdd(cloud, size)
-                        root == externalCacheRoot -> cache = saturatingAdd(cache, size)
+                        root == externalCacheRoot || isInside(file, File(internalRoot, "cache")) ||
+                            isInside(file, File(internalRoot, "code_cache")) -> cache = saturatingAdd(cache, size)
                         root == internalRoot -> internal = saturatingAdd(internal, size)
                         else -> other = saturatingAdd(other, size)
                     }
@@ -74,12 +75,16 @@ object StorageUsage {
         }
 
         // Each root is traversed once. These are separate Android app-private locations.
-        add(internalRoot) {}
-        add(externalFilesRoot) {}
-        add(externalCacheRoot) {}
+        add(internalRoot)
+        add(externalFilesRoot)
+        add(externalCacheRoot)
 
         return StorageUsageSnapshot(total, count, books, covers, cloud, cache, internal, other)
     }
+
+    private fun isInside(file: File, directory: File): Boolean =
+        runCatching { file.canonicalFile.toPath().startsWith(directory.canonicalFile.toPath()) }
+            .getOrDefault(false)
 
     private fun classifyFile(file: File, externalRoot: File?, bucket: String): Boolean {
         if (externalRoot == null) return false

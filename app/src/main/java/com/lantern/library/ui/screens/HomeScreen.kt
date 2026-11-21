@@ -298,12 +298,14 @@ private fun ConnectionIndicator(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Start
     ) {
-        Icon(
-            if (networkAvailable) Icons.Filled.Wifi else Icons.Filled.WifiOff,
-            contentDescription = if (networkAvailable) "Internet connected" else "No internet connection",
-            tint = if (networkAvailable) palette.accent else palette.mute,
-            modifier = Modifier.size(19.dp)
-        )
+        if (!connectionRestored) {
+            Icon(
+                if (networkAvailable) Icons.Filled.Wifi else Icons.Filled.WifiOff,
+                contentDescription = if (networkAvailable) "Internet connected" else "No internet connection",
+                tint = if (networkAvailable) palette.accent else palette.mute,
+                modifier = Modifier.size(19.dp)
+            )
+        }
     }
 }
 

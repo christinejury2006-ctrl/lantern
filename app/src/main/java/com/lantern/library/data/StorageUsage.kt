@@ -16,6 +16,7 @@ data class StorageUsageSnapshot(
     val internalBytes: Long = 0L,
     val otherBytes: Long = 0L,
     val temporaryBytes: Long = 0L,
+    val installedBytes: Long = 0L,
     val largestFiles: List<StorageFileEntry> = emptyList()
 ) {
     fun displaySize(): String = formatBytes(bytes)
@@ -27,6 +28,7 @@ data class StorageUsageSnapshot(
     fun internalSize(): String = formatBytes(internalBytes)
     fun otherSize(): String = formatBytes(otherBytes)
     fun temporarySize(): String = formatBytes(temporaryBytes)
+    fun installedSize(): String = formatBytes(installedBytes)
 
     companion object {
         fun formatBytes(value: Long): String {
@@ -42,15 +44,24 @@ data class StorageUsageSnapshot(
 }
 
 /**
- * Measures all app-owned storage roots. Android's internal dataDir does NOT include
- * getExternalFilesDir(), where Lore keeps imported books, extracted covers and cloud restores.
- * Those external app-private files must be counted separately or the displayed total is false.
+ * Measures Lore's private data and every app-specific external storage volume.
+ *
+ * Android exposes more than one app-private external location: a device can have primary and
+ * secondary/shared volumes, separate external cache directories, media directories and OBB
+ * directories. Scanning only getExternalFilesDir(null) misses files stored on any additional
+ * volume. Installed APK/split APK files are also reported separately because Android's app-info
+ * screen includes the installed package size while these files live outside dataDir.
+ *
+ * This is an app-visible audit, not a byte-for-byte replica of Android's StorageStats: the OS may
+ * additionally account for optimised code and package-manager overhead that an app cannot scan.
  */
 object StorageUsage {
     fun measure(context: Context): StorageUsageSnapshot {
         val internalRoot = context.dataDir
-        val externalFilesRoot = context.getExternalFilesDir(null)
-        val externalCacheRoot = context.externalCacheDir
+        val externalFilesRoots = uniqueRoots(context.getExternalFilesDirs(null).toList())
+        val externalCacheRoots = uniqueRoots(context.externalCacheDirs.toList())
+        val externalMediaRoots = uniqueRoots(context.externalMediaDirs.toList())
+        val obbRoots = uniqueRoots(context.obbDirs.toList())
 
         var total = 0L
         var count = 0
@@ -62,72 +73,102 @@ object StorageUsage {
         var internal = 0L
         var other = 0L
         var temporary = 0L
+        var installed = 0L
         val entries = ArrayList<StorageFileEntry>()
+        val seenFiles = HashSet<String>()
 
-        fun add(root: File?) {
-            if (root == null || !root.exists()) return
-            runCatching {
-                root.walkTopDown().filter { it.isFile }.forEach { file ->
-                    val size = runCatching { file.length() }.getOrDefault(0L).coerceAtLeast(0L)
-                    total = saturatingAdd(total, size)
-                    count++
-                    val category = when {
-                        isTemporaryFile(file) -> {
-                            temporary = saturatingAdd(temporary, size)
-                            "Temporary transfer"
-                        }
-                        isDerivedMediaFile(file, externalFilesRoot) -> {
-                            derivedMedia = saturatingAdd(derivedMedia, size)
-                            "EPUB media"
-                        }
-                        classifyFile(file, externalFilesRoot, "books") -> {
-                            books = saturatingAdd(books, size)
-                            "Book"
-                        }
-                        classifyFile(file, externalFilesRoot, "covers") -> {
-                            covers = saturatingAdd(covers, size)
-                            "Cover"
-                        }
-                        classifyFile(file, externalFilesRoot, "cloud") -> {
-                            cloud = saturatingAdd(cloud, size)
-                            "Cloud transfer"
-                        }
-                        root == externalCacheRoot || isInside(file, File(internalRoot, "cache")) ||
-                            isInside(file, File(internalRoot, "code_cache")) -> {
-                            cache = saturatingAdd(cache, size)
-                            "Cache"
-                        }
-                        root == internalRoot -> {
-                            internal = saturatingAdd(internal, size)
-                            "App data"
-                        }
-                        else -> {
-                            other = saturatingAdd(other, size)
-                            "Other"
-                        }
-                    }
-                    val entry = StorageFileEntry(file.absolutePath, file.name, size, category)
-                    if (entries.size < 8) {
-                        entries += entry
-                    } else {
-                        val smallestIndex = entries.indices.minByOrNull { entries[it].bytes }
-                        if (smallestIndex != null && size > entries[smallestIndex].bytes) {
-                            entries[smallestIndex] = entry
-                        }
-                    }
+        fun record(file: File, category: String, size: Long) {
+            val identity = runCatching { file.canonicalPath }.getOrDefault(file.absolutePath)
+            if (!seenFiles.add(identity)) return
+
+            total = saturatingAdd(total, size)
+            count++
+            when (category) {
+                "Temporary transfer" -> temporary = saturatingAdd(temporary, size)
+                "EPUB media" -> derivedMedia = saturatingAdd(derivedMedia, size)
+                "Book" -> books = saturatingAdd(books, size)
+                "Cover" -> covers = saturatingAdd(covers, size)
+                "Cloud transfer" -> cloud = saturatingAdd(cloud, size)
+                "Cache" -> cache = saturatingAdd(cache, size)
+                "App data" -> internal = saturatingAdd(internal, size)
+                "App installation" -> installed = saturatingAdd(installed, size)
+                else -> other = saturatingAdd(other, size)
+            }
+
+            val entry = StorageFileEntry(file.absolutePath, file.name, size, category)
+            if (entries.size < 8) {
+                entries += entry
+            } else {
+                val smallestIndex = entries.indices.minByOrNull { entries[it].bytes }
+                if (smallestIndex != null && size > entries[smallestIndex].bytes) {
+                    entries[smallestIndex] = entry
                 }
             }
         }
 
-        // Each root is traversed once. These are separate Android app-private locations.
-        add(internalRoot)
-        add(externalFilesRoot)
-        add(externalCacheRoot)
+        fun addRoot(root: File?) {
+            if (root == null || !root.exists() || !root.isDirectory) return
+            runCatching {
+                root.walkTopDown().filter { it.isFile }.forEach { file ->
+                    val size = runCatching { file.length() }.getOrDefault(0L).coerceAtLeast(0L)
+                    val category = when {
+                        isTemporaryFile(file) -> "Temporary transfer"
+                        isDerivedMediaFile(file, externalFilesRoots) -> "EPUB media"
+                        isInsideAny(file, externalFilesRoots, "books") -> "Book"
+                        isInsideAny(file, externalFilesRoots, "covers") -> "Cover"
+                        isInsideAny(file, externalFilesRoots, "cloud") -> "Cloud transfer"
+                        isInsideAny(file, externalCacheRoots) ||
+                            isInside(file, File(internalRoot, "cache")) ||
+                            isInside(file, File(internalRoot, "code_cache")) -> "Cache"
+                        isInside(file, internalRoot) -> "App data"
+                        else -> "Other"
+                    }
+                    record(file, category, size)
+                }
+            }
+        }
+
+        // Canonical de-duplication prevents overlapping roots or aliases being counted twice.
+        val roots = uniqueRoots(
+            listOf(internalRoot) + externalFilesRoots + externalCacheRoots +
+                externalMediaRoots + obbRoots
+        )
+        roots.forEach(::addRoot)
+
+        // Android's app storage page includes installed APKs. They are not in dataDir, so include
+        // base and split packages as a separate, read-only category for a more useful comparison.
+        val appInfo = context.applicationInfo
+        val packageFiles = listOfNotNull(appInfo.sourceDir) + appInfo.splitSourceDirs.orEmpty()
+        packageFiles.forEach { path ->
+            val file = File(path)
+            if (file.isFile) {
+                val size = runCatching { file.length() }.getOrDefault(0L).coerceAtLeast(0L)
+                record(file, "App installation", size)
+            }
+        }
 
         return StorageUsageSnapshot(
-            total, count, books, derivedMedia, covers, cloud, cache, internal, other,
-            temporary, largest(entries)
+            bytes = total,
+            files = count,
+            bookBytes = books,
+            derivedMediaBytes = derivedMedia,
+            coverBytes = covers,
+            cloudBytes = cloud,
+            cacheBytes = cache,
+            internalBytes = internal,
+            otherBytes = other,
+            temporaryBytes = temporary,
+            installedBytes = installed,
+            largestFiles = largest(entries)
         )
+    }
+
+    internal fun uniqueRoots(roots: List<File?>): List<File> {
+        val seen = HashSet<String>()
+        return roots.filterNotNull().filter { root ->
+            val identity = runCatching { root.canonicalPath }.getOrDefault(root.absolutePath)
+            seen.add(identity)
+        }
     }
 
     internal fun isTemporaryFile(file: File): Boolean =
@@ -149,24 +190,17 @@ object StorageUsage {
         false
     }.getOrDefault(false)
 
-    private fun isDerivedMediaFile(file: File, externalRoot: File?): Boolean {
-        if (externalRoot == null) return false
-        return runCatching {
-            val root = externalRoot.canonicalFile
-            val relative = file.canonicalFile.relativeTo(root).path
-            relative.startsWith("books" + File.separator + "media_")
-        }.getOrDefault(false)
-    }
+    private fun isInsideAny(file: File, roots: List<File>, child: String? = null): Boolean =
+        roots.any { root -> isInside(file, if (child == null) root else File(root, child)) }
 
-    private fun classifyFile(file: File, externalRoot: File?, bucket: String): Boolean {
-        if (externalRoot == null) return false
-        return runCatching {
-            val root = externalRoot.canonicalFile
-            val target = file.canonicalFile
-            val relative = target.relativeTo(root).path
-            relative == bucket || relative.startsWith(bucket + File.separator)
-        }.getOrDefault(false)
-    }
+    private fun isDerivedMediaFile(file: File, externalRoots: List<File>): Boolean =
+        externalRoots.any { externalRoot ->
+            runCatching {
+                val root = externalRoot.canonicalFile
+                val relative = file.canonicalFile.relativeTo(root).path
+                relative.startsWith("books" + File.separator + "media_")
+            }.getOrDefault(false)
+        }
 
     private fun saturatingAdd(a: Long, b: Long): Long =
         if (Long.MAX_VALUE - a < b) Long.MAX_VALUE else a + b

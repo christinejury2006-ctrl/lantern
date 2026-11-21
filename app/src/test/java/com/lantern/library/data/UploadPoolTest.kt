@@ -688,6 +688,7 @@ class UploadPoolTest {
         // And a signed, verified backup of exactly these bytes needs nothing.
         val doneFile = File(a.filePath!!)
         val done = a.copy(
+            driveFileId = "drive-a",
             backupAt = 1L,
             backupBytes = doneFile.length(),
             backupMd5 = BookFiles.md5(doneFile),

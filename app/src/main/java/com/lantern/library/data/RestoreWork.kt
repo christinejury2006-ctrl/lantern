@@ -78,7 +78,7 @@ object RestoreScheduler {
                 RestoreJobs.name(namespace, bookId),
                 ExistingWorkPolicy.KEEP,
                 request
-            ).result.get()
+            )
         }
     }
 
@@ -87,10 +87,16 @@ object RestoreScheduler {
         withContext(Dispatchers.IO) {
             val manager = WorkManager.getInstance(context)
             val name = RestoreJobs.name(namespace, bookId)
+            var emptyReads = 0
             while (true) {
                 val infos = runCatching { manager.getWorkInfosForUniqueWork(name).get() }
                     .getOrDefault(emptyList())
-                if (infos.isEmpty()) return@withContext false
+                if (infos.isEmpty()) {
+                    if (++emptyReads >= 40) return@withContext false
+                    delay(250)
+                    continue
+                }
+                emptyReads = 0
                 val active = infos.firstOrNull { !it.state.isFinished }
                 if (active == null) return@withContext infos.last().state == androidx.work.WorkInfo.State.SUCCEEDED
                 delay(500)

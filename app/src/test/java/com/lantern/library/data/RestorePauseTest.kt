@@ -53,6 +53,8 @@ class RestorePauseTest {
 
         /** False models a service that ignores `Range` and sends the whole file every time. */
         var honourRange = true
+        /** Simulates a transient socket drop after each first chunk, for WorkManager retry tests. */
+        var failEachAttempt = false
         /** Invoked after each chunk, so a test can pause mid-stream at a real byte position. */
         var afterChunk: ((Long) -> Unit)? = null
         /** Blocks the stream until opened: how two restores are made to overlap. */
@@ -104,6 +106,10 @@ class RestorePauseTest {
                     written += n
                     onBytes(start + written, bytes.size.toLong())
                     afterChunk?.invoke(start + written)
+                    if (failEachAttempt) {
+                        out.flush()
+                        return StreamReport(written, bytes.size.toLong(), false, false, true, "connection dropped")
+                    }
                     if (control.paused() || control.cancelled()) {
                         out.flush()
                         return StreamReport(written, bytes.size.toLong(), false, true, true, "paused")
@@ -383,6 +389,29 @@ class RestorePauseTest {
     // =======================================================================================
 
     // 9
+    @Test
+    fun `transient failures preserve the checkpoint for a background retry`() {
+        val book = remoteBook()
+        host.failEachAttempt = true
+
+        val interrupted = runBlocking { service.restoreDownload(book.id) }
+
+        assertTrue("the exhausted attempt should be retryable: $interrupted", interrupted is RestoreOutcome.Failed)
+        assertTrue("the worker must know to retry", (interrupted as RestoreOutcome.Failed).retryable)
+        assertTrue("a genuine partial file must remain", tempFile().exists() && tempFile().length() > 0L)
+        assertEquals("journal and partial file must agree", tempFile().length(), host.journal[book.id])
+        assertTrue("retryable checkpoint must not be cleared", book.id !in host.cleared)
+
+        val checkpoint = tempFile().length()
+        host.failEachAttempt = false
+        val resumed = runBlocking { DownloadService(host).restoreDownload(book.id) }
+
+        assertTrue("the WorkManager retry must finish: $resumed", resumed is RestoreOutcome.Restored)
+        assertEquals("the retry starts at the saved byte offset", checkpoint, host.streamedFrom.last())
+        assertTrue("the final file is byte-for-byte correct", host.cloud[book.id]!!.contentEquals(localFile()!!.readBytes()))
+    }
+
+    // 10
     @Test
     fun `bytes that fail the checksum are refused and nothing is placed`() {
         val good = epubBytes("good")

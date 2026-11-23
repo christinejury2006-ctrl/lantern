@@ -14,6 +14,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.work.WorkManager
+import androidx.work.getWorkInfosByTagFlow
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -267,6 +269,21 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 }
                 markLocalChanged()
                 refreshBackupAudit()
+            }
+        }
+    }
+
+    // Restore jobs outlive this ViewModel. Observe WorkManager's durable queue so the shelf
+    // still says "Restoring" after the reader returns or Android recreates the process.
+    init {
+        viewModelScope.launch {
+            WorkManager.getInstance(getApplication()).getWorkInfosByTagFlow(RestoreJobs.TAG_ALL).collect { infos ->
+                val activeIds = infos.asSequence()
+                    .filter { !it.state.isFinished }
+                    .filter { it.inputData.getString(RestoreJobs.KEY_NAMESPACE) == namespace }
+                    .mapNotNull { it.inputData.getString(RestoreJobs.KEY_BOOK) }
+                    .toSet()
+                restoringIds = activeIds
             }
         }
     }
@@ -2023,14 +2040,15 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         // Reader-triggered restores use the same durable worker as the explicit Restore action.
         // The reader waits for that unique job, but the transfer itself is owned by WorkManager and
         // continues if this ViewModel or Activity disappears.
+        val jobNamespace = namespace
         val owner = GoogleAuth.accountId(getApplication())
-            ?.takeIf { Profiles.namespaceFor(it) == namespace } ?: return null
+            ?.takeIf { Profiles.namespaceFor(it) == jobNamespace } ?: return null
         withContext(Dispatchers.Main) { restoringIds = restoringIds + book.id }
         val restored = try {
-            RestoreScheduler.resume(getApplication(), namespace, book.id)
-            RestoreScheduler.enqueue(getApplication(), namespace, owner, book.id, keepOffline = false)
-            if (!RestoreScheduler.await(getApplication(), namespace, book.id)) return null
-            BookRecords.read(booksFile).firstOrNull { it.id == book.id }
+            RestoreScheduler.resume(getApplication(), jobNamespace, book.id)
+            RestoreScheduler.enqueue(getApplication(), jobNamespace, owner, book.id, keepOffline = false)
+            if (!RestoreScheduler.await(getApplication(), jobNamespace, book.id)) return null
+            BookRecords.read(profiles.file(jobNamespace, "library.json")).firstOrNull { it.id == book.id }
                 ?.takeIf { candidate ->
                     val file = candidate.filePath?.let(::File)
                     file != null && file.exists() && file.length() > 0L &&
@@ -3674,21 +3692,22 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             toast("That book is no longer in your library.")
             return
         }
+        val jobNamespace = namespace
         val owner = GoogleAuth.accountId(getApplication())
-            ?.takeIf { Profiles.namespaceFor(it) == namespace } ?: run {
+            ?.takeIf { Profiles.namespaceFor(it) == jobNamespace } ?: run {
                 toast("Sign in to the Google account that owns this book before restoring it.")
                 return
             }
         if (bookId in restoringIds) return
         restoringIds = restoringIds + bookId
-        RestoreScheduler.resume(getApplication(), namespace, bookId)
-        RestoreScheduler.enqueue(getApplication(), namespace, owner, bookId, keepOffline = true)
+        RestoreScheduler.resume(getApplication(), jobNamespace, bookId)
+        RestoreScheduler.enqueue(getApplication(), jobNamespace, owner, bookId, keepOffline = true)
         viewModelScope.launch(Dispatchers.IO) {
-            RestoreScheduler.await(getApplication(), namespace, bookId)
-            val updated = BookRecords.read(profiles.file(namespace, "library.json"))
+            RestoreScheduler.await(getApplication(), jobNamespace, bookId)
+            val updated = BookRecords.read(profiles.file(jobNamespace, "library.json"))
                 .firstOrNull { it.id == bookId }
             withContext(Dispatchers.Main) {
-                if (namespace == Profiles.namespaceFor(owner) && updated != null) {
+                if (namespace == jobNamespace && updated != null) {
                     synchronized(libraryLock) {
                         val index = books.indexOfFirst { it.id == bookId }
                         if (index >= 0) books[index] = updated

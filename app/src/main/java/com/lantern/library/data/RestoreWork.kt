@@ -173,7 +173,14 @@ class RestoreWorker(
                 showNotice(book.title, "Open Lore to reconnect Google Drive before restoring this book.")
                 return@withContext Result.failure()
             }
-            DriveTokenResult.Unavailable -> return@withContext Result.retry()
+            DriveTokenResult.Unavailable -> {
+                NotificationCenter.post(
+                    applicationContext, LoreNoticeCategory.DOWNLOADS, "Restore waiting",
+                    "Google Drive is temporarily unavailable. Lore will retry this restore.",
+                    "restore-auth-retry:$namespace:$bookId", "library"
+                )
+                return@withContext Result.retry()
+            }
         }
         updateForeground(book.title, "Preparing download", 0, book.backupBytes)
         var lastNoticeAt = 0L
@@ -222,9 +229,23 @@ class RestoreWorker(
                 Result.failure()
             }
             is RestoreOutcome.Failed -> {
-                TransferBus.failed(bookId, TransferBus.progressFor(bookId)?.sentBytes ?: 0L, book.backupBytes, outcome.reason)
-                showNotice(book.title, "Could not restore: ${outcome.reason}")
-                Result.failure()
+                val current = TransferBus.progressFor(bookId)
+                if (outcome.retryable) {
+                    TransferBus.paused(
+                        bookId, current?.sentBytes ?: 0L, current?.totalBytes ?: book.backupBytes,
+                        "waiting for the connection; Lore will retry", restore = true
+                    )
+                    NotificationCenter.post(
+                        applicationContext, LoreNoticeCategory.DOWNLOADS, "Restore will continue",
+                        "“${book.title}” was interrupted. Lore saved its progress and will retry.",
+                        "restore-retry:$namespace:$bookId", "library"
+                    )
+                    Result.retry()
+                } else {
+                    TransferBus.failed(bookId, current?.sentBytes ?: 0L, book.backupBytes, outcome.reason)
+                    showNotice(book.title, "Could not restore: ${outcome.reason}")
+                    Result.failure()
+                }
             }
             RestoreOutcome.Busy -> Result.retry()
             RestoreOutcome.NotFound -> Result.failure()

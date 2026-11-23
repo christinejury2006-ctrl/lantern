@@ -699,7 +699,8 @@ object BookIo {
         return try {
             val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
             PdfRenderer(pfd).use { it.pageCount }.also { pfd.close() }
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            SyncDiag.fail("PDF page count", "${file.name}: ${error.javaClass.simpleName}: ${error.message.orEmpty()}")
             1
         }
     }

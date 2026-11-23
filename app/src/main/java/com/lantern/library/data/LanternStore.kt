@@ -542,6 +542,18 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         }
         hydrated = true
         StartupTrace.mark("LanternStore hydrated ns=$namespace")
+        // WorkManager may already have restarted a restore before the shelf was hydrated. Seed
+        // the in-memory badges from its durable queue for this exact account namespace.
+        val activeRestores = withContext(Dispatchers.IO) {
+            runCatching {
+                WorkManager.getInstance(getApplication()).getWorkInfosByTag(RestoreJobs.TAG_ALL).get()
+                    .filter { !it.state.isFinished }
+                    .filter { it.inputData.getString(RestoreJobs.KEY_NAMESPACE) == target }
+                    .mapNotNull { it.inputData.getString(RestoreJobs.KEY_BOOK) }
+                    .toSet()
+            }.getOrDefault(emptySet())
+        }
+        if (namespace == target) restoringIds = activeRestores
         // The shelf and the You screen show a per-book backup state from the first frame, not
         // after the first sync.
         reconcileVerifications()

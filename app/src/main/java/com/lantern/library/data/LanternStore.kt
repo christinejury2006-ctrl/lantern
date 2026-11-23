@@ -2070,6 +2070,17 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         } finally {
             withContext(Dispatchers.Main) { restoringIds = restoringIds - book.id }
         }
+        if (restored != null) {
+            withContext(Dispatchers.Main) {
+                if (namespace == jobNamespace) {
+                    synchronized(libraryLock) {
+                        val index = books.indexOfFirst { it.id == book.id }
+                        if (index >= 0) books[index] = restored
+                    }
+                    refreshBackupAudit()
+                }
+            }
+        }
         maybeEvictCache(keepId = book.id)
         return restored
     }

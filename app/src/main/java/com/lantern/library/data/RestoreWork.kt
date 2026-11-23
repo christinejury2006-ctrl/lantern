@@ -278,9 +278,13 @@ class RestoreWorker(
     }
 
     private fun updateForeground(title: String, stage: String, received: Long, total: Long) {
-        NotificationManagerCompat.from(applicationContext).notify(
-            notificationId, notification(title, stage, received, total)
-        )
+        // Notification permission can be denied independently of foreground execution. A missing
+        // drawer notification must never be allowed to kill the actual restore.
+        runCatching {
+            NotificationManagerCompat.from(applicationContext).notify(
+                notificationId, notification(title, stage, received, total)
+            )
+        }
     }
 
     private fun notification(title: String, stage: String, received: Long, total: Long) =

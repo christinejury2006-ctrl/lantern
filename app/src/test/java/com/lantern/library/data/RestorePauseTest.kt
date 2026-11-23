@@ -399,7 +399,7 @@ class RestorePauseTest {
         assertTrue("the exhausted attempt should be retryable: $interrupted", interrupted is RestoreOutcome.Failed)
         assertTrue("the worker must know to retry", (interrupted as RestoreOutcome.Failed).retryable)
         assertTrue("a genuine partial file must remain", tempFile().exists() && tempFile().length() > 0L)
-        assertEquals("journal and partial file must agree", tempFile().length(), host.journal[book.id])
+        assertEquals("journal and partial file must agree", tempFile().length(), host.journal[book.id] ?: -1L)
         assertTrue("retryable checkpoint must not be cleared", book.id !in host.cleared)
 
         val checkpoint = tempFile().length()

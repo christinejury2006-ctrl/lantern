@@ -1771,6 +1771,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         // created for, so nothing queued under another account is touched.
         val owner = runCatching { profiles.identity(namespace)?.ownerAccountId }.getOrNull()
         UploadScheduler.cancelAccount(ctx, owner)
+        RestoreScheduler.cancelAccount(ctx, owner)
         if (!keepOnDisk) runCatching { profiles.purge(namespace) }
         clearActiveState()
         // Detach the old identity in memory immediately. Sign-out performs token revocation and

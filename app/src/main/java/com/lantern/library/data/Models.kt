@@ -70,7 +70,9 @@ data class TocEntry(
 
 data class EpubDocument(
     val chapters: List<Chapter>,
-    val toc: List<TocEntry>
+    val toc: List<TocEntry>,
+    /** A precise structural reason when an archive opened but yielded no readable chapters. */
+    val error: String? = null
 )
 
 data class LibraryBook(

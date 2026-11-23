@@ -42,26 +42,28 @@ object RestoreJobs {
     const val KEY_NAMESPACE = "namespace"
     const val KEY_ACCOUNT = "accountId"
     const val KEY_BOOK = "bookId"
+    const val KEY_KEEP_OFFLINE = "keepOffline"
     const val TAG_ALL = "lore-restore"
 
     fun name(namespace: String, bookId: String) = "restore:$namespace:$bookId"
 
-    fun data(namespace: String, accountId: String, bookId: String): Data = Data.Builder()
+    fun data(namespace: String, accountId: String, bookId: String, keepOffline: Boolean): Data = Data.Builder()
         .putString(KEY_NAMESPACE, namespace)
         .putString(KEY_ACCOUNT, accountId)
         .putString(KEY_BOOK, bookId)
+        .putBoolean(KEY_KEEP_OFFLINE, keepOffline)
         .build()
 }
 
 object RestoreScheduler {
-    fun enqueue(context: Context, namespace: String, accountId: String, bookId: String) {
+    fun enqueue(context: Context, namespace: String, accountId: String, bookId: String, keepOffline: Boolean = true) {
         if (!Profiles.isValidNamespace(namespace) || namespace == Profiles.GUEST ||
             accountId.isBlank() || bookId.isBlank()
         ) return
         val mobileAllowed = ProfileStore(context.applicationContext as Application)
             .preferences(namespace).getBoolean("mobile", false)
         val request = OneTimeWorkRequestBuilder<RestoreWorker>()
-            .setInputData(RestoreJobs.data(namespace, accountId, bookId))
+            .setInputData(RestoreJobs.data(namespace, accountId, bookId, keepOffline))
             .setConstraints(
                 Constraints.Builder().setRequiredNetworkType(
                     if (mobileAllowed) NetworkType.CONNECTED else NetworkType.UNMETERED
@@ -166,7 +168,7 @@ class RestoreWorker(
         val host = RestoreWorkerHost(applicationContext, profiles, namespace, libraryFile) { phase, received, total ->
             updateForeground(book.title, phase, received, total)
         }
-        val outcome = DownloadService(host).restoreDownload(bookId, keepOffline = true)
+        val outcome = DownloadService(host).restoreDownload(bookId, keepOffline = inputData.getBoolean(RestoreJobs.KEY_KEEP_OFFLINE, true))
         when (outcome) {
             is RestoreOutcome.Restored -> {
                 NotificationManagerCompat.from(applicationContext).cancel(notificationId)

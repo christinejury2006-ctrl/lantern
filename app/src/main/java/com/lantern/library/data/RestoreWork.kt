@@ -34,6 +34,11 @@ import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.TimeUnit
 
+/** One monitor shared by the UI and worker while reading or updating restore checkpoints. */
+internal object RestoreJournalLock {
+    val lock = Any()
+}
+
 /**
  * Durable, account-owned restores. A restore is not a ViewModel coroutine: WorkManager owns its
  * lifetime, and its foreground notification reports the actual transfer stage and byte progress.
@@ -359,14 +364,18 @@ private class RestoreWorkerHost(
         restoreJournal()[bookId]?.first ?: 0L
 
     override fun noteRestore(bookId: String, received: Long, total: Long) {
-        val current = restoreJournal().toMutableMap()
-        current[bookId] = received to total
-        writeRestoreJournal(current)
+        synchronized(RestoreJournalLock.lock) {
+            val current = restoreJournal().toMutableMap()
+            current[bookId] = received to total
+            writeRestoreJournal(current)
+        }
     }
 
     override fun clearRestore(bookId: String) {
-        val current = restoreJournal()
-        if (bookId in current) writeRestoreJournal(current - bookId)
+        synchronized(RestoreJournalLock.lock) {
+            val current = restoreJournal()
+            if (bookId in current) writeRestoreJournal(current - bookId)
+        }
     }
 
     override fun noteRestoreProgress(bookId: String, received: Long, total: Long, phase: TransferPhase) {
@@ -400,7 +409,7 @@ private class RestoreWorkerHost(
         SyncDiag.mark("Background restore", message)
     }
 
-    private fun restoreJournal(): Map<String, Pair<Long, Long>> = synchronized(JOURNAL_LOCK) {
+    private fun restoreJournal(): Map<String, Pair<Long, Long>> = synchronized(RestoreJournalLock.lock) {
         val file = profiles.file(namespace, "restore_journal.json")
         if (!file.exists()) return emptyMap()
         runCatching {
@@ -428,5 +437,4 @@ private class RestoreWorkerHost(
         }
     }
 
-    companion object { private val JOURNAL_LOCK = Any() }
 }

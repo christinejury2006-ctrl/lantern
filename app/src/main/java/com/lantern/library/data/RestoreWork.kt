@@ -160,6 +160,8 @@ class RestoreWorker(
         val book = BookRecords.read(libraryFile).firstOrNull { it.id == bookId }
             ?: return@withContext Result.failure()
 
+        ensureChannel()
+        setForeground(foregroundInfo(book.title, "Connecting to Google Drive", 0, book.backupBytes))
         val token = when (val auth = GoogleAuth.driveToken(applicationContext)) {
             is DriveTokenResult.Ok -> auth.token
             is DriveTokenResult.Recoverable -> {
@@ -168,9 +170,7 @@ class RestoreWorker(
             }
             DriveTokenResult.Unavailable -> return@withContext Result.retry()
         }
-
-        ensureChannel()
-        setForeground(foregroundInfo(book.title, "Preparing download", 0, book.backupBytes))
+        updateForeground(book.title, "Preparing download", 0, book.backupBytes)
         val host = RestoreWorkerHost(applicationContext, profiles, namespace, libraryFile) { phase, received, total ->
             updateForeground(book.title, phase, received, total)
         }

@@ -2020,21 +2020,27 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             return book
         }
         if (book.driveFileId.isNullOrBlank()) return null
-        // The same verified restore the Restore button runs. Opening a book whose download was
-        // removed and tapping "Restore download" must not be two different behaviours: both check
-        // the recorded size and checksum, and neither replaces a good file with a partial one.
+        // Reader-triggered restores use the same durable worker as the explicit Restore action.
+        // The reader waits for that unique job, but the transfer itself is owned by WorkManager and
+        // continues if this ViewModel or Activity disappears.
+        val owner = GoogleAuth.accountId(getApplication())
+            ?.takeIf { Profiles.namespaceFor(it) == namespace } ?: return null
         withContext(Dispatchers.Main) { restoringIds = restoringIds + book.id }
-        val outcome = try {
-            downloadService.restoreDownload(book.id, keepOffline = false)
+        val restored = try {
+            RestoreScheduler.resume(getApplication(), namespace, book.id)
+            RestoreScheduler.enqueue(getApplication(), namespace, owner, book.id, keepOffline = false)
+            if (!RestoreScheduler.await(getApplication(), namespace, book.id)) return null
+            BookRecords.read(booksFile).firstOrNull { it.id == book.id }
+                ?.takeIf { candidate ->
+                    val file = candidate.filePath?.let(::File)
+                    file != null && file.exists() && file.length() > 0L &&
+                        BookFiles.validate(file, candidate.format) is BookFiles.Check.Ok
+                }
         } finally {
             withContext(Dispatchers.Main) { restoringIds = restoringIds - book.id }
         }
         maybeEvictCache(keepId = book.id)
-        return when (outcome) {
-            is RestoreOutcome.Restored -> outcome.book
-            is RestoreOutcome.AlreadyAvailable -> outcome.book
-            else -> null
-        }
+        return restored
     }
 
     private fun markLocalChanged() {
@@ -3664,35 +3670,34 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
      * or wrong download can never take the place of a book the reader can open.
      */
     fun restoreDownload(bookId: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            // A second tap while the first is running must not open a second transfer.
-            if (downloadService.isRestoring(bookId)) return@launch
-            downloadService.resume(bookId)
-            withContext(Dispatchers.Main) { restoringIds = restoringIds + bookId }
-            val outcome = try {
-                downloadService.restoreDownload(bookId)
-            } finally {
-                withContext(Dispatchers.Main) { restoringIds = restoringIds - bookId }
+        val selected = book(bookId) ?: run {
+            toast("That book is no longer in your library.")
+            return
+        }
+        val owner = GoogleAuth.accountId(getApplication())
+            ?.takeIf { Profiles.namespaceFor(it) == namespace } ?: run {
+                toast("Sign in to the Google account that owns this book before restoring it.")
+                return
             }
+        if (bookId in restoringIds) return
+        restoringIds = restoringIds + bookId
+        RestoreScheduler.resume(getApplication(), namespace, bookId)
+        RestoreScheduler.enqueue(getApplication(), namespace, owner, bookId, keepOffline = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            RestoreScheduler.await(getApplication(), namespace, bookId)
+            val updated = BookRecords.read(profiles.file(namespace, "library.json"))
+                .firstOrNull { it.id == bookId }
             withContext(Dispatchers.Main) {
-                when (outcome) {
-                    is RestoreOutcome.Restored -> {
-                        NotificationCenter.post(
-                            getApplication(), LoreNoticeCategory.DOWNLOADS, "Book restored",
-                            "${outcome.book.title} is available offline again.",
-                            "restore:${bookId}:${System.currentTimeMillis()}", "reader:$bookId"
-                        )
+                if (namespace == Profiles.namespaceFor(owner) && updated != null) {
+                    synchronized(libraryLock) {
+                        val index = books.indexOfFirst { it.id == bookId }
+                        if (index >= 0) books[index] = updated
                     }
-                    is RestoreOutcome.AlreadyAvailable -> toast("This book is already on this phone.")
-                    is RestoreOutcome.Refused -> toast(outcome.blocker.message)
-                    is RestoreOutcome.Failed -> toast("Could not restore this book: ${outcome.reason}")
-                    is RestoreOutcome.Paused -> toast(
-                        if (outcome.resumable) "Restore paused — tap Resume to continue."
-                        else "Restore paused."
-                    )
-                    RestoreOutcome.Busy -> Unit
-                    RestoreOutcome.NotFound -> toast("That book is no longer in your library.")
+                    if (updated.filePath.isNullOrBlank()) {
+                        toast("Restore did not complete. Check the notification for details.")
+                    }
                 }
+                restoringIds = restoringIds - bookId
                 refreshBackupAudit()
             }
         }
@@ -3706,9 +3711,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
      * of starting a 40 MB download again.
      */
     fun pauseRestore(bookId: String) {
-        downloadService.pause(bookId)
-        // Abort the live request: a blocking read only notices the flag between chunks, and a
-        // pause the reader asked for should stop now.
+        RestoreScheduler.pause(getApplication(), namespace, bookId)
+        // Abort the live request: the worker observes the persisted pause flag at its next chunk.
         DriveLibrary.abortTransfer(bookId)
         val progress = TransferBus.progressFor(bookId)
         TransferBus.paused(
@@ -3722,11 +3726,12 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
 
     /** Continues a paused restore from its checkpoint. */
     fun resumeRestore(bookId: String) {
+        RestoreScheduler.resume(getApplication(), namespace, bookId)
         restoreDownload(bookId)
     }
 
     /** True while this book's restore is running. */
-    fun isRestoringNow(bookId: String): Boolean = downloadService.isRestoring(bookId)
+    fun isRestoringNow(bookId: String): Boolean = bookId in restoringIds || downloadService.isRestoring(bookId)
 
     // ---------------------------------------------------------------------------------------
     // Restore checkpoints

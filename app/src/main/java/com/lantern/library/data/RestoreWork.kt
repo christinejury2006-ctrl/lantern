@@ -25,9 +25,15 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import androidx.lifecycle.Observer
+import androidx.work.WorkInfo
 import com.lantern.library.MainActivity
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.job
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -86,27 +92,30 @@ object RestoreScheduler {
     }
 
     /** Waits for the unique restore already queued for this book, including one started elsewhere. */
-    suspend fun await(context: Context, namespace: String, bookId: String): Boolean =
-        withContext(Dispatchers.IO) {
-            val manager = WorkManager.getInstance(context)
-            val name = RestoreJobs.name(namespace, bookId)
-            var emptyReads = 0
-            while (true) {
-                val infos = runCatching { manager.getWorkInfosForUniqueWork(name).get() }
-                    .getOrDefault(emptyList())
-                if (infos.isEmpty()) {
-                    if (++emptyReads >= 40) return@withContext false
-                    delay(250)
-                    continue
-                }
-                emptyReads = 0
-                val active = infos.firstOrNull { !it.state.isFinished }
-                if (active == null) return@withContext infos.last().state == androidx.work.WorkInfo.State.SUCCEEDED
-                delay(500)
+    suspend fun await(context: Context, namespace: String, bookId: String): Boolean {
+        val live = WorkManager.getInstance(context)
+            .getWorkInfosForUniqueWorkLiveData(RestoreJobs.name(namespace, bookId))
+        val started = CompletableDeferred<Unit>()
+        val finished = CompletableDeferred<Boolean>()
+        val observer = Observer<List<WorkInfo>> { infos ->
+            val rows = infos.orEmpty()
+            val active = rows.firstOrNull { !it.state.isFinished }
+            if (active != null) {
+                started.complete(Unit)
+            } else if (started.isCompleted && rows.isNotEmpty()) {
+                finished.complete(rows.last().state == WorkInfo.State.SUCCEEDED)
             }
-            @Suppress("UNREACHABLE_CODE")
-            false
         }
+        live.observeForever(observer)
+        try {
+            // Enqueue is asynchronous. Ignore old completed work records until this request has
+            // appeared as ENQUEUED/RUNNING, then wait without a timeout for its real completion.
+            if (withTimeoutOrNull(10_000) { started.await() } == null) return false
+            return finished.await()
+        } finally {
+            live.removeObserver(observer)
+        }
+    }
 
     fun pause(context: Context, namespace: String, bookId: String) {
         val prefs = ProfileStore(context.applicationContext as Application).preferences(namespace)
@@ -138,14 +147,16 @@ class RestoreWorker(
     private val notificationId: Int
         get() = 0x4C000000 or (inputData.getString(RestoreJobs.KEY_BOOK).orEmpty().hashCode() and 0x00FFFFFF)
 
-    override fun onStopped() {
-        // Close the blocking OkHttp request immediately. The coroutine cancellation is rethrown by
-        // DriveLibrary so DownloadService leaves the .restore file and its matching journal intact.
-        inputData.getString(RestoreJobs.KEY_BOOK)?.takeIf { it.isNotBlank() }?.let(DriveLibrary::abortTransfer)
-        super.onStopped()
-    }
-
-    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+    override suspend fun doWork(): Result {
+        val transferBookId = inputData.getString(RestoreJobs.KEY_BOOK).orEmpty()
+        currentCoroutineContext().job.invokeOnCompletion { cause ->
+            // CoroutineWorker's onStopped is final. Its cancellation still reaches this job;
+            // cancel the blocking OkHttp call so the last journalled prefix remains resumable.
+            if (cause is CancellationException && transferBookId.isNotBlank()) {
+                DriveLibrary.abortTransfer(transferBookId)
+            }
+        }
+        return withContext(Dispatchers.IO) {
         val namespace = inputData.getString(RestoreJobs.KEY_NAMESPACE).orEmpty()
         val accountId = inputData.getString(RestoreJobs.KEY_ACCOUNT).orEmpty()
         val bookId = inputData.getString(RestoreJobs.KEY_BOOK).orEmpty()
@@ -254,6 +265,7 @@ class RestoreWorker(
             }
             RestoreOutcome.Busy -> Result.retry()
             RestoreOutcome.NotFound -> Result.failure()
+        }
         }
     }
 
@@ -433,7 +445,7 @@ private class RestoreWorkerHost(
         }.getOrDefault(emptyMap())
     }
 
-    private fun writeRestoreJournal(entries: Map<String, Pair<Long, Long>>) = synchronized(JOURNAL_LOCK) {
+    private fun writeRestoreJournal(entries: Map<String, Pair<Long, Long>>) = synchronized(RestoreJournalLock.lock) {
         val file = profiles.file(namespace, "restore_journal.json")
         val array = JSONArray()
         entries.forEach { (id, values) ->

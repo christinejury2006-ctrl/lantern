@@ -273,12 +273,18 @@ fun ReaderScreen(
                     }
                     BookFormat.EPUB -> {
                         val doc = BookIo.readEpubDocument(file)
-                        if (doc.chapters.isEmpty()) Triple(emptyList(), emptyList(), "This file has no readable text." to 1)
+                        if (doc.chapters.isEmpty()) Triple(
+                            emptyList(), emptyList(),
+                            (doc.error ?: "This file has no readable text.") to 1
+                        )
                         else Triple(doc.chapters, doc.toc, null to doc.chapters.size)
                     }
                     else -> Triple(book.chapters, emptyList(), null to 1)
                 }
-            }.getOrElse { Triple(emptyList(), emptyList(), "Could not open this book." to 1) }
+            }.getOrElse { error ->
+                SyncDiag.fail("Reader load", "${book.title}: ${error.javaClass.simpleName}: ${error.message.orEmpty()}")
+                Triple(emptyList(), emptyList(), "Could not open this book (${error.javaClass.simpleName})." to 1)
+            }
         }
         chapters = loaded.first
         toc = loaded.second

@@ -1294,7 +1294,9 @@ private class PdfDocSession(private val file: File) {
     fun render(index: Int): Bitmap? = synchronized(lock) {
         bitmaps[index]?.takeIf { !it.isRecycled }?.let { return it }
         val r = openLocked() ?: return null
-        val painted = paintPdfPage(r, index) ?: return null
+        val painted = runCatching { paintPdfPage(r, index) }.onFailure { error ->
+            SyncDiag.fail("PDF render", "${file.name}, page ${index + 1}: ${error.javaClass.simpleName}: ${error.message.orEmpty()}")
+        }.getOrNull() ?: return null
         aspects[index] = painted.second
         typicalAspect = painted.second
         bitmaps[index] = painted.first
@@ -1326,7 +1328,8 @@ private class PdfDocSession(private val file: File) {
             val r = PdfRenderer(fd)
             renderer = r
             r
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            SyncDiag.fail("PDF open", "${file.name}: ${error.javaClass.simpleName}: ${error.message.orEmpty()}")
             runCatching { pfd?.close() }
             pfd = null
             renderer = null

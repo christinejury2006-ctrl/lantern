@@ -346,6 +346,12 @@ interface DownloadHost {
     /** Publishes restore progress. Called between chunks, on a background thread. */
     fun noteRestoreProgress(bookId: String, received: Long, total: Long, phase: TransferPhase) {}
 
+    /** Cross-process pause flag used by a durable worker. */
+    fun restorePaused(bookId: String): Boolean = false
+
+    /** Cross-process cancellation flag used by a durable worker. */
+    fun restoreCancelled(bookId: String): Boolean = false
+
     /** Recomputes the backup audit and publishes it to the UI. */
     fun refreshAudit()
 
@@ -533,8 +539,8 @@ class DownloadService(private val host: DownloadHost) {
 
         val total = book.backupBytes.takeIf { it > 0L } ?: -1L
         val control = object : RestoreControl {
-            override fun paused(): Boolean = book.id in pauseRequests
-            override fun cancelled(): Boolean = book.id in cancelRequests
+            override fun paused(): Boolean = book.id in pauseRequests || host.restorePaused(book.id)
+            override fun cancelled(): Boolean = book.id in cancelRequests || host.restoreCancelled(book.id)
         }
 
         var attempts = 0

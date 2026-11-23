@@ -440,7 +440,13 @@ object BookIo {
      * hundred-picture children's book still opens straight into reading the second time.
      */
     fun readEpubDocument(file: File): EpubDocument {
-        val zip = try { ZipFile(file) } catch (_: Exception) { return EpubDocument(emptyList(), emptyList()) }
+        val zip = try {
+            ZipFile(file)
+        } catch (error: Exception) {
+            val reason = "The EPUB archive could not be opened (${error.javaClass.simpleName})."
+            SyncDiag.fail("EPUB reader", "${file.name}: $reason")
+            return EpubDocument(emptyList(), emptyList(), reason)
+        }
         zip.use { z ->
             val opf = findOpf(z)
             val opfXml = opf?.let { entry ->
@@ -498,7 +504,16 @@ object BookIo {
                 )
             }
             val toc = parseEpubToc(z, opfDir, opfXml, manifest, chapters)
-            return EpubDocument(chapters, toc)
+            val reason = if (chapters.isEmpty()) {
+                when {
+                    opf == null -> "The EPUB has no readable package document (META-INF/container.xml)."
+                    opfXml.isBlank() -> "The EPUB package document is empty or unreadable."
+                    manifest.isEmpty() -> "The EPUB package document has no readable manifest."
+                    spineIds.isEmpty() -> "The EPUB package document has no reading order."
+                    else -> "The EPUB reading order does not point to any readable XHTML or HTML chapters."
+                }.also { SyncDiag.fail("EPUB reader", "${file.name}: $it") }
+            } else null
+            return EpubDocument(chapters, toc, reason)
         }
     }
 

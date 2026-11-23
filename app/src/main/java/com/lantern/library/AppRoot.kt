@@ -46,6 +46,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -109,6 +110,8 @@ internal fun LanternRoot(store: LanternStore) {
     // the library tab, so the reader returns to wherever it was opened from.
     var readerBack by remember { mutableStateOf<Route>(Route.Home) }
     var details by remember { mutableStateOf<DiscoveryBook?>(null) }
+    var searchFieldFocused by remember { mutableStateOf(false) }
+    var imeWasVisible by remember { mutableStateOf(false) }
     val theme = store.readingPrefs.theme
     val context = LocalContext.current
     val networkAvailable = rememberInternetAvailable()
@@ -323,6 +326,17 @@ internal fun LanternRoot(store: LanternStore) {
     // appear to float into the notification/search content. Read the IME inset so it disappears
     // for the entire keyboard-visible interval and returns when the keyboard closes.
     val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    LaunchedEffect(tab) {
+        if (tab !is Route.Search) searchFieldFocused = false
+    }
+    LaunchedEffect(imeVisible) {
+        if (imeVisible) {
+            imeWasVisible = true
+        } else if (imeWasVisible) {
+            searchFieldFocused = false
+            imeWasVisible = false
+        }
+    }
     LanternTheme(theme) {
         // The shell is two regions, not two layers.
         //
@@ -339,6 +353,7 @@ internal fun LanternRoot(store: LanternStore) {
                     Modifier
                         .weight(1f)
                         .fillMaxWidth()
+                        .clipToBounds()
                         .blur(if (details != null) 12.dp else 0.dp)
                 ) {
                     if (needsOnboarding) {
@@ -456,8 +471,8 @@ internal fun LanternRoot(store: LanternStore) {
                                     }
                                 }
                             }
-                        )
-                        Route.Notifications -> NotificationsScreen(
+                            onSearchFocusChanged = { searchFieldFocused = it }
+                        )                        Route.Notifications -> NotificationsScreen(
                             onBack = { tab = Route.Home },
                             onOpenTarget = { target ->
                                 when {
@@ -515,7 +530,7 @@ internal fun LanternRoot(store: LanternStore) {
                 // consumed the inset), and the real gesture/three-button height if the window is
                 // ever edge-to-edge. That is one owner of the inset, and it is why the bar cannot
                 // be padded twice.
-                if (!needsOnboarding && tab !is Route.Reader && details == null && !imeVisible) {
+                if (!needsOnboarding && tab !is Route.Reader && details == null && !imeVisible && !searchFieldFocused) {
                     BottomBar(
                         theme, tab, { tab = it },
                         Modifier

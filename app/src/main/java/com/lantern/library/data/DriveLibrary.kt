@@ -848,6 +848,10 @@ object DriveLibrary {
                 }
                 return StreamReport(written, total, complete = true, paused = false, retryable = false)
             }
+        } catch (cancelled: CancellationException) {
+            // WorkManager may stop this foreground worker when Android reclaims resources.
+            // Preserve the durable byte journal and let WorkManager start the same unique job again.
+            throw cancelled
         } catch (t: Throwable) {
             if (control.paused() || control.cancelled()) {
                 return StreamReport(0L, -1L, false, paused = true, retryable = true, reason = "paused")

@@ -76,7 +76,7 @@ object RestoreScheduler {
                 RestoreJobs.name(namespace, bookId),
                 ExistingWorkPolicy.KEEP,
                 request
-            )
+            ).result.get()
         }
     }
 
@@ -88,14 +88,28 @@ object RestoreScheduler {
             while (true) {
                 val infos = runCatching { manager.getWorkInfosForUniqueWork(name).get() }
                     .getOrDefault(emptyList())
-                val info = infos.firstOrNull()
-                if (info == null) return@withContext false
-                if (info.state.isFinished) return@withContext info.state == androidx.work.WorkInfo.State.SUCCEEDED
+                if (infos.isEmpty()) return@withContext false
+                val active = infos.firstOrNull { !it.state.isFinished }
+                if (active == null) return@withContext infos.last().state == androidx.work.WorkInfo.State.SUCCEEDED
                 delay(500)
             }
             @Suppress("UNREACHABLE_CODE")
             false
         }
+
+    fun pause(context: Context, namespace: String, bookId: String) {
+        val prefs = ProfileStore(context.applicationContext as Application).preferences(namespace)
+        val paused = prefs.getStringSet("paused_restores", emptySet()).orEmpty().toMutableSet()
+        paused += bookId
+        prefs.edit().putStringSet("paused_restores", paused).apply()
+    }
+
+    fun resume(context: Context, namespace: String, bookId: String) {
+        val prefs = ProfileStore(context.applicationContext as Application).preferences(namespace)
+        val paused = prefs.getStringSet("paused_restores", emptySet()).orEmpty().toMutableSet()
+        paused -= bookId
+        prefs.edit().putStringSet("paused_restores", paused).apply()
+    }
 
     fun cancelAccount(context: Context, accountId: String?) {
         val id = accountId?.trim().orEmpty()
@@ -171,7 +185,12 @@ class RestoreWorker(
                 Result.success()
             }
             is RestoreOutcome.Paused -> {
-                updateForeground(book.title, "Paused", outcome.received, outcome.total)
+                NotificationManagerCompat.from(applicationContext).cancel(notificationId)
+                NotificationCenter.post(
+                    applicationContext, LoreNoticeCategory.DOWNLOADS, "Restore paused",
+                    "“${book.title}” is paused. Your downloaded bytes are saved.",
+                    "restore-paused:$namespace:$bookId", "library"
+                )
                 Result.success()
             }
             is RestoreOutcome.Refused -> {
@@ -269,6 +288,9 @@ private class RestoreWorkerHost(
     override val booksDir: File get() = BookIo.booksDir(context)
 
     override suspend fun accountHolds(book: LibraryBook): AccountLink = AccountLink.UNKNOWN
+    override fun restorePaused(bookId: String): Boolean =
+        bookId in profiles.preferences(namespace).getStringSet("paused_restores", emptySet()).orEmpty()
+    override fun restoreCancelled(bookId: String): Boolean = false
     override fun deleteLocal(file: File): Boolean = runCatching { file.delete() && !file.exists() }.getOrDefault(false)
 
     override suspend fun fetchCloud(book: LibraryBook, dest: File): Boolean {

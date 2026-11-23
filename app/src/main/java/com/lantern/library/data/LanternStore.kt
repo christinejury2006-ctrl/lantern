@@ -14,8 +14,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.work.WorkManager
-import androidx.work.getWorkInfosByTagFlow
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -268,21 +266,6 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 }
                 markLocalChanged()
                 refreshBackupAudit()
-            }
-        }
-    }
-
-    // Restore jobs outlive this ViewModel. Observe WorkManager's durable queue so the shelf
-    // still says "Restoring" after the reader returns or Android recreates the process.
-    init {
-        viewModelScope.launch {
-            WorkManager.getInstance(getApplication()).getWorkInfosByTagFlow(RestoreJobs.TAG_ALL).collect { infos ->
-                val activeIds = infos.asSequence()
-                    .filter { !it.state.isFinished }
-                    .filter { it.inputData.getString(RestoreJobs.KEY_NAMESPACE) == namespace }
-                    .mapNotNull { it.inputData.getString(RestoreJobs.KEY_BOOK) }
-                    .toSet()
-                restoringIds = activeIds
             }
         }
     }
@@ -541,18 +524,6 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         }
         hydrated = true
         StartupTrace.mark("LanternStore hydrated ns=$namespace")
-        // WorkManager may already have restarted a restore before the shelf was hydrated. Seed
-        // the in-memory badges from its durable queue for this exact account namespace.
-        val activeRestores = withContext(Dispatchers.IO) {
-            runCatching {
-                WorkManager.getInstance(getApplication()).getWorkInfosByTag(RestoreJobs.TAG_ALL).get()
-                    .filter { !it.state.isFinished }
-                    .filter { it.inputData.getString(RestoreJobs.KEY_NAMESPACE) == target }
-                    .mapNotNull { it.inputData.getString(RestoreJobs.KEY_BOOK) }
-                    .toSet()
-            }.getOrDefault(emptySet())
-        }
-        if (namespace == target) restoringIds = activeRestores
         // The shelf and the You screen show a per-book backup state from the first frame, not
         // after the first sync.
         reconcileVerifications()

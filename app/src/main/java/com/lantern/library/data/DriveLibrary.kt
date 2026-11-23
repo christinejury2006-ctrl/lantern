@@ -820,7 +820,7 @@ object DriveLibrary {
                 try {
                     java.io.FileOutputStream(dest, resuming).use { out ->
                         body.byteStream().use { input ->
-                            val buffer = ByteArray(64 * 1024)
+                            val buffer = ByteArray(BookIo.COPY_BUFFER_BYTES)
                             while (true) {
                                 if (control.paused() || control.cancelled()) {
                                     // Stop at a chunk boundary: everything on disk is a genuine

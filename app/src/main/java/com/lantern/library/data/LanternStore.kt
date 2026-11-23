@@ -107,7 +107,6 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
      * can continue from". Mixing them would let a half-downloaded book look like a pending upload.
      */
     private val restoreJournalFile: File get() = storeFile("restore_journal.json")
-    private val restoreLock = Any()
     private val journalLock = Any()
     /** Per-book throttle, so one book's journal write cannot suppress another's. */
     private val journalFlushedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
@@ -3783,7 +3782,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     /** One interrupted restore: which book, how many bytes are on disk, and the expected size. */
     data class RestoreCheckpoint(val bookId: String, val received: Long, val total: Long)
 
-    private fun restoreJournal(): Map<String, RestoreCheckpoint> = synchronized(restoreLock) {
+    private fun restoreJournal(): Map<String, RestoreCheckpoint> = synchronized(RestoreJournalLock.lock) {
         if (!restoreJournalFile.exists()) return emptyMap()
         runCatching {
             val arr = JSONArray(restoreJournalFile.readText())
@@ -3815,15 +3814,19 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     }
 
     private fun noteRestoreCheckpoint(bookId: String, received: Long, total: Long) {
-        val now = restoreJournal().toMutableMap()
-        now[bookId] = RestoreCheckpoint(bookId, received, total)
-        writeRestoreJournal(now)
+        synchronized(RestoreJournalLock.lock) {
+            val now = restoreJournal().toMutableMap()
+            now[bookId] = RestoreCheckpoint(bookId, received, total)
+            writeRestoreJournal(now)
+        }
     }
 
     private fun clearRestoreCheckpoint(bookId: String) {
-        val journal = restoreJournal()
-        if (!journal.containsKey(bookId)) return
-        writeRestoreJournal(journal - bookId)
+        synchronized(RestoreJournalLock.lock) {
+            val journal = restoreJournal()
+            if (!journal.containsKey(bookId)) return
+            writeRestoreJournal(journal - bookId)
+        }
     }
 
     /**

@@ -106,14 +106,16 @@ object RestoreScheduler {
                 finished.complete(rows.last().state == WorkInfo.State.SUCCEEDED)
             }
         }
-        live.observeForever(observer)
         try {
+            // LiveData observers must be registered and removed on Android's main thread even
+            // though the reader waits for this job from its IO coroutine.
+            withContext(Dispatchers.Main) { live.observeForever(observer) }
             // Enqueue is asynchronous. Ignore old completed work records until this request has
             // appeared as ENQUEUED/RUNNING, then wait without a timeout for its real completion.
             if (withTimeoutOrNull(10_000) { started.await() } == null) return false
             return finished.await()
         } finally {
-            live.removeObserver(observer)
+            withContext(Dispatchers.Main) { live.removeObserver(observer) }
         }
     }
 

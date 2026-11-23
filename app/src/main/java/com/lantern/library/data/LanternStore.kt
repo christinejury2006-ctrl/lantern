@@ -2024,7 +2024,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         // The reader waits for that unique job, but the transfer itself is owned by WorkManager and
         // continues if this ViewModel or Activity disappears.
         val jobNamespace = namespace
-        val owner = GoogleAuth.accountId(getApplication())
+        val owner = GoogleAuth.accountId(getApplication<Application>())
             ?.takeIf { Profiles.namespaceFor(it) == jobNamespace } ?: return null
         withContext(Dispatchers.Main) { restoringIds = restoringIds + book.id }
         val restored = try {
@@ -3769,7 +3769,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     }
 
     private fun writeRestoreJournal(entries: Map<String, RestoreCheckpoint>) {
-        synchronized(restoreLock) {
+        synchronized(RestoreJournalLock.lock) {
             runCatching {
                 if (entries.isEmpty()) {
                     restoreJournalFile.delete()

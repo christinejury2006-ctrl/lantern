@@ -308,6 +308,11 @@ class RestoreWorker(
                     applicationContext, notificationId,
                     Intent(applicationContext, MainActivity::class.java).apply {
                         flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        putExtra("lore_notification_id", "")
+                        putExtra(
+                            "lore_notification_target",
+                            "reader:${inputData.getString(RestoreJobs.KEY_BOOK).orEmpty()}"
+                        )
                     },
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                 )

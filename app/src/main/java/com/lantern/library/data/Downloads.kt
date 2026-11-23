@@ -153,7 +153,7 @@ sealed class RestoreOutcome {
     data class Refused(val blocker: RestoreBlocker) : RestoreOutcome()
 
     /** The download was rejected or failed. The account copy is untouched either way. */
-    data class Failed(val reason: String) : RestoreOutcome()
+    data class Failed(val reason: String, val retryable: Boolean = false) : RestoreOutcome()
 
     /**
      * Stopped because the reader asked it to.
@@ -512,7 +512,9 @@ class DownloadService(private val host: DownloadHost) {
             val outcome = streamInto(book, keepOffline)
             // A pause keeps its checkpoint so resuming can continue from it. Everything else —
             // done, refused, failed — leaves nothing to resume.
-            if (outcome !is RestoreOutcome.Paused) host.clearRestore(book.id)
+            if (outcome !is RestoreOutcome.Paused &&
+                !(outcome is RestoreOutcome.Failed && outcome.retryable)
+            ) host.clearRestore(book.id)
             outcome
         }
     }
@@ -571,10 +573,12 @@ class DownloadService(private val host: DownloadHost) {
                 )
             }
         }
-        // Out of attempts. The partial file is not a book and must not be left where a later
-        // attempt — or the reader's eyes — could mistake it for one.
-        runCatching { temp.delete() }
-        return RestoreOutcome.Failed("the download kept stopping — check your connection and try again")
+        // The transport failed transiently three times. Keep the genuine prefix and its matching
+        // journal so WorkManager's backoff retry can continue from the last durable byte.
+        return RestoreOutcome.Failed(
+            "the connection kept dropping; Lore will retry this restore in the background",
+            retryable = true
+        )
     }
 
     /**

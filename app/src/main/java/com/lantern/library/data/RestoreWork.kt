@@ -135,6 +135,13 @@ class RestoreWorker(
     private val notificationId: Int
         get() = 0x4C000000 or (inputData.getString(RestoreJobs.KEY_BOOK).orEmpty().hashCode() and 0x00FFFFFF)
 
+    override fun onStopped() {
+        // Close the blocking OkHttp request immediately. The coroutine cancellation is rethrown by
+        // DriveLibrary so DownloadService leaves the .restore file and its matching journal intact.
+        inputData.getString(RestoreJobs.KEY_BOOK)?.takeIf { it.isNotBlank() }?.let(DriveLibrary::abortTransfer)
+        super.onStopped()
+    }
+
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val namespace = inputData.getString(RestoreJobs.KEY_NAMESPACE).orEmpty()
         val accountId = inputData.getString(RestoreJobs.KEY_ACCOUNT).orEmpty()

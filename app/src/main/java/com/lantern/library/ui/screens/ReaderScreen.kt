@@ -121,6 +121,7 @@ import com.lantern.library.data.TocEntry
 import com.lantern.library.data.ReaderAppearance
 import com.lantern.library.data.ReaderTheme
 import com.lantern.library.data.ReaderVolumeController
+import com.lantern.library.data.SyncDiag
 import com.lantern.library.data.ReadingPrefs
 import com.lantern.library.ui.components.AppearanceLayer
 import com.lantern.library.ui.components.readerChromeBar

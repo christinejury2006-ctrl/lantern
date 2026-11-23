@@ -178,8 +178,16 @@ class RestoreWorker(
             DriveTokenResult.Unavailable -> return@withContext Result.retry()
         }
         updateForeground(book.title, "Preparing download", 0, book.backupBytes)
+        var lastNoticeAt = 0L
+        var lastNoticePercent = -1
         val host = RestoreWorkerHost(applicationContext, profiles, namespace, libraryFile, token) { phase, received, total ->
-            updateForeground(book.title, phase, received, total)
+            val percent = if (total > 0L) ((received.coerceAtLeast(0L) * 100L) / total).toInt() else -1
+            val now = System.currentTimeMillis()
+            if (phase != "Downloading" || percent != lastNoticePercent && now - lastNoticeAt >= 750L) {
+                updateForeground(book.title, phase, received, total)
+                lastNoticeAt = now
+                lastNoticePercent = percent
+            }
         }
         val outcome = DownloadService(host).restoreDownload(bookId, keepOffline = inputData.getBoolean(RestoreJobs.KEY_KEEP_OFFLINE, true))
         when (outcome) {

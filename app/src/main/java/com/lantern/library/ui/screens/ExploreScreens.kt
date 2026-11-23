@@ -150,7 +150,8 @@ fun SearchScreen(
     fetchingId: String? = null,
     onOpen: (DiscoveryBook) -> Unit,
     onDownload: (FreeEdition) -> Unit,
-    onOpenLink: (String) -> Unit = {}
+    onOpenLink: (String) -> Unit = {},
+    onSearchFocusChanged: (Boolean) -> Unit = {}
 ) {
     val dark = theme == ReaderTheme.DARK
     val palette = nookPalette(dark)
@@ -273,7 +274,8 @@ fun SearchScreen(
                                 singleLine = true,
                                 textStyle = TextStyle(color = ink, fontSize = 15.sp),
                                 cursorBrush = SolidColor(palette.accent),
-                                modifier = Modifier.weight(1f).padding(start = 8.dp),
+                                modifier = Modifier.weight(1f).padding(start = 8.dp)
+                                    .onFocusChanged { onSearchFocusChanged(it.isFocused) },
                                 decorationBox = { inner ->
                                     if (query.isEmpty()) {
                                         Text("Title or author…", color = mute, fontSize = 15.sp)

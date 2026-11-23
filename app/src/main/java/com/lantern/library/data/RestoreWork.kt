@@ -60,14 +60,12 @@ object RestoreScheduler {
         if (!Profiles.isValidNamespace(namespace) || namespace == Profiles.GUEST ||
             accountId.isBlank() || bookId.isBlank()
         ) return
-        val mobileAllowed = ProfileStore(context.applicationContext as Application)
-            .preferences(namespace).getBoolean("mobile", false)
+        // A restore is an explicit reader action, so it may use the currently connected network.
+        // The backup-only mobile-data preference must not leave an opened book waiting forever.
         val request = OneTimeWorkRequestBuilder<RestoreWorker>()
             .setInputData(RestoreJobs.data(namespace, accountId, bookId, keepOffline))
             .setConstraints(
-                Constraints.Builder().setRequiredNetworkType(
-                    if (mobileAllowed) NetworkType.CONNECTED else NetworkType.UNMETERED
-                ).build()
+                Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
             )
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .addTag(RestoreJobs.TAG_ALL)
@@ -263,8 +261,10 @@ class RestoreWorker(
         NotificationCompat.Builder(applicationContext, CHANNEL)
             .setSmallIcon(com.lantern.library.R.drawable.ic_lore_notification)
             .setContentTitle("Restoring “${title.ifBlank { "book" }}”")
-            .setContentText(stage)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(stage))
+            .setContentText(if (total > 0L) "$stage · ${Transfers.transferred(received, total)}" else stage)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(
+                if (total > 0L) "$stage · ${Transfers.transferred(received, total)}" else stage
+            ))
             .setProgress(
                 if (total > 0L) 100 else 0,
                 if (total > 0L) ((received.coerceAtLeast(0L) * 100L) / total).toInt().coerceIn(0, 100) else 0,

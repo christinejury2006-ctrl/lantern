@@ -184,6 +184,7 @@ class RestoreWorker(
         val outcome = DownloadService(host).restoreDownload(bookId, keepOffline = inputData.getBoolean(RestoreJobs.KEY_KEEP_OFFLINE, true))
         when (outcome) {
             is RestoreOutcome.Restored -> {
+                TransferBus.clear(bookId)
                 NotificationManagerCompat.from(applicationContext).cancel(notificationId)
                 NotificationCenter.post(
                     applicationContext,
@@ -196,6 +197,7 @@ class RestoreWorker(
                 Result.success()
             }
             is RestoreOutcome.AlreadyAvailable -> {
+                TransferBus.clear(bookId)
                 NotificationManagerCompat.from(applicationContext).cancel(notificationId)
                 Result.success()
             }
@@ -209,10 +211,12 @@ class RestoreWorker(
                 Result.success()
             }
             is RestoreOutcome.Refused -> {
+                TransferBus.failed(bookId, TransferBus.progressFor(bookId)?.sentBytes ?: 0L, book.backupBytes, outcome.blocker.message)
                 showNotice(book.title, outcome.blocker.message)
                 Result.failure()
             }
             is RestoreOutcome.Failed -> {
+                TransferBus.failed(bookId, TransferBus.progressFor(bookId)?.sentBytes ?: 0L, book.backupBytes, outcome.reason)
                 showNotice(book.title, "Could not restore: ${outcome.reason}")
                 Result.failure()
             }

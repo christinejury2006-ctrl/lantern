@@ -178,7 +178,7 @@ class RestoreWorker(
             DriveTokenResult.Unavailable -> return@withContext Result.retry()
         }
         updateForeground(book.title, "Preparing download", 0, book.backupBytes)
-        val host = RestoreWorkerHost(applicationContext, profiles, namespace, libraryFile) { phase, received, total ->
+        val host = RestoreWorkerHost(applicationContext, profiles, namespace, libraryFile, token) { phase, received, total ->
             updateForeground(book.title, phase, received, total)
         }
         val outcome = DownloadService(host).restoreDownload(bookId, keepOffline = inputData.getBoolean(RestoreJobs.KEY_KEEP_OFFLINE, true))
@@ -295,6 +295,7 @@ private class RestoreWorkerHost(
     private val profiles: ProfileStore,
     private val namespace: String,
     private val libraryFile: File,
+    private val token: String,
     private val progress: (String, Long, Long) -> Unit
 ) : DownloadHost {
 
@@ -314,7 +315,6 @@ private class RestoreWorkerHost(
 
     override suspend fun fetchCloud(book: LibraryBook, dest: File): Boolean {
         val id = book.driveFileId ?: return false
-        val token = (GoogleAuth.driveToken(context) as? DriveTokenResult.Ok)?.token ?: return false
         return DriveLibrary.download(token, id, dest, book.format) is DriveOutcome.Ok
     }
 
@@ -323,10 +323,6 @@ private class RestoreWorkerHost(
         onBytes: (received: Long, total: Long) -> Unit
     ): StreamReport {
         val id = book.driveFileId ?: return StreamReport(0L, -1L, false, false, false, "this book has no cloud file")
-        val token = when (val result = GoogleAuth.driveToken(context)) {
-            is DriveTokenResult.Ok -> result.token
-            else -> return StreamReport(0L, -1L, false, false, true, "Google Drive access is unavailable")
-        }
         return DriveLibrary.streamDownload(token, book.id, id, dest, from, control, onBytes)
     }
 

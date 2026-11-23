@@ -2030,13 +2030,16 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         val restored = try {
             RestoreScheduler.resume(getApplication(), jobNamespace, book.id)
             RestoreScheduler.enqueue(getApplication(), jobNamespace, owner, book.id, keepOffline = false)
-            if (!RestoreScheduler.await(getApplication(), jobNamespace, book.id)) return null
-            BookRecords.read(profiles.file(jobNamespace, "library.json")).firstOrNull { it.id == book.id }
-                ?.takeIf { candidate ->
-                    val file = candidate.filePath?.let(::File)
-                    file != null && file.exists() && file.length() > 0L &&
-                        BookFiles.validate(file, candidate.format) is BookFiles.Check.Ok
-                }
+            val completed = RestoreScheduler.await(getApplication(), jobNamespace, book.id)
+            val restoredRecord = BookRecords.read(profiles.file(jobNamespace, "library.json"))
+                .firstOrNull { it.id == book.id }
+            val available = restoredRecord?.takeIf { candidate ->
+                val file = candidate.filePath?.let(::File)
+                file != null && file.exists() && file.length() > 0L &&
+                    BookFiles.validate(file, candidate.format) is BookFiles.Check.Ok
+            }
+            if (!completed && available == null) return null
+            available
         } finally {
             withContext(Dispatchers.Main) { restoringIds = restoringIds - book.id }
         }

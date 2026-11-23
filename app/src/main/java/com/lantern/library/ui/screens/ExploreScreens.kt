@@ -1,5 +1,6 @@
 package com.lantern.library.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -41,6 +42,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -158,6 +160,13 @@ fun SearchScreen(
     val ink = palette.ink
     val mute = palette.mute
     var query by remember { mutableStateOf("") }
+    var searchFocused by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+    BackHandler(enabled = searchFocused) {
+        focusManager.clearFocus()
+        searchFocused = false
+        onSearchFocusChanged(false)
+    }
     var editions by remember { mutableStateOf<List<FreeEdition>>(emptyList()) }
     var elsewhere by remember { mutableStateOf<List<Elsewhere>>(emptyList()) }
     var results by remember { mutableStateOf<List<DiscoveryBook>>(emptyList()) }
@@ -275,7 +284,10 @@ fun SearchScreen(
                                 textStyle = TextStyle(color = ink, fontSize = 15.sp),
                                 cursorBrush = SolidColor(palette.accent),
                                 modifier = Modifier.weight(1f).padding(start = 8.dp)
-                                    .onFocusChanged { onSearchFocusChanged(it.isFocused) },
+                                    .onFocusChanged {
+                                        searchFocused = it.isFocused
+                                        onSearchFocusChanged(it.isFocused)
+                                    },
                                 decorationBox = { inner ->
                                     if (query.isEmpty()) {
                                         Text("Title or author…", color = mute, fontSize = 15.sp)

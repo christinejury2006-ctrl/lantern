@@ -586,27 +586,32 @@ object DriveLibrary {
      */
     fun listCoverIds(token: String): DriveOutcome<Map<String, String>> {
         val q = "appProperties has { key='loreCoverId' } and trashed=false"
-        val url = "$FILES?q=${URLEncoder.encode(q, "UTF-8")}&spaces=appDataFolder&fields=files(id,appProperties),nextPageToken&pageSize=1000"
-        val req = Request.Builder()
-            .url(url)
-            .header("Authorization", "Bearer $token")
-            .get()
-            .build()
-        val raw = executeRaw(req) ?: return DriveOutcome.Failed
-        if (raw.code == 401) return DriveOutcome.Unauthorized
-        if (!raw.ok || raw.body == null) {
-            noteError("cover index", raw.code, raw.body)
-            return DriveOutcome.Failed
-        }
-        val root = runCatching { JSONObject(raw.body) }.getOrNull() ?: return DriveOutcome.Failed
-        val files = root.optJSONArray("files") ?: return DriveOutcome.Failed
         val result = LinkedHashMap<String, String>()
-        for (index in 0 until files.length()) {
-            val row = files.optJSONObject(index) ?: continue
-            val id = row.optString("id")
-            val bookId = row.optJSONObject("appProperties")?.optString("loreCoverId").orEmpty()
-            if (id.isNotBlank() && bookId.isNotBlank()) result[bookId] = id
-        }
+        var pageToken: String? = null
+        do {
+            val page = pageToken?.let { "&pageToken=${URLEncoder.encode(it, "UTF-8")}" }.orEmpty()
+            val url = "$FILES?q=${URLEncoder.encode(q, "UTF-8")}&spaces=appDataFolder&fields=files(id,appProperties),nextPageToken&pageSize=1000$page"
+            val req = Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer $token")
+                .get()
+                .build()
+            val raw = executeRaw(req) ?: return DriveOutcome.Failed
+            if (raw.code == 401) return DriveOutcome.Unauthorized
+            if (!raw.ok || raw.body == null) {
+                noteError("cover index", raw.code, raw.body)
+                return DriveOutcome.Failed
+            }
+            val root = runCatching { JSONObject(raw.body) }.getOrNull() ?: return DriveOutcome.Failed
+            val files = root.optJSONArray("files") ?: return DriveOutcome.Failed
+            for (index in 0 until files.length()) {
+                val row = files.optJSONObject(index) ?: continue
+                val id = row.optString("id")
+                val bookId = row.optJSONObject("appProperties")?.optString("loreCoverId").orEmpty()
+                if (id.isNotBlank() && bookId.isNotBlank()) result[bookId] = id
+            }
+            pageToken = root.optString("nextPageToken").takeIf { it.isNotBlank() }
+        } while (pageToken != null)
         return DriveOutcome.Ok(result)
     }
 

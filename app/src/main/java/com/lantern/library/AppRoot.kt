@@ -470,9 +470,10 @@ internal fun LanternRoot(store: LanternStore) {
                                         tab = Route.Reader(ready.id)
                                     }
                                 }
-                            }
+                            },
                             onSearchFocusChanged = { searchFieldFocused = it }
-                        )                        Route.Notifications -> NotificationsScreen(
+                        )
+                        Route.Notifications -> NotificationsScreen(
                             onBack = { tab = Route.Home },
                             onOpenTarget = { target ->
                                 when {

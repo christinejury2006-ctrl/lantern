@@ -39,6 +39,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.TimeUnit
+import java.util.UUID
 
 /** One monitor shared by the UI and worker while reading or updating restore checkpoints. */
 internal object RestoreJournalLock {
@@ -80,10 +81,10 @@ object RestoreJobs {
 }
 
 object RestoreScheduler {
-    fun enqueue(context: Context, namespace: String, accountId: String, bookId: String, keepOffline: Boolean = true) {
+    fun enqueue(context: Context, namespace: String, accountId: String, bookId: String, keepOffline: Boolean = true): UUID? {
         if (!Profiles.isValidNamespace(namespace) || namespace == Profiles.GUEST ||
             accountId.isBlank() || bookId.isBlank()
-        ) return
+        ) return null
         // A restore is an explicit reader action, so it may use the currently connected network.
         // The backup-only mobile-data preference must not leave an opened book waiting forever.
         val request = OneTimeWorkRequestBuilder<RestoreWorker>()
@@ -95,38 +96,34 @@ object RestoreScheduler {
             .addTag(RestoreJobs.TAG_ALL)
             .addTag("restore-account:$accountId")
             .build()
-        runCatching {
+        return runCatching {
             WorkManager.getInstance(context).enqueueUniqueWork(
                 RestoreJobs.name(namespace, bookId),
                 ExistingWorkPolicy.KEEP,
                 request
             )
-        }
+            request.id
+        }.getOrNull()
     }
 
-    /** Waits for the unique restore already queued for this book, including one started elsewhere. */
-    suspend fun await(context: Context, namespace: String, bookId: String): Boolean {
+    /** Waits for the exact restore enqueued by the caller, even if it finishes before observation. */
+    suspend fun await(context: Context, namespace: String, bookId: String, workId: UUID? = null): Boolean {
+        if (workId == null) return false
         val live = WorkManager.getInstance(context)
             .getWorkInfosForUniqueWorkLiveData(RestoreJobs.name(namespace, bookId))
-        val started = CompletableDeferred<Unit>()
         val finished = CompletableDeferred<Boolean>()
         val observer = Observer<List<WorkInfo>> { infos ->
-            val rows = infos.orEmpty()
-            val active = rows.firstOrNull { !it.state.isFinished }
-            if (active != null) {
-                started.complete(Unit)
-            } else if (started.isCompleted && rows.isNotEmpty()) {
-                finished.complete(rows.last().state == WorkInfo.State.SUCCEEDED)
+            // Match the request UUID, not merely the unique-work name. That prevents a previous
+            // completed restore from satisfying this wait, and catches a fast job that completed
+            // before LiveData delivered an intermediate ENQUEUED/RUNNING state.
+            val exact = infos.orEmpty().firstOrNull { it.id == workId } ?: return@Observer
+            if (exact.state.isFinished) {
+                finished.complete(exact.state == WorkInfo.State.SUCCEEDED)
             }
         }
         try {
-            // LiveData observers must be registered and removed on Android's main thread even
-            // though the reader waits for this job from its IO coroutine.
             withContext(Dispatchers.Main) { live.observeForever(observer) }
-            // Enqueue is asynchronous. Ignore old completed work records until this request has
-            // appeared as ENQUEUED/RUNNING, then wait without a timeout for its real completion.
-            if (withTimeoutOrNull(10_000) { started.await() } == null) return false
-            return finished.await()
+            return withTimeoutOrNull(30, TimeUnit.MINUTES) { finished.await() } ?: false
         } finally {
             withContext(Dispatchers.Main) { live.removeObserver(observer) }
         }

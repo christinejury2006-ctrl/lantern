@@ -292,11 +292,12 @@ interface DownloadHost {
     suspend fun accountHolds(book: LibraryBook): AccountLink
 
     /**
-     * Deletes one local file and reports whether it is gone.
+     * Releases this profile's ownership of one local file.
      *
-     * A seam rather than a direct `File.delete()` call so "the storage refused" can be tested
-     * without making a test depend on file-system permissions, and so the one place that removes a
-     * reader's bytes is explicitly the one place.
+     * Returns true when this profile no longer references the file and the operation is complete.
+     * The physical bytes may deliberately remain when another profile still references the same
+     * shared cache file. A seam rather than a direct `File.delete()` call keeps storage failures
+     * testable without depending on device file-system permissions.
      */
     fun deleteLocal(file: File): Boolean
 
@@ -465,8 +466,11 @@ class DownloadService(private val host: DownloadHost) {
             return RemoveOutcome.MetadataFailed
         }
 
-        val gone = host.deleteLocal(present) && !present.exists()
-        if (!gone) {
+        // The host owns shared-cache reference checks. Success means this profile has released
+        // the file, not necessarily that the shared physical bytes disappeared: another profile
+        // may still need them for offline reading.
+        val released = host.deleteLocal(present)
+        if (!released) {
             // Reconcile: the record says "no file" but a file is still there. The record has to
             // describe the phone, so put the path back and report the truth.
             val restored = host.persist(book)

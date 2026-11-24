@@ -99,7 +99,7 @@ object RestoreScheduler {
         return runCatching {
             WorkManager.getInstance(context).enqueueUniqueWork(
                 RestoreJobs.name(namespace, bookId),
-                ExistingWorkPolicy.KEEP,
+                ExistingWorkPolicy.APPEND_OR_REPLACE,
                 request
             )
             request.id

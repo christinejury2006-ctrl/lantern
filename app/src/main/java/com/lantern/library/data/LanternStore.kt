@@ -3690,7 +3690,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
             return
         }
         val jobNamespace = namespace
-        val owner = GoogleAuth.accountId(getApplication())
+        val owner = GoogleAuth.accountId(getApplication<Application>())
             ?.takeIf { Profiles.namespaceFor(it) == jobNamespace } ?: run {
                 toast("Sign in to the Google account that owns this book before restoring it.")
                 return

@@ -65,11 +65,13 @@ class AccountIsolationTest {
     }
 
     @Test
-    fun `5 two accounts never share a namespace or a file`() {
+    fun `5 two accounts never share a namespace or library index`() {
         val a = Profiles.namespaceFor(accountA)
         val b = Profiles.namespaceFor(accountB)
         assertNotEquals(a, b)
-        // Same directory layout the app uses: one `profiles/<namespace>/` per identity.
+        // Same directory layout the app uses: one `profiles/<namespace>/` index per identity.
+        // Book archives live in a shared cache directory, so deletion must separately respect
+        // references from both profile indexes.
         val dirA = File(File(root, "profiles"), a).apply { mkdirs() }
         val dirB = File(File(root, "profiles"), b).apply { mkdirs() }
         File(dirA, "library.json").writeText("[{\"id\":\"a-book\"}]")

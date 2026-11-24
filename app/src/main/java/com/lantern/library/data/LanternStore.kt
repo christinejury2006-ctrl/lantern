@@ -2101,8 +2101,8 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         withContext(Dispatchers.Main) { restoringIds = restoringIds + book.id }
         val restored = try {
             RestoreScheduler.resume(getApplication(), jobNamespace, book.id)
-            RestoreScheduler.enqueue(getApplication(), jobNamespace, owner, book.id, keepOffline = false)
-            val completed = RestoreScheduler.await(getApplication(), jobNamespace, book.id)
+            val workId = RestoreScheduler.enqueue(getApplication(), jobNamespace, owner, book.id, keepOffline = false)
+            val completed = RestoreScheduler.await(getApplication(), jobNamespace, book.id, workId)
             val restoredRecord = BookRecords.read(profiles.file(jobNamespace, "library.json"))
                 .firstOrNull { it.id == book.id }
             val available = restoredRecord?.takeIf { candidate ->
@@ -3774,9 +3774,9 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         if (bookId in restoringIds) return
         restoringIds = restoringIds + bookId
         RestoreScheduler.resume(getApplication(), jobNamespace, bookId)
-        RestoreScheduler.enqueue(getApplication(), jobNamespace, owner, bookId, keepOffline = true)
+        val workId = RestoreScheduler.enqueue(getApplication(), jobNamespace, owner, bookId, keepOffline = true)
         viewModelScope.launch(Dispatchers.IO) {
-            RestoreScheduler.await(getApplication(), jobNamespace, bookId)
+            RestoreScheduler.await(getApplication(), jobNamespace, bookId, workId)
             val updated = BookRecords.read(profiles.file(jobNamespace, "library.json"))
                 .firstOrNull { it.id == bookId }
             withContext(Dispatchers.Main) {

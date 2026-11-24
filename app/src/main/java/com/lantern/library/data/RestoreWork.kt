@@ -123,7 +123,7 @@ object RestoreScheduler {
         }
         try {
             withContext(Dispatchers.Main) { live.observeForever(observer) }
-            return withTimeoutOrNull(30, TimeUnit.MINUTES) { finished.await() } ?: false
+            return withTimeoutOrNull(TimeUnit.MINUTES.toMillis(30)) { finished.await() } ?: false
         } finally {
             withContext(Dispatchers.Main) { live.removeObserver(observer) }
         }

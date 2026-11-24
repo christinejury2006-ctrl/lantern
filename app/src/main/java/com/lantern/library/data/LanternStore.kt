@@ -785,6 +785,26 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * A cache eviction clears only the active profile's pointer. If another profile still points
+     * at the same physical archive, its offline copy must remain on disk.
+     */
+    private fun isBookFileReferencedByAnotherProfile(file: File): Boolean {
+        val canonical = runCatching { file.canonicalPath }.getOrNull() ?: return true
+        for (profile in profiles.namespaces().filter { it != namespace }) {
+            val index = profiles.file(profile, "library.json")
+            if (!index.exists()) continue
+            val raw = runCatching { index.readText() }.getOrElse { return true }
+            val rows = runCatching { org.json.JSONArray(raw) }.getOrElse { return true }
+            for (i in 0 until rows.length()) {
+                val path = rows.optJSONObject(i)?.optString("filePath").orEmpty()
+                if (path.isBlank()) continue
+                if (runCatching { File(path).canonicalPath == canonical }.getOrDefault(true)) return true
+            }
+        }
+        return false
+    }
+
+    /**
      * Book bytes and cover thumbnails are physically shared by profile namespaces. Removing a
      * record from one shelf must not erase a file another signed-in/guest profile still references.
      * If any profile index cannot be read safely, prefer retaining bytes over risking data loss.
@@ -3479,6 +3499,10 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
         }
 
         override fun deleteLocal(file: File): Boolean {
+            // The active profile has already cleared its filePath. A different profile may still
+            // rely on these same shared bytes, in which case its pointer remains valid and this
+            // profile's local removal is still complete.
+            if (isBookFileReferencedByAnotherProfile(file)) return true
             val deleted = runCatching { file.delete() && !file.exists() }.getOrDefault(false)
             // EPUB media is derived from the original archive, so it can be regenerated on restore.
             if (deleted) runCatching { BookIo.deleteDerivedMedia(file) }

@@ -785,6 +785,64 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * Book bytes and cover thumbnails are physically shared by profile namespaces. Removing a
+     * record from one shelf must not erase a file another signed-in/guest profile still references.
+     * If any profile index cannot be read safely, prefer retaining bytes over risking data loss.
+     */
+    private fun deleteLocalAssetsIfUnreferenced(book: LibraryBook) {
+        val referencedBooks = HashSet<String>()
+        val referencedCovers = HashSet<String>()
+        for (profile in profiles.namespaces()) {
+            val index = profiles.file(profile, "library.json")
+            if (!index.exists()) continue
+            val raw = runCatching { index.readText() }.getOrElse {
+                SyncDiag.mark("Local cleanup", "kept shared files because a profile index could not be read")
+                return
+            }
+            val rows = runCatching { org.json.JSONArray(raw) }.getOrElse {
+                SyncDiag.mark("Local cleanup", "kept shared files because a profile index was invalid")
+                return
+            }
+            for (i in 0 until rows.length()) {
+                val row = rows.optJSONObject(i) ?: continue
+                row.optString("filePath").takeIf { it.isNotBlank() }?.let { path ->
+                    runCatching { File(path).canonicalPath }.getOrNull()?.let(referencedBooks::add)
+                }
+                row.optString("remoteCover").takeIf {
+                    it.isNotBlank() && !it.startsWith("http://") && !it.startsWith("https://")
+                }?.let { path ->
+                    runCatching { File(path).canonicalPath }.getOrNull()?.let(referencedCovers::add)
+                }
+            }
+        }
+
+        val booksRoot = runCatching { BookIo.booksDir(getApplication()).canonicalPath }.getOrNull()
+        val bookFile = book.filePath?.let(::File)
+        if (bookFile != null && booksRoot != null) {
+            val canonical = runCatching { bookFile.canonicalPath }.getOrNull()
+            if (canonical != null && canonical.startsWith(booksRoot + File.separator) &&
+                canonical !in referencedBooks
+            ) {
+                val removed = !bookFile.exists() || runCatching { bookFile.delete() && !bookFile.exists() }.getOrDefault(false)
+                if (removed) runCatching { BookIo.deleteDerivedMedia(bookFile) }
+            }
+        }
+
+        val coversRoot = runCatching { BookIo.coversDir(getApplication()).canonicalPath }.getOrNull()
+        val coverFile = book.remoteCover?.takeUnless {
+            it.startsWith("http://") || it.startsWith("https://")
+        }?.let(::File)
+        if (coverFile != null && coversRoot != null) {
+            val canonical = runCatching { coverFile.canonicalPath }.getOrNull()
+            if (canonical != null && canonical.startsWith(coversRoot + File.separator) &&
+                canonical !in referencedCovers
+            ) {
+                runCatching { coverFile.delete() }
+            }
+        }
+    }
+
+    /**
      * Removes a book from the shelf, everywhere.
      *
      * The order is the fix for "deleted books come back on the other device":
@@ -818,13 +876,7 @@ class LanternStore(app: Application) : AndroidViewModel(app) {
                 persistBookmarksUnlocked()
             }
         }
-        b.filePath?.let { path ->
-            runCatching {
-                val file = File(path)
-                file.delete()
-                BookIo.deleteDerivedMedia(file)
-            }
-        }
+        deleteLocalAssetsIfUnreferenced(b)
         clearTransfer(id)
         // The card is gone; a live or failed transfer entry for it must not outlive it.
         TransferBus.clear(id)

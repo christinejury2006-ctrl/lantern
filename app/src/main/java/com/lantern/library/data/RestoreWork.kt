@@ -149,6 +149,9 @@ class RestoreWorker(
     private val notificationId: Int
         get() = 0x4C000000 or (inputData.getString(RestoreJobs.KEY_BOOK).orEmpty().hashCode() and 0x00FFFFFF)
 
+    /** Stable across WorkManager retries, but different for a later restore of the same book. */
+    private val notificationEventScope: String = params.id.toString()
+
     override suspend fun doWork(): Result {
         val transferBookId = inputData.getString(RestoreJobs.KEY_BOOK).orEmpty()
         currentCoroutineContext().job.invokeOnCompletion { cause ->
@@ -195,7 +198,7 @@ class RestoreWorker(
                 NotificationCenter.post(
                     applicationContext, LoreNoticeCategory.DOWNLOADS, "Restore waiting",
                     "Google Drive is temporarily unavailable. Lore will retry this restore.",
-                    "restore-auth-retry:$namespace:$bookId", "library"
+                    "restore-auth-retry:$namespace:$bookId:$notificationEventScope", "library"
                 )
                 return@withContext Result.retry()
             }
@@ -222,7 +225,7 @@ class RestoreWorker(
                     LoreNoticeCategory.DOWNLOADS,
                     "Book restored",
                     "“${outcome.book.title}” is available offline again.",
-                    "restore-complete:$namespace:$bookId",
+                    "restore-complete:$namespace:$bookId:$notificationEventScope",
                     "reader:$bookId"
                 )
                 Result.success()
@@ -237,7 +240,7 @@ class RestoreWorker(
                 NotificationCenter.post(
                     applicationContext, LoreNoticeCategory.DOWNLOADS, "Restore paused",
                     "“${book.title}” is paused. Your downloaded bytes are saved.",
-                    "restore-paused:$namespace:$bookId", "library"
+                    "restore-paused:$namespace:$bookId:$notificationEventScope", "library"
                 )
                 Result.success()
             }
@@ -256,7 +259,7 @@ class RestoreWorker(
                     NotificationCenter.post(
                         applicationContext, LoreNoticeCategory.DOWNLOADS, "Restore will continue",
                         "“${book.title}” was interrupted. Lore saved its progress and will retry.",
-                        "restore-retry:$namespace:$bookId", "library"
+                        "restore-retry:$namespace:$bookId:$notificationEventScope", "library"
                     )
                     Result.retry()
                 } else {
@@ -338,7 +341,7 @@ class RestoreWorker(
         NotificationCenter.post(
             applicationContext, LoreNoticeCategory.DOWNLOADS,
             "Restore needs attention", "“$title”: $message",
-            "restore-attention:${inputData.getString(RestoreJobs.KEY_NAMESPACE)}:${inputData.getString(RestoreJobs.KEY_BOOK)}:${runAttemptCount}",
+            "restore-attention:${inputData.getString(RestoreJobs.KEY_NAMESPACE)}:${inputData.getString(RestoreJobs.KEY_BOOK)}:$notificationEventScope:$runAttemptCount",
             "library"
         )
     }

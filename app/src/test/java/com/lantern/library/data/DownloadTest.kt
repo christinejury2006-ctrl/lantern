@@ -39,6 +39,8 @@ class DownloadTest {
         var failPersist = false
         /** Makes the local file undeletable (a directory in the file's place is enough). */
         var failDelete = false
+        /** Models a shared cache file retained because another profile still references it. */
+        var retainAfterDelete = false
         /** Bytes the fake download writes instead of the cloud copy. */
         var truncateTo: Int? = null
         var fetchCalls = 0
@@ -56,7 +58,11 @@ class DownloadTest {
 
         override suspend fun accountHolds(book: LibraryBook): AccountLink = link
 
-        override fun deleteLocal(file: File): Boolean = if (failDelete) false else file.delete()
+        override fun deleteLocal(file: File): Boolean = when {
+            failDelete -> false
+            retainAfterDelete -> true
+            else -> file.delete()
+        }
 
         override suspend fun fetchCloud(book: LibraryBook, dest: File): Boolean {
             fetchCalls++
@@ -163,6 +169,19 @@ class DownloadTest {
         assertTrue("expected Removed, got $outcome", outcome is RemoveOutcome.Removed)
         assertNull("the record must point at no file", host.library[book.id]!!.filePath)
         assertFalse("the bytes must be gone", File(book.filePath!!).exists())
+    }
+
+    @Test
+    fun `a shared cache file can be released by one profile without deleting another profile's copy`() {
+        val book = verifiedBook()
+        val file = File(book.filePath!!)
+        host.retainAfterDelete = true
+
+        val outcome = runBlockingTest { service.removeDownload(book.id) }
+
+        assertTrue("expected Removed, got $outcome", outcome is RemoveOutcome.Removed)
+        assertNull("this profile must stop pointing at the shared file", host.library[book.id]!!.filePath)
+        assertTrue("the shared bytes must remain for the other profile", file.exists())
     }
 
     // 2
